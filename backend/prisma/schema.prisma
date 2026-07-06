@@ -1,0 +1,594 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  ENABLE
+  DISABLE
+}
+
+model Tenant {
+  id            String         @id @default(uuid())
+  name          String
+  slug          String         @unique
+  isActive      Boolean        @default(true)
+  users         User[]
+  tenantModules TenantModule[]
+  clients       Client[]
+  clientContacts ClientContact[]
+  clientServices ClientService[]
+  kycCases      KycCase[]
+  documents     Document[]
+  legalDocuments LegalDocument[]
+  workflowComments WorkflowComment[]
+  approvals     Approval[]
+  notifications Notification[]
+  kycForms      KycForm[]
+  kycSectionData KycSectionData[]
+  kycShareholders KycShareholder[]
+  kycUbos       KycUbo[]
+  kycManagers   KycManager[]
+  kycRequiredDocuments KycRequiredDocument[]
+  kycInternalReviews KycInternalReview[]
+  kycGeneratedDocuments KycGeneratedDocument[]
+  statusHistory KycCaseStatusHistory[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model User {
+  id           String         @id @default(uuid())
+  tenantId     String?
+  tenant       Tenant?        @relation(fields: [tenantId], references: [id])
+  email        String         @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  status       UserStatus     @default(ACTIVE)
+  roles        UserRole[]
+  auditLogs    AuditLog[]
+  createdCases KycCase[]      @relation("KycCaseCreator")
+  assignedCases KycCase[]     @relation("KycCaseAssignee")
+  uploadedDocuments LegalDocument[] @relation("LegalDocumentUploader")
+  comments     WorkflowComment[]
+  notifications Notification[]
+  statusHistory KycCaseStatusHistory[]
+  createdKycForms KycForm[] @relation("KycFormCreatedBy")
+  updatedKycForms KycForm[] @relation("KycFormUpdatedBy")
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+enum KycCaseStatus {
+  INQUIRY_RECEIVED
+  PROPOSAL_OPTIONAL
+  LEGAL_DOCUMENTS_PENDING
+  LEGAL_DOCUMENTS_UPLOADED
+  SUBMITTED_TO_AML
+  AML_REVIEW_STARTED
+}
+
+enum ProposalStatus {
+  NOT_REQUIRED
+  REQUIRED
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+enum LegalDocumentStatus {
+  UPLOADED
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationType {
+  AML_CASE_SUBMITTED
+  GENERAL
+}
+
+enum KycFormSectionKey {
+  GENERAL_COMPANY
+  OWNERSHIP
+  MANAGEMENT
+  COMPLIANCE_RISK
+  COMMUNICATION_PERSON
+  REQUIRED_DOCUMENTS
+  CLIENT_DECLARATION
+}
+
+enum KycGeneratedDocumentType {
+  DOCX
+  PDF
+}
+
+enum RiskClassification {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum DueDiligenceType {
+  SIMPLIFIED
+  REGULAR
+  ENHANCED
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  users       UserRole[]
+  permissions RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  key         String           @unique
+  description String?
+  roles       RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model UserRole {
+  id     String @id @default(uuid())
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model Module {
+  id            String         @id @default(uuid())
+  name          String         @unique
+  key           String         @unique
+  description   String?
+  isSystem      Boolean        @default(false)
+  tenantModules TenantModule[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model TenantModule {
+  id        String   @id @default(uuid())
+  tenantId  String
+  moduleId  String
+  isEnabled Boolean  @default(true)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  module    Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, moduleId])
+}
+
+model Client {
+  id                 String          @id @default(uuid())
+  tenantId           String
+  tenant             Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  registrationNumber String?
+  industry           String?
+  country            String?
+  status             String          @default("PROSPECT")
+  contacts           ClientContact[]
+  kycCases           KycCase[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([tenantId])
+}
+
+model ClientContact {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  name      String
+  email     String?
+  phone     String?
+  position  String?
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId])
+}
+
+model ClientService {
+  id          String    @id @default(uuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  kycCases    KycCase[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model KycCase {
+  id                String                 @id @default(uuid())
+  tenantId          String
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId          String
+  client            Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  serviceId         String?
+  service           ClientService?         @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  title             String
+  status            KycCaseStatus          @default(INQUIRY_RECEIVED)
+  proposalStatus    ProposalStatus         @default(NOT_REQUIRED)
+  createdById       String?
+  createdBy         User?                  @relation("KycCaseCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  amlAssigneeId     String?
+  amlAssignee       User?                  @relation("KycCaseAssignee", fields: [amlAssigneeId], references: [id], onDelete: SetNull)
+  statusHistory     KycCaseStatusHistory[]
+  legalDocuments    LegalDocument[]
+  comments          WorkflowComment[]
+  notifications     Notification[]
+  kycForm           KycForm?
+  kycSectionData    KycSectionData[]
+  kycShareholders   KycShareholder[]
+  kycUbos           KycUbo[]
+  kycManagers       KycManager[]
+  kycRequiredDocuments KycRequiredDocument[]
+  kycInternalReview KycInternalReview?
+  kycGeneratedDocuments KycGeneratedDocument[]
+  submittedToAmlAt  DateTime?
+  amlReviewStartedAt DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([status])
+}
+
+model KycForm {
+  id                 String                 @id @default(uuid())
+  tenantId           String
+  tenant             Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId          String                 @unique
+  kycCase            KycCase                @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  status             String                 @default("DRAFT")
+  isLocked           Boolean                @default(false)
+  version            Int                    @default(1)
+  createdBy          String
+  createdByUser      User                   @relation("KycFormCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy          String
+  updatedByUser      User                   @relation("KycFormUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  sections           KycSectionData[]
+  shareholders       KycShareholder[]
+  ubos               KycUbo[]
+  managers           KycManager[]
+  requiredDocuments  KycRequiredDocument[]
+  internalReview     KycInternalReview?
+  generatedDocuments KycGeneratedDocument[]
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model KycSectionData {
+  id         String            @id @default(uuid())
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId  String
+  kycCase    KycCase           @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId  String
+  kycForm    KycForm           @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  sectionKey KycFormSectionKey
+  data       Json
+  createdBy  String
+  updatedBy  String
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([kycFormId, sectionKey])
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model KycShareholder {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId           String
+  kycCase             KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId           String
+  kycForm             KycForm  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  fullName            String
+  nationality         String?
+  dateOfBirth         DateTime?
+  identityNumber      String?
+  ownershipPercentage Decimal? @db.Decimal(5, 2)
+  residenceAddress    String?
+  sortOrder           Int      @default(0)
+  createdBy           String
+  updatedBy           String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([kycFormId])
+}
+
+model KycUbo {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId           String
+  kycCase             KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId           String
+  kycForm             KycForm  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  fullName            String
+  nationality         String?
+  dateOfBirth         DateTime?
+  identityNumber      String?
+  ownershipPercentage Decimal? @db.Decimal(5, 2)
+  residenceAddress    String?
+  notes               String?
+  sortOrder           Int      @default(0)
+  createdBy           String
+  updatedBy           String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([kycFormId])
+}
+
+model KycManager {
+  id                    String   @id @default(uuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId             String
+  kycCase               KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId             String
+  kycForm               KycForm  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  fullName              String
+  entityName            String?
+  nationalityAndAddress String?
+  dateOfBirth           DateTime?
+  identityNumber        String?
+  position              String?
+  isAuthorizedSignatory Boolean  @default(false)
+  sortOrder             Int      @default(0)
+  createdBy             String
+  updatedBy             String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([kycFormId])
+}
+
+model KycRequiredDocument {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId    String
+  kycForm      KycForm  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  documentType String
+  isRequired   Boolean  @default(true)
+  isProvided   Boolean  @default(false)
+  fileName     String?
+  storagePath  String?
+  mimeType     String?
+  size         Int?
+  sortOrder    Int      @default(0)
+  createdBy    String
+  updatedBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([kycFormId])
+}
+
+model KycInternalReview {
+  id                       String              @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId                String              @unique
+  kycCase                  KycCase             @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId                String              @unique
+  kycForm                  KycForm             @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  amlAccuracyChecked       Boolean             @default(false)
+  amlClarificationFindings String?
+  riskClassification       RiskClassification?
+  dueDiligenceType         DueDiligenceType?
+  amlName                  String?
+  amlSignatureFileName     String?
+  amlDate                  DateTime?
+  dmlroName                String?
+  dmlroSignatureFileName   String?
+  dmlroDate                DateTime?
+  dmlroComments            String?
+  mlroName                 String?
+  mlroSignatureFileName    String?
+  mlroDate                 DateTime?
+  mlroComments             String?
+  createdBy                String
+  updatedBy                String
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+
+  @@index([tenantId])
+}
+
+model KycGeneratedDocument {
+  id           String                   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase                  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  kycFormId    String
+  kycForm      KycForm                  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  documentType KycGeneratedDocumentType
+  version      Int
+  fileName     String
+  mimeType     String
+  content      Bytes
+  createdBy    String
+  updatedBy    String
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  @@unique([kycFormId, documentType, version])
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model KycCaseStatusHistory {
+  id             String        @id @default(uuid())
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId      String
+  kycCase        KycCase       @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  fromStatus     KycCaseStatus?
+  toStatus       KycCaseStatus
+  changedById    String?
+  changedBy      User?         @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  note           String?
+  createdAt      DateTime      @default(now())
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model Document {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fileName    String
+  storagePath String
+  mimeType    String?
+  size        Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Approval {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subject   String
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id          String           @id @default(uuid())
+  tenantId    String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId   String?
+  kycCase     KycCase?         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  recipientId String?
+  recipient   User?            @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  type        NotificationType @default(GENERAL)
+  title       String
+  message     String
+  isRead      Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model LegalDocument {
+  id           String              @id @default(uuid())
+  tenantId     String
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase             @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  documentType String
+  fileName     String
+  storagePath  String?
+  mimeType     String?
+  size         Int?
+  status       LegalDocumentStatus @default(UPLOADED)
+  uploadedById String?
+  uploadedBy   User?               @relation("LegalDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model WorkflowComment {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId   String
+  kycCase     KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  authorId    String?
+  author      User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  tenantId   String?
+  tenant     Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  actorId    String?
+  actor      User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     AuditAction
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime    @default(now())
+}
