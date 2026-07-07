@@ -7,8 +7,9 @@ export function UploadLegalDocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
-  const [form, setForm] = useState({ documentType: '', fileName: '', storagePath: '', mimeType: '' });
+  const [form, setForm] = useState({ documentType: '', fileName: '', storagePath: '', mimeType: '', size: 0 });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -20,13 +21,21 @@ export function UploadLegalDocumentsPage() {
     event.preventDefault();
     if (!id) return;
     setSaving(true);
-    await uploadLegalDocument(id, {
-      documentType: form.documentType,
-      fileName: form.fileName,
-      storagePath: form.storagePath || undefined,
-      mimeType: form.mimeType || undefined
-    });
-    navigate(`/kyc/${id}`);
+    setError('');
+    try {
+      await uploadLegalDocument(id, {
+        documentType: form.documentType,
+        fileName: form.fileName,
+        storagePath: form.storagePath || undefined,
+        mimeType: form.mimeType || undefined,
+        size: form.size || undefined
+      });
+      navigate(`/kyc/${id}`);
+    } catch (requestError: any) {
+      setError(requestError.response?.data?.message || 'Unable to save document.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (!kycCase) {
@@ -41,6 +50,7 @@ export function UploadLegalDocumentsPage() {
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
+        {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
         <div className="grid gap-4 md:grid-cols-2">
           <label className="text-sm font-medium text-slate-700">
             Document type
@@ -53,30 +63,29 @@ export function UploadLegalDocumentsPage() {
             />
           </label>
           <label className="text-sm font-medium text-slate-700">
-            File name
+            Upload file
             <input
               required
-              value={form.fileName}
-              onChange={(event) => setForm({ ...form, fileName: event.target.value })}
+              type="file"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setForm({
+                  ...form,
+                  fileName: file.name,
+                  storagePath: file.name,
+                  mimeType: file.type || 'application/octet-stream',
+                  size: file.size
+                });
+              }}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </label>
-          <label className="text-sm font-medium text-slate-700">
-            Storage path
-            <input
-              value={form.storagePath}
-              onChange={(event) => setForm({ ...form, storagePath: event.target.value })}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            MIME type
-            <input
-              value={form.mimeType}
-              onChange={(event) => setForm({ ...form, mimeType: event.target.value })}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
+          {form.fileName ? (
+            <div className="rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700 md:col-span-2">
+              Selected file: <span className="font-semibold">{form.fileName}</span>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -86,7 +95,7 @@ export function UploadLegalDocumentsPage() {
           className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
         >
           <Upload className="h-4 w-4" />
-          {saving ? 'Saving...' : 'Save Document Metadata'}
+          {saving ? 'Saving...' : 'Save Document'}
         </button>
         <Link
           to={`/kyc/${kycCase.id}`}
