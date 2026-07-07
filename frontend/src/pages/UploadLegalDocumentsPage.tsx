@@ -51,7 +51,7 @@ export function UploadLegalDocumentsPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         {error ? <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid items-end gap-4 lg:grid-cols-[minmax(320px,1fr)_auto_minmax(260px,0.8fr)]">
           <label className="text-sm font-medium text-slate-700">
             Document type
             <input
@@ -62,8 +62,8 @@ export function UploadLegalDocumentsPage() {
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </label>
-          <label className="text-sm font-medium text-slate-700">
-            Upload file
+          <div className="text-sm font-medium text-slate-700">
+            <span className="block">Upload file</span>
             <label className="mt-1 inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
               <Upload className="h-4 w-4" />
               Upload
@@ -84,12 +84,13 @@ export function UploadLegalDocumentsPage() {
                 }}
               />
             </label>
-          </label>
-          {form.fileName ? (
-            <div className="rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700 md:col-span-2">
-              Selected file: <span className="font-semibold">{form.fileName}</span>
+          </div>
+          <div className="text-sm font-medium text-slate-700">
+            <span className="block">Uploaded document</span>
+            <div className="mt-1 flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm text-slate-600">
+              <span className="truncate">{form.fileName || 'No file selected'}</span>
             </div>
-          ) : null}
+          </div>
         </div>
       </section>
 
