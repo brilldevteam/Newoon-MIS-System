@@ -64,22 +64,26 @@ export function UploadLegalDocumentsPage() {
           </label>
           <label className="text-sm font-medium text-slate-700">
             Upload file
-            <input
-              required
-              type="file"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                setForm({
-                  ...form,
-                  fileName: file.name,
-                  storagePath: file.name,
-                  mimeType: file.type || 'application/octet-stream',
-                  size: file.size
-                });
-              }}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
+            <label className="mt-1 inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+              <Upload className="h-4 w-4" />
+              Upload
+              <input
+                required
+                type="file"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  setForm({
+                    ...form,
+                    fileName: file.name,
+                    storagePath: file.name,
+                    mimeType: file.type || 'application/octet-stream',
+                    size: file.size
+                  });
+                }}
+              />
+            </label>
           </label>
           {form.fileName ? (
             <div className="rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700 md:col-span-2">

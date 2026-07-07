@@ -404,7 +404,7 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
             Provided
           </label>
           <label
-            className="inline-flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
             title={document.fileName || 'Upload'}
           >
             {document.fileName ? (
