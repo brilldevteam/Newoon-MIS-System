@@ -1031,7 +1031,7 @@ export class KycService {
     return new Promise<Buffer>((resolve) => {
       const doc = new PDFDocument({ size: 'A4', margin: 36 });
       const chunks: Buffer[] = [];
-      doc.on('data', (chunk) => chunks.push(chunk as Buffer));
+      doc.on('data', (chunk: Buffer) => chunks.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
 
       const data = this.templateData(payload);
