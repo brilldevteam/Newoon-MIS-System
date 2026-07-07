@@ -1019,9 +1019,17 @@ export class KycService {
   }
 
   private loadDocxTemplate() {
-    const templatePath = join(process.cwd(), 'templates', 'kyc-part-1-template.docx');
-    if (existsSync(templatePath)) {
-      return readFileSync(templatePath);
+    const templatePaths = [
+      join(process.cwd(), 'templates', 'kyc-part-1-template.docx'),
+      join(process.cwd(), 'backend', 'templates', 'kyc-part-1-template.docx'),
+      join(__dirname, '..', '..', 'templates', 'kyc-part-1-template.docx'),
+      join(__dirname, '..', '..', '..', 'backend', 'templates', 'kyc-part-1-template.docx')
+    ];
+
+    for (const templatePath of templatePaths) {
+      if (existsSync(templatePath)) {
+        return readFileSync(templatePath);
+      }
     }
 
     return this.createDocxTemplate();
