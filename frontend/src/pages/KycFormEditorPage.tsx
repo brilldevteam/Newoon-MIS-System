@@ -436,8 +436,8 @@ function SectionGDeclarationForm({ data, onChange }: FormProps) {
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position" value={data.position} options={positionOptions} onChange={(value) => update(data, onChange, 'position', value)} />
     <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-    <Field label="Authorized signature upload placeholder" value={data.signatureFileName} onChange={(value) => update(data, onChange, 'signatureFileName', value)} />
-    <Field label="Company stamp upload placeholder" value={data.stampFileName} onChange={(value) => update(data, onChange, 'stampFileName', value)} />
+    <UploadField label="Authorized signature" fileName={data.signatureFileName} onChange={(file) => update(data, onChange, 'signatureFileName', file.name)} />
+    <UploadField label="Company stamp" fileName={data.stampFileName} onChange={(file) => update(data, onChange, 'stampFileName', file.name)} />
   </FormGrid>;
 }
 
@@ -448,14 +448,14 @@ function SectionHInternalReviewForm({ data, onChange }: FormProps) {
     <Select label="Risk classification" value={data.riskClassification} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} />
     <Select label="Due diligence type" value={data.dueDiligenceType} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} />
     <Field label="AML name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
-    <Field label="AML signature upload placeholder" value={data.amlSignatureFileName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', value)} />
+    <UploadField label="AML signature" fileName={data.amlSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', file.name)} />
     <Field label="AML date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
     <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroName', value)} />
-    <Field label="DMLRO signature upload placeholder" value={data.dmlroSignatureFileName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroSignatureFileName', value)} />
+    <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroSignatureFileName', file.name)} />
     <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroDate', value)} />
     <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroComments', value)} textarea wide />
     <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroName', value)} />
-    <Field label="MLRO signature upload placeholder" value={data.mlroSignatureFileName} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroSignatureFileName', value)} />
+    <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroSignatureFileName', file.name)} />
     <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroDate', value)} />
     <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroComments', value)} textarea wide />
   </FormGrid>;
@@ -550,6 +550,32 @@ function Select({ label, value, options, onChange, wide = false }: { label: stri
 
 function Choice({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return <div><p className="text-sm font-medium text-slate-700">{label}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
+}
+
+function UploadField({ label, fileName, onChange }: { label: string; fileName?: string; onChange: (file: File) => void }) {
+  return (
+    <div className="text-sm font-medium text-slate-700">
+      {label}
+      <div className="mt-1 grid items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
+        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+          <Upload className="h-4 w-4" />
+          Upload
+          <input
+            type="file"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onChange(file);
+              event.currentTarget.value = '';
+            }}
+          />
+        </label>
+        <div className="flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm font-normal text-slate-600">
+          <span className="truncate">{fileName || 'No file selected'}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type DynamicField = [key: string, label: string, type?: string, options?: string[]];
