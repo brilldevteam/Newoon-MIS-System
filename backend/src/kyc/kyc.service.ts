@@ -982,6 +982,7 @@ export class KycService {
 
   private internalReviewAllowedRoles(dto: Record<string, unknown>) {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
+    if (part === 'ALL') return ['COMPANY_ADMIN'];
     if (part === 'DMLRO') return ['DMLRO', 'COMPANY_ADMIN'];
     if (part === 'MLRO') return ['MLRO', 'COMPANY_ADMIN'];
     return ['AML_TEAM', 'COMPANY_ADMIN'];
@@ -989,6 +990,29 @@ export class KycService {
 
   private internalReviewData(dto: Record<string, unknown>): ReviewPatch {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
+
+    if (part === 'ALL') {
+      const riskClassification = this.enumValue(dto.riskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Risk classification');
+      const dueDiligenceType = this.enumValue(dto.dueDiligenceType, ['SIMPLIFIED', 'REGULAR', 'ENHANCED'], 'Due diligence type');
+
+      return {
+        amlAccuracyChecked: Boolean(dto.amlAccuracyChecked),
+        amlClarificationFindings: this.optionalText(dto.amlClarificationFindings),
+        riskClassification: riskClassification as RiskClassification | null,
+        dueDiligenceType: dueDiligenceType as DueDiligenceType | null,
+        amlName: this.optionalText(dto.amlName),
+        amlSignatureFileName: this.optionalText(dto.amlSignatureFileName),
+        amlDate: this.dateValue(dto.amlDate),
+        dmlroName: this.optionalText(dto.dmlroName),
+        dmlroSignatureFileName: this.optionalText(dto.dmlroSignatureFileName),
+        dmlroDate: this.dateValue(dto.dmlroDate),
+        dmlroComments: this.optionalText(dto.dmlroComments),
+        mlroName: this.optionalText(dto.mlroName),
+        mlroSignatureFileName: this.optionalText(dto.mlroSignatureFileName),
+        mlroDate: this.dateValue(dto.mlroDate),
+        mlroComments: this.optionalText(dto.mlroComments)
+      };
+    }
 
     if (part === 'DMLRO') {
       return {
@@ -1150,8 +1174,12 @@ export class KycService {
       this.pdfSection(doc, 'C. Managers / Signatories', [['Persons', data.managersText]]);
       this.pdfSection(doc, 'D. Compliance and Risk', [
         ['PEP', data.pepQuestion],
+        ['PEP Details', data.pepDetails],
         ['Sanctions', data.sanctionQuestion],
-        ['Dual Citizenship', data.dualCitizenshipQuestion]
+        ['Sanction Details', data.sanctionDetails],
+        ['Dual Citizenship', data.dualCitizenshipQuestion],
+        ['Dual Citizenship Details', data.dualCitizenshipDetails],
+        ['Dual Citizenship Passport Copy', data.dualCitizenshipPassportFileName]
       ]);
       this.pdfSection(doc, 'E. Communication Person', [
         ['Name', data.communicationFullName],
@@ -1166,11 +1194,21 @@ export class KycService {
         ['Date', data.declarationDate]
       ]);
       this.pdfSection(doc, 'H. Internal Use Only', [
+        ['Accuracy Checked', data.amlAccuracyChecked],
+        ['Clarification / Findings', data.amlClarificationFindings],
         ['Risk Classification', data.riskClassification],
         ['Due Diligence', data.dueDiligenceType],
-        ['AML', data.amlName],
+        ['AML Supervisor Name', data.amlName],
+        ['AML Supervisor Signature', data.amlSignatureFileName],
+        ['AML Date', data.amlDate],
         ['DMLRO', data.dmlroName],
-        ['MLRO', data.mlroName]
+        ['DMLRO Signature', data.dmlroSignatureFileName],
+        ['DMLRO Date', data.dmlroDate],
+        ['DMLRO Comments', data.dmlroComments],
+        ['MLRO', data.mlroName],
+        ['MLRO Signature', data.mlroSignatureFileName],
+        ['MLRO Date', data.mlroDate],
+        ['MLRO Comments', data.mlroComments]
       ]);
       doc.fontSize(8).text('Footer service line: Newoon KYC & Engagement Workflow', 36, 780, { align: 'center' });
       doc.end();
@@ -1263,6 +1301,7 @@ export class KycService {
       dualCitizenshipQuestion: this.yesNoMark(sectionD.dualCitizenshipQuestion, 'Yes'),
       dualCitizenshipNo: this.yesNoMark(sectionD.dualCitizenshipQuestion, 'No'),
       dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
+      dualCitizenshipPassportFileName: this.text(sectionD.dualCitizenshipPassportFileName),
       communicationFullName: this.text(sectionE.fullName),
       communicationPosition: this.text(sectionE.position),
       communicationNationality: this.text(sectionE.nationality),
@@ -1363,7 +1402,7 @@ ${this.docxParagraph('{managersText}')}
 ${this.docxParagraph('D. Compliance and Risk Information')}
 ${this.docxParagraph('PEP: {pepQuestion} {pepDetails}')}
 ${this.docxParagraph('Sanctions: {sanctionQuestion} {sanctionDetails}')}
-${this.docxParagraph('Dual Citizenship: {dualCitizenshipQuestion} {dualCitizenshipDetails}')}
+${this.docxParagraph('Dual Citizenship: {dualCitizenshipQuestion} {dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}')}
 ${this.docxParagraph('E. Key Communication Person')}
 ${this.docxParagraph('{communicationFullName} | {communicationPosition} | {communicationNationality} | {communicationIdentityNumber} | {communicationMobile} | {communicationEmail}')}
 ${this.docxParagraph('F. Required Documents Checklist')}
@@ -1372,9 +1411,9 @@ ${this.docxParagraph('G. Client Declaration')}
 ${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
 ${this.docxParagraph('H. Internal Use Only')}
 ${this.docxParagraph('Accuracy checked: {amlAccuracyChecked} | Findings: {amlClarificationFindings}')}
-${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML: {amlName}')}
-${this.docxParagraph('DMLRO: {dmlroName} | Comments: {dmlroComments}')}
-${this.docxParagraph('MLRO: {mlroName} | Comments: {mlroComments}')}
+${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML date: {amlDate}')}
+${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Comments: {dmlroComments}')}
+${this.docxParagraph('MLRO: {mlroName} | Signature: {mlroSignatureFileName} | Date: {mlroDate} | Comments: {mlroComments}')}
 ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>
 </w:body></w:document>`;

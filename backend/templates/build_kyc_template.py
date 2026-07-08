@@ -91,10 +91,20 @@ def main():
     document.paragraphs[39].text = "{sanctionDetails}"
     document.paragraphs[42].text = "No {sanctionNo}"
     document.paragraphs[47].text = "Yes, if yes, please provide details and passport copy: {dualCitizenshipQuestion}"
-    document.paragraphs[48].text = "{dualCitizenshipDetails}"
+    document.paragraphs[48].text = "{dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}"
     document.paragraphs[51].text = "No {dualCitizenshipNo}"
 
     contact = document.tables[5]
+    contact_labels = [
+        "Full name",
+        "Position / Job title",
+        "Nationality",
+        "QID / Passport Number",
+        "Mobile Number",
+        "Email",
+    ]
+    for row, label in enumerate(contact_labels):
+        set_cell(contact, row, 0, label)
     set_cell(contact, 0, 1, "{communicationFullName}")
     set_cell(contact, 1, 1, "{communicationPosition}")
     set_cell(contact, 2, 1, "{communicationNationality}")
@@ -128,7 +138,9 @@ def main():
 
     aml = document.tables[8]
     set_cell(aml, 0, 1, "Accuracy checked: {amlAccuracyChecked} | Findings: {amlClarificationFindings} | Risk: {riskClassification} | Due diligence: {dueDiligenceType}")
+    set_cell(aml, 1, 0, "AML Supervisor Name:")
     set_cell(aml, 1, 1, "{amlName}")
+    set_cell(aml, 2, 0, "AML Supervisor signature:")
     set_cell(aml, 2, 1, "{amlSignatureFileName}")
     set_cell(aml, 3, 1, "{amlDate}")
 

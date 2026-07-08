@@ -39,6 +39,7 @@ Supported placeholders:
 {sanctionDetails}
 {dualCitizenshipQuestion}
 {dualCitizenshipDetails}
+{dualCitizenshipPassportFileName}
 {communicationFullName}
 {communicationPosition}
 {communicationNationality}
@@ -56,9 +57,15 @@ Supported placeholders:
 {riskClassification}
 {dueDiligenceType}
 {amlName}
+{amlSignatureFileName}
+{amlDate}
 {dmlroName}
+{dmlroSignatureFileName}
+{dmlroDate}
 {dmlroComments}
 {mlroName}
+{mlroSignatureFileName}
+{mlroDate}
 {mlroComments}
 ```
 

@@ -179,7 +179,12 @@ export function KycFormEditorPage() {
     const endpoint = sections.find((item) => item.key === section)?.id;
     if (!endpoint) return;
 
-    const payload = section === 'sectionB' ? { ...form.sectionB, totalOwnershipPercentage: totalOwnership } : (form[section] as Record<string, any>);
+    const payload =
+      section === 'sectionB'
+        ? { ...form.sectionB, totalOwnershipPercentage: totalOwnership }
+        : section === 'sectionH'
+          ? { ...(form.sectionH || {}), reviewPart: 'ALL' }
+          : (form[section] as Record<string, any>);
     try {
       const updated = await saveKycFormSection(id, endpoint, payload);
       setForm(normalizeForm(updated));
@@ -350,25 +355,60 @@ function SectionCForm({ data, onChange }: FormProps) {
 }
 
 function SectionDComplianceForm({ data, onChange }: FormProps) {
+  const hasDualCitizenship = (data.dualCitizenshipQuestion || 'No') === 'Yes';
+
+  function setDualCitizenshipQuestion(value: string) {
+    onChange({
+      ...data,
+      dualCitizenshipQuestion: value,
+      ...(value === 'No'
+        ? {
+            dualCitizenshipDetails: '',
+            dualCitizenshipPassportFileName: ''
+          }
+        : {})
+    });
+  }
+
   return (
     <div className="space-y-5">
       <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={(value) => onChange({ ...data, pepQuestion: value })} />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
       <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={(value) => onChange({ ...data, sanctionQuestion: value })} />
       <Field label="Sanction details" value={data.sanctionDetails} onChange={(value) => update(data, onChange, 'sanctionDetails', value)} textarea wide />
-      <Choice label="Any dual citizenship?" value={data.dualCitizenshipQuestion || 'No'} onChange={(value) => onChange({ ...data, dualCitizenshipQuestion: value })} />
-      <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
+      <Choice label="Any dual citizenship?" value={data.dualCitizenshipQuestion || 'No'} onChange={setDualCitizenshipQuestion} />
+      {hasDualCitizenship ? (
+        <FormGrid>
+          <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
+          <UploadField label="Passport copy" fileName={data.dualCitizenshipPassportFileName} onChange={(file) => update(data, onChange, 'dualCitizenshipPassportFileName', file.name)} />
+        </FormGrid>
+      ) : null}
     </div>
   );
 }
 
 function SectionEContactForm({ data, onChange }: FormProps) {
+  function setNationality(nationality: string) {
+    onChange({
+      ...data,
+      nationality,
+      mobileNumber: applyCountryDialCode(data.mobileNumber || '', countryFromNationality(nationality))
+    });
+  }
+
+  function setMobileNumber(mobileNumber: string) {
+    onChange({
+      ...data,
+      mobileNumber: applyCountryDialCode(mobileNumber, countryFromNationality(data.nationality || ''))
+    });
+  }
+
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position / Job title" value={data.position} options={positionOptions} onChange={(value) => update(data, onChange, 'position', value)} />
-    <Select label="Nationality" value={data.nationality} options={nationalityOptions} onChange={(value) => update(data, onChange, 'nationality', value)} />
+    <Select label="Nationality" value={data.nationality} options={nationalityOptions} onChange={setNationality} />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
-    <Field label="Mobile Number" value={data.mobileNumber} onChange={(value) => update(data, onChange, 'mobileNumber', value)} />
+    <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
     <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
   </FormGrid>;
 }
@@ -447,8 +487,8 @@ function SectionHInternalReviewForm({ data, onChange }: FormProps) {
     <Field label="Clarification / findings" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlClarificationFindings', value)} textarea wide />
     <Select label="Risk classification" value={data.riskClassification} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} />
     <Select label="Due diligence type" value={data.dueDiligenceType} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} />
-    <Field label="AML name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
-    <UploadField label="AML signature" fileName={data.amlSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', file.name)} />
+    <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
+    <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', file.name)} />
     <Field label="AML date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
     <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroName', value)} />
     <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroSignatureFileName', file.name)} />
@@ -493,7 +533,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewTable headers={['Full name', 'Entity', 'Nationality and address', 'DOB', 'ID No.', 'Position', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, row.entityName, row.nationalityAndAddress, displayDate(row.dateOfBirth), row.identityNumber, row.position, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
-          <PreviewGrid rows={[['PEP question', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Sanction question', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Dual citizenship question', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails]]} />
+          <PreviewGrid rows={[['PEP question', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Sanction question', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Dual citizenship question', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
           <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', form.sectionE.position], ['Nationality', form.sectionE.nationality], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
@@ -505,7 +545,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', form.sectionG.position], ['Date', form.sectionG.date], ['Authorized signature', form.sectionG.signatureFileName], ['Company stamp', form.sectionG.stampFileName]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML name', form.sectionH?.amlName], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', form.sectionH?.amlSignatureFileName], ['AML date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', form.sectionH?.dmlroSignatureFileName], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', form.sectionH?.mlroSignatureFileName], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -629,12 +669,36 @@ function updateRow(rows: Row[], index: number, key: string, value: any, onChange
   onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
 }
 
+function countryFromNationality(nationality: string) {
+  const nationalityCountryMap: Record<string, string> = {
+    Qatari: 'Qatar',
+    Saudi: 'Saudi Arabia',
+    Emirati: 'United Arab Emirates',
+    Bahraini: 'Bahrain',
+    Kuwaiti: 'Kuwait',
+    Omani: 'Oman',
+    Indian: 'India',
+    Pakistani: 'Pakistan',
+    Bangladeshi: 'Bangladesh',
+    'Sri Lankan': 'Sri Lanka',
+    British: 'United Kingdom',
+    American: 'United States'
+  };
+
+  return nationalityCountryMap[nationality] || '';
+}
+
 function normalizeForm(form: KycFormData): KycFormData {
   const sectionA = {
     ...emptyForm.sectionA,
     ...(form.sectionA || {})
   };
   sectionA.telephone = applyCountryDialCode(sectionA.telephone || '', sectionA.countryOfIncorporation || '');
+  const sectionE = {
+    ...emptyForm.sectionE,
+    ...(form.sectionE || {})
+  };
+  sectionE.mobileNumber = applyCountryDialCode(sectionE.mobileNumber || '', countryFromNationality(sectionE.nationality || ''));
 
   return {
     ...emptyForm,
@@ -642,6 +706,7 @@ function normalizeForm(form: KycFormData): KycFormData {
     sectionA,
     sectionB: { ...emptyForm.sectionB, ...(form.sectionB || {}), shareholders: form.sectionB?.shareholders || [], ubos: form.sectionB?.ubos || [] },
     sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: form.sectionC?.managers || [] },
+    sectionE,
     sectionF: { ...emptyForm.sectionF, ...(form.sectionF || {}), documents: form.sectionF?.documents?.length ? form.sectionF.documents : emptyForm.sectionF.documents },
     sectionH: form.sectionH || {}
   };
