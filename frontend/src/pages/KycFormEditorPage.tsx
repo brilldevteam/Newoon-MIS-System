@@ -1,5 +1,6 @@
-import { Download, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Trash2, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import {
   downloadGeneratedKycDocument,
@@ -35,23 +36,384 @@ const requiredDocuments = [
   'Tax Card'
 ];
 
-const countryOptions = [...countryDialOptions.map((option) => option.name), 'Other'];
+const countryOptions = [
+  '',
+  'Afghanistan',
+  'Albania',
+  'Algeria',
+  'Andorra',
+  'Angola',
+  'Antigua and Barbuda',
+  'Argentina',
+  'Armenia',
+  'Australia',
+  'Austria',
+  'Azerbaijan',
+  'Bahamas',
+  'Bahrain',
+  'Bangladesh',
+  'Barbados',
+  'Belarus',
+  'Belgium',
+  'Belize',
+  'Benin',
+  'Bhutan',
+  'Bolivia',
+  'Bosnia and Herzegovina',
+  'Botswana',
+  'Brazil',
+  'Brunei',
+  'Bulgaria',
+  'Burkina Faso',
+  'Burundi',
+  'Cabo Verde',
+  'Cambodia',
+  'Cameroon',
+  'Canada',
+  'Central African Republic',
+  'Chad',
+  'Chile',
+  'China',
+  'Colombia',
+  'Comoros',
+  'Congo',
+  'Costa Rica',
+  'Cote d Ivoire',
+  'Croatia',
+  'Cuba',
+  'Cyprus',
+  'Czech Republic',
+  'Democratic Republic of the Congo',
+  'Denmark',
+  'Djibouti',
+  'Dominica',
+  'Dominican Republic',
+  'Ecuador',
+  'Egypt',
+  'El Salvador',
+  'Equatorial Guinea',
+  'Eritrea',
+  'Estonia',
+  'Eswatini',
+  'Ethiopia',
+  'Fiji',
+  'Finland',
+  'France',
+  'Gabon',
+  'Gambia',
+  'Georgia',
+  'Germany',
+  'Ghana',
+  'Greece',
+  'Grenada',
+  'Guatemala',
+  'Guinea',
+  'Guinea-Bissau',
+  'Guyana',
+  'Haiti',
+  'Honduras',
+  'Hungary',
+  'Iceland',
+  'India',
+  'Indonesia',
+  'Iran',
+  'Iraq',
+  'Ireland',
+  'Israel',
+  'Italy',
+  'Jamaica',
+  'Japan',
+  'Jordan',
+  'Kazakhstan',
+  'Kenya',
+  'Kiribati',
+  'Kuwait',
+  'Kyrgyzstan',
+  'Laos',
+  'Latvia',
+  'Lebanon',
+  'Lesotho',
+  'Liberia',
+  'Libya',
+  'Liechtenstein',
+  'Lithuania',
+  'Luxembourg',
+  'Madagascar',
+  'Malawi',
+  'Malaysia',
+  'Maldives',
+  'Mali',
+  'Malta',
+  'Marshall Islands',
+  'Mauritania',
+  'Mauritius',
+  'Mexico',
+  'Micronesia',
+  'Moldova',
+  'Monaco',
+  'Mongolia',
+  'Montenegro',
+  'Morocco',
+  'Mozambique',
+  'Myanmar',
+  'Namibia',
+  'Nauru',
+  'Nepal',
+  'Netherlands',
+  'New Zealand',
+  'Nicaragua',
+  'Niger',
+  'Nigeria',
+  'North Korea',
+  'North Macedonia',
+  'Norway',
+  'Oman',
+  'Pakistan',
+  'Palau',
+  'Palestine',
+  'Panama',
+  'Papua New Guinea',
+  'Paraguay',
+  'Peru',
+  'Philippines',
+  'Poland',
+  'Portugal',
+  'Qatar',
+  'Romania',
+  'Russia',
+  'Rwanda',
+  'Saint Kitts and Nevis',
+  'Saint Lucia',
+  'Saint Vincent and the Grenadines',
+  'Samoa',
+  'San Marino',
+  'Sao Tome and Principe',
+  'Saudi Arabia',
+  'Senegal',
+  'Serbia',
+  'Seychelles',
+  'Sierra Leone',
+  'Singapore',
+  'Slovakia',
+  'Slovenia',
+  'Solomon Islands',
+  'Somalia',
+  'South Africa',
+  'South Korea',
+  'South Sudan',
+  'Spain',
+  'Sri Lanka',
+  'Sudan',
+  'Suriname',
+  'Sweden',
+  'Switzerland',
+  'Syria',
+  'Tajikistan',
+  'Tanzania',
+  'Thailand',
+  'Timor-Leste',
+  'Togo',
+  'Tonga',
+  'Trinidad and Tobago',
+  'Tunisia',
+  'Turkey',
+  'Turkmenistan',
+  'Tuvalu',
+  'Uganda',
+  'Ukraine',
+  'United Arab Emirates',
+  'United Kingdom',
+  'United States',
+  'Uruguay',
+  'Uzbekistan',
+  'Vanuatu',
+  'Vatican City',
+  'Venezuela',
+  'Vietnam',
+  'Yemen',
+  'Zambia',
+  'Zimbabwe'
+];
 
 const nationalityOptions = [
   '',
-  'Qatari',
-  'Saudi',
-  'Emirati',
-  'Bahraini',
-  'Kuwaiti',
-  'Omani',
-  'Indian',
-  'Pakistani',
-  'Bangladeshi',
-  'Sri Lankan',
-  'British',
+  'Afghan',
+  'Albanian',
+  'Algerian',
   'American',
-  'Other'
+  'Andorran',
+  'Angolan',
+  'Antiguan or Barbudan',
+  'Argentine',
+  'Armenian',
+  'Australian',
+  'Austrian',
+  'Azerbaijani',
+  'Bahamian',
+  'Bahraini',
+  'Bangladeshi',
+  'Barbadian',
+  'Belarusian',
+  'Belgian',
+  'Belizean',
+  'Beninese',
+  'Bhutanese',
+  'Bolivian',
+  'Bosnian or Herzegovinian',
+  'Botswanan',
+  'Brazilian',
+  'British',
+  'Bruneian',
+  'Bulgarian',
+  'Burkinabe',
+  'Burundian',
+  'Cabo Verdean',
+  'Cambodian',
+  'Cameroonian',
+  'Canadian',
+  'Central African',
+  'Chadian',
+  'Chilean',
+  'Chinese',
+  'Colombian',
+  'Comorian',
+  'Congolese',
+  'Costa Rican',
+  'Croatian',
+  'Cuban',
+  'Cypriot',
+  'Czech',
+  'Danish',
+  'Djiboutian',
+  'Dominican',
+  'Dutch',
+  'Ecuadorian',
+  'Egyptian',
+  'Emirati',
+  'Equatorial Guinean',
+  'Eritrean',
+  'Estonian',
+  'Eswatini',
+  'Ethiopian',
+  'Fijian',
+  'Filipino',
+  'Finnish',
+  'French',
+  'Gabonese',
+  'Gambian',
+  'Georgian',
+  'German',
+  'Ghanaian',
+  'Greek',
+  'Grenadian',
+  'Guatemalan',
+  'Guinean',
+  'Guyanese',
+  'Haitian',
+  'Honduran',
+  'Hungarian',
+  'Icelandic',
+  'Indian',
+  'Indonesian',
+  'Iranian',
+  'Iraqi',
+  'Irish',
+  'Israeli',
+  'Italian',
+  'Ivorian',
+  'Jamaican',
+  'Japanese',
+  'Jordanian',
+  'Kazakh',
+  'Kenyan',
+  'Kiribati',
+  'Kuwaiti',
+  'Kyrgyz',
+  'Lao',
+  'Latvian',
+  'Lebanese',
+  'Liberian',
+  'Libyan',
+  'Lithuanian',
+  'Luxembourgish',
+  'Malagasy',
+  'Malawian',
+  'Malaysian',
+  'Maldivian',
+  'Malian',
+  'Maltese',
+  'Mauritanian',
+  'Mauritian',
+  'Mexican',
+  'Moldovan',
+  'Monacan',
+  'Mongolian',
+  'Montenegrin',
+  'Moroccan',
+  'Mozambican',
+  'Myanmar',
+  'Namibian',
+  'Nauruan',
+  'Nepalese',
+  'New Zealander',
+  'Nicaraguan',
+  'Nigerian',
+  'North Korean',
+  'Norwegian',
+  'Omani',
+  'Pakistani',
+  'Palauan',
+  'Palestinian',
+  'Panamanian',
+  'Papua New Guinean',
+  'Paraguayan',
+  'Peruvian',
+  'Polish',
+  'Portuguese',
+  'Qatari',
+  'Romanian',
+  'Russian',
+  'Rwandan',
+  'Saudi',
+  'Senegalese',
+  'Serbian',
+  'Seychellois',
+  'Sierra Leonean',
+  'Singaporean',
+  'Slovak',
+  'Slovenian',
+  'Somali',
+  'South African',
+  'South Korean',
+  'South Sudanese',
+  'Spanish',
+  'Sri Lankan',
+  'Sudanese',
+  'Surinamese',
+  'Swedish',
+  'Swiss',
+  'Syrian',
+  'Taiwanese',
+  'Tajik',
+  'Tanzanian',
+  'Thai',
+  'Togolese',
+  'Tongan',
+  'Trinidadian or Tobagonian',
+  'Tunisian',
+  'Turkish',
+  'Turkmen',
+  'Tuvaluan',
+  'Ugandan',
+  'Ukrainian',
+  'Uruguayan',
+  'Uzbek',
+  'Vanuatuan',
+  'Venezuelan',
+  'Vietnamese',
+  'Yemeni',
+  'Zambian',
+  'Zimbabwean'
 ];
 
 const legalFormOptions = [
@@ -62,8 +424,7 @@ const legalFormOptions = [
   'Government entity',
   'Registered in stock exchange',
   'Trust/Funds',
-  'Sole establishment',
-  'Other'
+  'Sole establishment'
 ];
 
 const industryOptions = [
@@ -79,8 +440,7 @@ const industryOptions = [
   'Healthcare',
   'Education',
   'Hospitality',
-  'Trading',
-  'Other'
+  'Trading'
 ];
 
 const businessNatureOptions = [
@@ -93,20 +453,54 @@ const businessNatureOptions = [
   'Construction contracting',
   'Real estate activities',
   'Financial services',
-  'Holding company',
-  'Other'
+  'Holding company'
 ];
 
 const prospectiveServiceOptions = [
   '',
-  'Company Formation',
-  'Secretary & Compliance services',
-  'Director services',
-  'Senior executive function services',
-  'Accounting services',
-  'Tax services',
-  'AML / Compliance advisory',
-  'Other'
+  'N001 - Secretary and QFC Compliance Service',
+  'N002 - Address Service',
+  'N003 - Temporary Authorized Signatory Service',
+  'N004 - Open Bank Account - Personal / Corporate',
+  'N005 - Accounting and Bookkeeping Service',
+  'N006 - Nominee Manager in QFZ Company',
+  'N007 - Payroll Service & HR Onboarding',
+  'N008 - Company Formation - QFZ',
+  'N009 - Company Formation - QFC',
+  'N010 - Business Plan Proposal Preparation',
+  'N011 - Senior Executive Function Services',
+  'N012 - Management Account Preparation Service',
+  'N013 - Document Attestation Assistance from MOFA and Embassy',
+  'N014 - PRO Services for Immigration Work',
+  'N015 - Authorized Signatory Service',
+  'N016 - Assist for Capital Gain Tax Assessment',
+  'N017 - Assist in Obtain QID',
+  'N018 - Assist for Company Enhanced Due Diligence',
+  'N019 - Liquidation Service - MOCI',
+  'N020 - Company Formation - MOCI',
+  'N021 - Tax Compliance Service',
+  'N022 - Temporary Secretary and QFC Compliance Service',
+  'N023 - Preparation of FS and Assist in ITR Submission',
+  'N024 - Assist for Share Capital Reduction',
+  'N025 - Assistant with Company Initial Setup Tasks',
+  'N026 - Payroll Service',
+  'N027 - Assist for Share Capital Increase',
+  'N028 - Director Service',
+  'N029 - Assist for Company Ownership Change',
+  'N030 - Audit Documents Filling Service',
+  'N031 - Tax Dhareeba Update Service',
+  'N032 - Assign staff as Admin Coordinator',
+  'N033 - Liquidation Service - QFC',
+  'N034 - Coordinate for Medical and Fingerpring for Visa',
+  'N035 - Shareholder Update in QFC Portal',
+  'N036 - Business Advisory Service for Restructuring Legal Structure',
+  'N037 - Renueve Certification Dervice',
+  'N038 - Nominee Shareholder Service',
+  'N039 - Additional Support Services',
+  'N040 - Secretary and QFC Compliance Service - QFZ',
+  'N041 - Interim Manager Service - MOCI',
+  'N042 - Assistance in Processing Tax Residence Certificate',
+  'N043 - Initial Setup Support and Mandatory Compliance Requirements'
 ];
 
 const positionOptions = [
@@ -119,8 +513,7 @@ const positionOptions = [
   'Senior Executive Function',
   'Shareholder',
   'UBO',
-  'Compliance Officer',
-  'Other'
+  'Compliance Officer'
 ];
 
 const emptyForm: KycFormData = {
@@ -326,7 +719,7 @@ function SectionAForm({ data, onChange }: FormProps) {
       <Field label="Registered Office Address" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
       <Select label="Main purpose / nature of business" value={data.businessNature} options={businessNatureOptions} onChange={(value) => update(data, onChange, 'businessNature', value)} wide />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
-      <Select label="Related Industry" value={data.relatedIndustry} options={industryOptions} onChange={(value) => update(data, onChange, 'relatedIndustry', value)} />
+      <Select label="Related Industry" value={data.relatedIndustry} options={industryOptions} onChange={(value) => update(data, onChange, 'relatedIndustry', value)} wide />
       <Select label="Nature of prospective service from Newoon" value={data.prospectiveService} options={prospectiveServiceOptions} onChange={(value) => update(data, onChange, 'prospectiveService', value)} wide />
     </FormGrid>
   );
@@ -573,18 +966,134 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
   );
 }
 
-function Select({ label, value, options, onChange, wide = false }: { label: string; value: any; options: string[]; onChange: (value: string) => void; wide?: boolean }) {
+function Select({
+  label,
+  value,
+  options,
+  onChange,
+  wide = false
+}: {
+  label: string;
+  value: any;
+  options: string[];
+  onChange: (value: string) => void;
+  wide?: boolean;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0, width: 0, maxHeight: 256 });
+  const filteredOptions = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return search ? options.filter((option) => option.toLowerCase().includes(search)) : options;
+  }, [options, query]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function updateMenuPosition() {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const viewportPadding = 12;
+      const searchAndPaddingHeight = 58;
+      const preferredMenuHeight = 320;
+      const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+      const spaceAbove = rect.top - viewportPadding;
+      const shouldOpenUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+      const availableHeight = Math.max(140, (shouldOpenUp ? spaceAbove : spaceBelow) - searchAndPaddingHeight);
+      setMenuStyle({
+        top: shouldOpenUp ? Math.max(viewportPadding, rect.top - Math.min(preferredMenuHeight, spaceAbove)) : rect.bottom + 8,
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.min(256, availableHeight)
+      });
+    }
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (triggerRef.current?.contains(target) || target.closest('[data-kyc-select-menu="true"]')) return;
+      setOpen(false);
+      setQuery('');
+    }
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    document.addEventListener('mousedown', closeOnOutsideClick);
+
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+    };
+  }, [open]);
+
+  function choose(option: string) {
+    onChange(option);
+    setOpen(false);
+    setQuery('');
+  }
+
   return (
-    <label className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      {label}
-      <select value={value || ''} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option || 'Select'}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
+      <span>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          setOpen((current) => !current);
+          setQuery('');
+        }}
+        className="mt-1 flex w-full items-center justify-between rounded-md border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
+      >
+        <span className={value ? '' : 'text-slate-400'}>{value || 'Select'}</span>
+        <ChevronDown className="h-4 w-4 text-slate-500" />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              data-kyc-select-menu="true"
+              className="fixed z-[10000] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+              style={{ top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}
+            >
+              <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search..."
+                  className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm font-normal text-slate-900 outline-none"
+                />
+              </div>
+              <div className="overflow-y-auto p-2" style={{ maxHeight: menuStyle.maxHeight }}>
+                {filteredOptions.length ? (
+                  filteredOptions.map((option) => {
+                    const selected = (value || '') === option;
+                    return (
+                      <button
+                        key={option || 'empty'}
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => choose(option)}
+                        className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium ${
+                          selected ? 'bg-brand-50 text-brand-900' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span>{option || 'Select'}</span>
+                        {selected ? <Check className="h-4 w-4 text-brand-700" /> : null}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="px-3 py-2 text-sm font-normal text-slate-500">No options found</p>
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
   );
 }
 
