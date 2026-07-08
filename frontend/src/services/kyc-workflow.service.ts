@@ -186,6 +186,24 @@ export function uploadLegalDocument(
   return api.post<KycCase>(`/kyc/${id}/legal-documents`, payload).then((response) => response.data);
 }
 
+export function uploadLegalDocumentFile(id: string, payload: { documentType: string; file: File }) {
+  const data = new FormData();
+  data.append('documentType', payload.documentType);
+  data.append('file', payload.file);
+
+  return api.post<KycCase>(`/kyc/${id}/legal-documents/upload`, data).then((response) => response.data);
+}
+
+export async function viewLegalDocument(caseId: string, document: LegalDocument) {
+  const response = await api.get(`/kyc/${caseId}/legal-documents/${document.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
+  const url = window.URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+}
+
 export function submitToAml(id: string) {
   return api.post<KycCase>(`/kyc/${id}/submit-to-aml`).then((response) => response.data);
 }

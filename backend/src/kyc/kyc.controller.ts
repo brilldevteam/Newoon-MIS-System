@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { KycGeneratedDocumentType } from '@prisma/client';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -155,6 +156,31 @@ export class KycController {
     @Body() dto: UploadLegalDocumentDto
   ) {
     return this.kycService.uploadLegalDocument(user, id, dto);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Post(':id/legal-documents/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadLegalDocumentFile(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('documentType') documentType: string,
+    @UploadedFile() file: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    return this.kycService.uploadLegalDocumentFile(user, id, documentType, file);
+  }
+
+  @Get(':id/legal-documents/:documentId/view')
+  async viewLegalDocument(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('documentId') documentId: string,
+    @Res() response: Response
+  ) {
+    const document = await this.kycService.getLegalDocumentFile(user, id, documentId);
+    response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Disposition', `inline; filename="${document.fileName}"`);
+    response.send(document.content);
   }
 
   @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')

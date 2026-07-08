@@ -1,13 +1,14 @@
 import { Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getKycCase, KycCase, uploadLegalDocument } from '../services/kyc-workflow.service';
+import { getKycCase, KycCase, uploadLegalDocumentFile } from '../services/kyc-workflow.service';
 
 export function UploadLegalDocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [form, setForm] = useState({ documentType: '', fileName: '', storagePath: '', mimeType: '', size: 0 });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -23,12 +24,14 @@ export function UploadLegalDocumentsPage() {
     setSaving(true);
     setError('');
     try {
-      await uploadLegalDocument(id, {
+      if (!selectedFile) {
+        setError('Select a document file to upload.');
+        return;
+      }
+
+      await uploadLegalDocumentFile(id, {
         documentType: form.documentType,
-        fileName: form.fileName,
-        storagePath: form.storagePath || undefined,
-        mimeType: form.mimeType || undefined,
-        size: form.size || undefined
+        file: selectedFile
       });
       navigate(`/kyc/${id}`);
     } catch (requestError: any) {
@@ -74,10 +77,11 @@ export function UploadLegalDocumentsPage() {
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
+                  setSelectedFile(file);
                   setForm({
                     ...form,
                     fileName: file.name,
-                    storagePath: file.name,
+                    storagePath: '',
                     mimeType: file.type || 'application/octet-stream',
                     size: file.size
                   });

@@ -1,4 +1,4 @@
-import { FileText, MessageSquare, Send, Upload } from 'lucide-react';
+import { Eye, FileText, MessageSquare, Send, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
@@ -7,7 +7,8 @@ import {
   getKycCase,
   KycCase,
   ProposalStatus,
-  updateProposalStatus
+  updateProposalStatus,
+  viewLegalDocument
 } from '../services/kyc-workflow.service';
 
 const steps = [
@@ -33,6 +34,7 @@ export function KycCaseDetailsPage() {
   const [serviceName, setServiceName] = useState('');
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
   const [comment, setComment] = useState('');
+  const [documentError, setDocumentError] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -61,6 +63,16 @@ export function KycCaseDetailsPage() {
     if (!id || !comment.trim()) return;
     setKycCase(await addWorkflowComment(id, comment.trim()));
     setComment('');
+  }
+
+  async function openDocument(document: KycCase['legalDocuments'][number]) {
+    if (!id) return;
+    setDocumentError('');
+    try {
+      await viewLegalDocument(id, document);
+    } catch (requestError: any) {
+      setDocumentError(requestError.response?.data?.message || 'Unable to open uploaded document.');
+    }
   }
 
   if (!kycCase) {
@@ -162,11 +174,22 @@ export function KycCaseDetailsPage() {
               </Link>
             </div>
             <div className="divide-y divide-slate-100">
+              {documentError ? <p className="px-5 py-3 text-sm text-red-600">{documentError}</p> : null}
               {kycCase.legalDocuments.length ? (
                 kycCase.legalDocuments.map((document) => (
-                  <div key={document.id} className="px-5 py-4">
-                    <p className="font-medium text-slate-950">{document.documentType}</p>
-                    <p className="text-sm text-slate-500">{document.fileName}</p>
+                  <div key={document.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-medium text-slate-950">{document.documentType}</p>
+                      <p className="truncate text-sm text-slate-500">{document.fileName}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openDocument(document)}
+                      className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Eye className="h-4 w-4" />
+                      View
+                    </button>
                   </div>
                 ))
               ) : (

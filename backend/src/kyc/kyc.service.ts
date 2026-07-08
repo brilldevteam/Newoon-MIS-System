@@ -12,8 +12,8 @@ import {
 import Docxtemplater from 'docxtemplater';
 import PDFDocument = require('pdfkit');
 import PizZip from 'pizzip';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { basename, join, normalize } from 'path';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -223,6 +223,68 @@ export class KycService {
         include: this.caseInclude()
       });
     });
+  }
+
+  async uploadLegalDocumentFile(
+    user: RequestUser,
+    id: string,
+    documentType: string,
+    file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    if (!documentType?.trim()) {
+      throw new BadRequestException('Document type is required');
+    }
+
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Upload a document file');
+    }
+
+    const kycCase = await this.requireWritableCase(user, id);
+    const uploadRoot = this.legalDocumentUploadRoot();
+    const caseDirectory = join(uploadRoot, kycCase.tenantId, kycCase.id);
+    mkdirSync(caseDirectory, { recursive: true });
+
+    const fileName = this.safeFileName(file.originalname);
+    const storedFileName = `${Date.now()}-${fileName}`;
+    const absolutePath = join(caseDirectory, storedFileName);
+    writeFileSync(absolutePath, file.buffer);
+
+    const storagePath = join(kycCase.tenantId, kycCase.id, storedFileName);
+
+    return this.uploadLegalDocument(user, id, {
+      documentType: documentType.trim(),
+      fileName,
+      storagePath,
+      mimeType: file.mimetype,
+      size: file.size
+    });
+  }
+
+  async getLegalDocumentFile(user: RequestUser, id: string, documentId: string) {
+    const kycCase = await this.findOne(user, id);
+    const document = kycCase.legalDocuments.find((item) => item.id === documentId);
+
+    if (!document) {
+      throw new NotFoundException('Legal document not found');
+    }
+
+    if (!document.storagePath) {
+      throw new NotFoundException('Uploaded file is not available for this document');
+    }
+
+    const uploadRoot = this.legalDocumentUploadRoot();
+    const absolutePath = normalize(join(uploadRoot, document.storagePath));
+    const normalizedRoot = normalize(uploadRoot);
+
+    if (!absolutePath.startsWith(normalizedRoot) || !existsSync(absolutePath)) {
+      throw new NotFoundException('Uploaded file is not available for this document');
+    }
+
+    return {
+      fileName: document.fileName,
+      mimeType: document.mimeType,
+      content: readFileSync(absolutePath)
+    };
   }
 
   async submitToAml(user: RequestUser, id: string) {
@@ -1307,6 +1369,19 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 
   private escapeXml(value: string) {
     return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  private legalDocumentUploadRoot() {
+    return normalize(process.env.UPLOAD_DIR || join(process.cwd(), 'uploads', 'legal-documents'));
+  }
+
+  private safeFileName(fileName: string) {
+    const name = basename(fileName || 'document')
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return name || 'document';
   }
 
   private caseInclude() {
