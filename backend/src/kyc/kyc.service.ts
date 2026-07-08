@@ -12,7 +12,7 @@ import {
 import Docxtemplater from 'docxtemplater';
 import PDFDocument = require('pdfkit');
 import PizZip from 'pizzip';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, join, normalize } from 'path';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -272,11 +272,9 @@ export class KycService {
       throw new NotFoundException('Uploaded file is not available for this document');
     }
 
-    const uploadRoot = this.legalDocumentUploadRoot();
-    const absolutePath = normalize(join(uploadRoot, document.storagePath));
-    const normalizedRoot = normalize(uploadRoot);
+    const absolutePath = this.resolveLegalDocumentPath(document.storagePath);
 
-    if (!absolutePath.startsWith(normalizedRoot) || !existsSync(absolutePath)) {
+    if (!absolutePath || !existsSync(absolutePath)) {
       throw new NotFoundException('Uploaded file is not available for this document');
     }
 
@@ -285,6 +283,31 @@ export class KycService {
       mimeType: document.mimeType,
       content: readFileSync(absolutePath)
     };
+  }
+
+  async deleteLegalDocument(user: RequestUser, id: string, documentId: string) {
+    const kycCase = await this.requireWritableCase(user, id);
+    const document = await this.prisma.legalDocument.findFirst({
+      where: { id: documentId, kycCaseId: id, tenantId: kycCase.tenantId }
+    });
+
+    if (!document) {
+      throw new NotFoundException('Legal document not found');
+    }
+
+    await this.prisma.legalDocument.delete({ where: { id: document.id } });
+
+    if (document.storagePath) {
+      const absolutePath = this.resolveLegalDocumentPath(document.storagePath);
+      if (absolutePath && existsSync(absolutePath)) {
+        unlinkSync(absolutePath);
+      }
+    }
+
+    return this.prisma.kycCase.findUniqueOrThrow({
+      where: { id },
+      include: this.caseInclude()
+    });
   }
 
   async submitToAml(user: RequestUser, id: string) {
@@ -1373,6 +1396,14 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 
   private legalDocumentUploadRoot() {
     return normalize(process.env.UPLOAD_DIR || join(process.cwd(), 'uploads', 'legal-documents'));
+  }
+
+  private resolveLegalDocumentPath(storagePath: string) {
+    const uploadRoot = this.legalDocumentUploadRoot();
+    const absolutePath = normalize(join(uploadRoot, storagePath));
+    const normalizedRoot = normalize(uploadRoot);
+
+    return absolutePath.startsWith(normalizedRoot) ? absolutePath : null;
   }
 
   private safeFileName(fileName: string) {

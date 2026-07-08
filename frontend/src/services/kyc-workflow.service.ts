@@ -204,6 +204,10 @@ export async function viewLegalDocument(caseId: string, document: LegalDocument)
   window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
 }
 
+export function deleteLegalDocument(caseId: string, documentId: string) {
+  return api.delete<KycCase>(`/kyc/${caseId}/legal-documents/${documentId}`).then((response) => response.data);
+}
+
 export function submitToAml(id: string) {
   return api.post<KycCase>(`/kyc/${id}/submit-to-aml`).then((response) => response.data);
 }

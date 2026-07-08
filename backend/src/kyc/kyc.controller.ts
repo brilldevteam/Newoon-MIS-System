@@ -184,6 +184,16 @@ export class KycController {
   }
 
   @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Delete(':id/legal-documents/:documentId')
+  deleteLegalDocument(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('documentId') documentId: string
+  ) {
+    return this.kycService.deleteLegalDocument(user, id, documentId);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
   @Post(':id/submit-to-aml')
   submitToAml(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.submitToAml(user, id);

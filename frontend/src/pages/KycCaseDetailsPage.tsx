@@ -1,9 +1,10 @@
-import { Eye, FileText, MessageSquare, Send, Upload } from 'lucide-react';
+import { Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   addWorkflowComment,
   assignService,
+  deleteLegalDocument,
   getKycCase,
   KycCase,
   ProposalStatus,
@@ -35,6 +36,7 @@ export function KycCaseDetailsPage() {
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
   const [comment, setComment] = useState('');
   const [documentError, setDocumentError] = useState('');
+  const [deletingDocumentId, setDeletingDocumentId] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -72,6 +74,19 @@ export function KycCaseDetailsPage() {
       await viewLegalDocument(id, document);
     } catch (requestError: any) {
       setDocumentError(requestError.response?.data?.message || 'Unable to open uploaded document.');
+    }
+  }
+
+  async function removeDocument(document: KycCase['legalDocuments'][number]) {
+    if (!id || !window.confirm(`Delete ${document.fileName}?`)) return;
+    setDocumentError('');
+    setDeletingDocumentId(document.id);
+    try {
+      setKycCase(await deleteLegalDocument(id, document.id));
+    } catch (requestError: any) {
+      setDocumentError(requestError.response?.data?.message || 'Unable to delete uploaded document.');
+    } finally {
+      setDeletingDocumentId('');
     }
   }
 
@@ -182,14 +197,27 @@ export function KycCaseDetailsPage() {
                       <p className="font-medium text-slate-950">{document.documentType}</p>
                       <p className="truncate text-sm text-slate-500">{document.fileName}</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => openDocument(document)}
-                      className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      <Eye className="h-4 w-4" />
-                      View
-                    </button>
+                    <div className="flex w-fit items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openDocument(document)}
+                        title="View document"
+                        aria-label={`View ${document.fileName}`}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeDocument(document)}
+                        disabled={deletingDocumentId === document.id}
+                        title="Delete document"
+                        aria-label={`Delete ${document.fileName}`}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 ))
               ) : (
