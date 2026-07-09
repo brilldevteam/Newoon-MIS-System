@@ -1279,7 +1279,7 @@ export class KycService {
       businessNature: this.text(sectionA.businessNature),
       licenseActivities: this.text(sectionA.licenseActivities),
       relatedIndustry: this.text(sectionA.relatedIndustry),
-      prospectiveService: this.text(sectionA.prospectiveService),
+      prospectiveService: this.listText(sectionA.prospectiveService),
       totalOwnershipPercentage: this.text(sectionB.totalOwnershipPercentage),
       uboDifferentFromShareholders: this.text(sectionB.uboDifferentFromShareholders),
       uboDifferentYes: sectionB.uboDifferentFromShareholders === 'Yes' ? '☒' : '☐',
@@ -1366,6 +1366,14 @@ export class KycService {
     if (value instanceof Prisma.Decimal) return value.toString();
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return String(value);
+  }
+
+  private listText(value: unknown) {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.text(item)).filter(Boolean).join(', ');
+    }
+
+    return this.text(value);
   }
 
   private documentCompanyName(payload: SerializedKycForm) {

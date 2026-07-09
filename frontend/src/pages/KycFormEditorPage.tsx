@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Trash2, Upload } from 'lucide-react';
+import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
@@ -720,7 +720,7 @@ function SectionAForm({ data, onChange }: FormProps) {
       <Select label="Main purpose / nature of business" value={data.businessNature} options={businessNatureOptions} onChange={(value) => update(data, onChange, 'businessNature', value)} wide />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
       <Select label="Related Industry" value={data.relatedIndustry} options={industryOptions} onChange={(value) => update(data, onChange, 'relatedIndustry', value)} wide />
-      <Select label="Nature of prospective service from Newoon" value={data.prospectiveService} options={prospectiveServiceOptions} onChange={(value) => update(data, onChange, 'prospectiveService', value)} wide />
+      <MultiSelect label="Nature of prospective service from Newoon" value={data.prospectiveService} options={prospectiveServiceOptions} onChange={(value) => update(data, onChange, 'prospectiveService', value)} wide />
     </FormGrid>
   );
 }
@@ -912,7 +912,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form - Part 1</h2>
         <PreviewSection title="A. General Company Information">
           <PreviewGrid rows={[
-            ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', form.sectionA.countryOfIncorporation], ['Legal Form', form.sectionA.legalForm], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', form.sectionA.businessNature], ['License activities', form.sectionA.licenseActivities], ['Related Industry', form.sectionA.relatedIndustry], ['Nature of prospective service from Newoon', form.sectionA.prospectiveService]
+            ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', form.sectionA.countryOfIncorporation], ['Legal Form', form.sectionA.legalForm], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', form.sectionA.businessNature], ['License activities', form.sectionA.licenseActivities], ['Related Industry', form.sectionA.relatedIndustry], ['Nature of prospective service from Newoon', displayList(form.sectionA.prospectiveService)]
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Ownership / Shareholders">
@@ -1097,6 +1097,164 @@ function Select({
   );
 }
 
+function MultiSelect({
+  label,
+  value,
+  options,
+  onChange,
+  wide = false
+}: {
+  label: string;
+  value: any;
+  options: string[];
+  onChange: (value: string[]) => void;
+  wide?: boolean;
+}) {
+  const selectedValues = listValue(value);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [menuStyle, setMenuStyle] = useState({ top: 0, left: 0, width: 0, maxHeight: 256 });
+  const selectableOptions = options.filter(Boolean);
+  const filteredOptions = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return search ? selectableOptions.filter((option) => option.toLowerCase().includes(search)) : selectableOptions;
+  }, [selectableOptions, query]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function updateMenuPosition() {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const viewportPadding = 12;
+      const searchAndPaddingHeight = 58;
+      const preferredMenuHeight = 320;
+      const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+      const spaceAbove = rect.top - viewportPadding;
+      const shouldOpenUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+      const availableHeight = Math.max(140, (shouldOpenUp ? spaceAbove : spaceBelow) - searchAndPaddingHeight);
+      setMenuStyle({
+        top: shouldOpenUp ? Math.max(viewportPadding, rect.top - Math.min(preferredMenuHeight, spaceAbove)) : rect.bottom + 8,
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.min(256, availableHeight)
+      });
+    }
+
+    function closeOnOutsideClick(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (triggerRef.current?.contains(target) || target.closest('[data-kyc-multi-select-menu="true"]')) return;
+      setOpen(false);
+      setQuery('');
+    }
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    document.addEventListener('mousedown', closeOnOutsideClick);
+
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+    };
+  }, [open]);
+
+  function toggle(option: string) {
+    const nextValues = selectedValues.includes(option)
+      ? selectedValues.filter((item) => item !== option)
+      : [...selectedValues, option];
+    onChange(nextValues);
+  }
+
+  function remove(option: string) {
+    onChange(selectedValues.filter((item) => item !== option));
+  }
+
+  return (
+    <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
+      <span>{label}</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          setOpen((current) => !current);
+          setQuery('');
+        }}
+        className="mt-1 flex min-h-10 w-full items-center justify-between gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
+      >
+        <span className={selectedValues.length ? 'flex min-w-0 flex-1 flex-wrap gap-2' : 'text-slate-400'}>
+          {selectedValues.length
+            ? selectedValues.map((service) => (
+                <span key={service} className="inline-flex max-w-full items-center gap-1 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800">
+                  <span className="truncate">{service}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      remove(service);
+                    }}
+                    className="inline-flex rounded-full p-0.5 hover:bg-brand-100"
+                    aria-label={`Remove ${service}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </span>
+                </span>
+              ))
+            : 'Select services'}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              data-kyc-multi-select-menu="true"
+              className="fixed z-[10000] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+              style={{ top: menuStyle.top, left: menuStyle.left, width: menuStyle.width }}
+            >
+              <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search services..."
+                  className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm font-normal text-slate-900 outline-none"
+                />
+              </div>
+              <div className="overflow-y-auto p-2" style={{ maxHeight: menuStyle.maxHeight }}>
+                {filteredOptions.length ? (
+                  filteredOptions.map((option) => {
+                    const selected = selectedValues.includes(option);
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => toggle(option)}
+                        className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium ${
+                          selected ? 'bg-brand-50 text-brand-900' : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span>{option}</span>
+                        {selected ? <Check className="h-4 w-4 text-brand-700" /> : null}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="px-3 py-2 text-sm font-normal text-slate-500">No services found</p>
+                )}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  );
+}
+
 function Choice({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return <div><p className="text-sm font-medium text-slate-700">{label}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
 }
@@ -1176,6 +1334,18 @@ function update(data: Record<string, any>, onChange: (value: Record<string, any>
 
 function updateRow(rows: Row[], index: number, key: string, value: any, onChange: (rows: Row[]) => void) {
   onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
+}
+
+function listValue(value: any) {
+  if (Array.isArray(value)) {
+    return value.filter(Boolean).map(String);
+  }
+
+  return value ? [String(value)] : [];
+}
+
+function displayList(value: any) {
+  return listValue(value).join(', ');
 }
 
 function countryFromNationality(nationality: string) {
