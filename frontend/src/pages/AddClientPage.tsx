@@ -2,6 +2,7 @@ import { Save, Sparkles } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { resolveOtherValue, SearchableSelect } from '../components/SearchableSelect';
 import { createClient, getClient, updateClient } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 
@@ -38,6 +39,16 @@ const positionOptions = [
   'Shareholder',
   'Authorized Signatory'
 ];
+
+const countryOptions = countryDialOptions.map((country) => country.name);
+
+function splitOtherValue(value: string | null | undefined, options: string[]) {
+  if (!value || options.includes(value)) {
+    return { value: value || '', otherValue: '' };
+  }
+
+  return { value: 'Other', otherValue: value };
+}
 
 function getRequestErrorMessage(error: any, fallback: string) {
   const message = error.response?.data?.message;
@@ -80,11 +91,14 @@ export function AddClientPage() {
     name: '',
     registrationNumber: '',
     industry: '',
+    industryOther: '',
     country: '',
+    countryOther: '',
     contactName: '',
     contactEmail: '',
     contactPhone: '',
-    contactPosition: ''
+    contactPosition: '',
+    contactPositionOther: ''
   });
 
   useEffect(() => {
@@ -92,15 +106,21 @@ export function AddClientPage() {
     getClient(id)
       .then((client) => {
         const primaryContact = client.contacts?.find((contact) => contact.isPrimary) || client.contacts?.[0];
+        const industry = splitOtherValue(client.industry, industryOptions);
+        const country = splitOtherValue(client.country, countryOptions);
+        const position = splitOtherValue(primaryContact?.position, positionOptions);
         setForm({
           name: client.name || '',
           registrationNumber: client.registrationNumber || '',
-          industry: client.industry || '',
-          country: client.country || '',
+          industry: industry.value,
+          industryOther: industry.otherValue,
+          country: country.value,
+          countryOther: country.otherValue,
           contactName: primaryContact?.name || '',
           contactEmail: primaryContact?.email || '',
           contactPhone: applyCountryDialCode(primaryContact?.phone || '', client.country || ''),
-          contactPosition: primaryContact?.position || ''
+          contactPosition: position.value,
+          contactPositionOther: position.otherValue
         });
       })
       .catch((requestError: any) => {
@@ -116,15 +136,15 @@ export function AddClientPage() {
     const payload = {
       name: form.name,
       registrationNumber: form.registrationNumber || undefined,
-      industry: form.industry || undefined,
-      country: form.country || undefined,
+      industry: resolveOtherValue(form.industry, form.industryOther) || undefined,
+      country: resolveOtherValue(form.country, form.countryOther) || undefined,
       contacts: form.contactName
         ? [
             {
               name: form.contactName,
               email: form.contactEmail || undefined,
               phone: form.contactPhone || undefined,
-              position: form.contactPosition || undefined
+              position: resolveOtherValue(form.contactPosition, form.contactPositionOther) || undefined
             }
           ]
         : []
@@ -144,6 +164,7 @@ export function AddClientPage() {
     setForm((current) => ({
       ...current,
       country,
+      ...(country === 'Other' ? {} : { countryOther: '' }),
       contactPhone: applyCountryDialCode(current.contactPhone, country)
     }));
   }
@@ -198,34 +219,26 @@ export function AddClientPage() {
               </button>
             </div>
           </label>
-          <label className="text-sm font-medium text-slate-700">
-            Industry
-            <select
-              value={form.industry}
-              onChange={(event) => setForm({ ...form, industry: event.target.value })}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {industryOptions.map((industry) => (
-                <option key={industry} value={industry}>
-                  {industry || 'Select industry'}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Country
-            <select
-              value={form.country}
-              onChange={(event) => setCountry(event.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {countryDialOptions.map((country) => (
-                <option key={country.name || 'empty'} value={country.name}>
-                  {country.name ? `${country.name} (${country.dialCode})` : 'Select country'}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Industry"
+            value={form.industry}
+            otherValue={form.industryOther}
+            options={industryOptions}
+            onChange={(value) => setForm({ ...form, industry: value, ...(value === 'Other' ? {} : { industryOther: '' }) })}
+            onOtherChange={(value) => setForm({ ...form, industryOther: value })}
+            placeholder="Select industry"
+            allowOther
+          />
+          <SearchableSelect
+            label="Country"
+            value={form.country}
+            otherValue={form.countryOther}
+            options={countryOptions}
+            onChange={setCountry}
+            onOtherChange={(value) => setForm({ ...form, countryOther: value })}
+            placeholder="Select country"
+            allowOther
+          />
         </div>
       </section>
 
@@ -257,20 +270,16 @@ export function AddClientPage() {
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </label>
-          <label className="text-sm font-medium text-slate-700">
-            Position
-            <select
-              value={form.contactPosition}
-              onChange={(event) => setForm({ ...form, contactPosition: event.target.value })}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {positionOptions.map((position) => (
-                <option key={position} value={position}>
-                  {position || 'Select position'}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Position"
+            value={form.contactPosition}
+            otherValue={form.contactPositionOther}
+            options={positionOptions}
+            onChange={(value) => setForm({ ...form, contactPosition: value, ...(value === 'Other' ? {} : { contactPositionOther: '' }) })}
+            onOtherChange={(value) => setForm({ ...form, contactPositionOther: value })}
+            placeholder="Select position"
+            allowOther
+          />
         </div>
       </section>
 

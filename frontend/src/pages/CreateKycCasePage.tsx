@@ -1,7 +1,9 @@
 import { ClipboardCheck } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { SearchableMultiSelect } from '../components/SearchableSelect';
 import { Client, createKycCase, getKycCase, listClients, updateKycCase } from '../services/kyc-workflow.service';
+import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 
 function getRequestErrorMessage(error: any, fallback: string) {
   const message = error.response?.data?.message;
@@ -30,7 +32,7 @@ export function CreateKycCasePage() {
   const [form, setForm] = useState({
     clientId: searchParams.get('clientId') || '',
     title: '',
-    serviceName: ''
+    services: [] as string[]
   });
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function CreateKycCasePage() {
           setForm({
             clientId: kycCase.client.id,
             title: kycCase.title || '',
-            serviceName: kycCase.service?.name || ''
+            services: serviceListValue(kycCase.service?.name)
           });
           return;
         }
@@ -60,14 +62,15 @@ export function CreateKycCasePage() {
     event.preventDefault();
     setSaving(true);
     setError('');
+    const serviceName = serviceListText(form.services);
     const payload = {
       clientId: form.clientId,
       title: form.title || undefined,
-      serviceName: form.serviceName
+      serviceName
     };
 
     try {
-      const kycCase = id ? await updateKycCase(id, payload) : await createKycCase({ ...payload, serviceName: form.serviceName || undefined });
+      const kycCase = id ? await updateKycCase(id, payload) : await createKycCase({ ...payload, serviceName: serviceName || undefined });
       navigate(`/kyc/${kycCase.id}`);
     } catch (requestError: any) {
       setError(getRequestErrorMessage(requestError, `Unable to ${isEditMode ? 'update' : 'create'} KYC case.`));
@@ -106,15 +109,13 @@ export function CreateKycCasePage() {
               ))}
             </select>
           </label>
-          <label className="text-sm font-medium text-slate-700">
-            Requested service
-            <input
-              placeholder="Business setup, accounting, compliance advisory..."
-              value={form.serviceName}
-              onChange={(event) => setForm({ ...form, serviceName: event.target.value })}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
+          <SearchableMultiSelect
+            label="Requested services"
+            value={form.services}
+            options={newoonServiceOptions}
+            onChange={(services) => setForm({ ...form, services })}
+            placeholder="Select requested services"
+          />
           <label className="text-sm font-medium text-slate-700 md:col-span-2">
             Case title
             <input

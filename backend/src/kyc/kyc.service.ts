@@ -9,11 +9,13 @@ import {
   ProposalStatus,
   RiskClassification
 } from '@prisma/client';
+import { execFile } from 'child_process';
 import Docxtemplater from 'docxtemplater';
-import PDFDocument = require('pdfkit');
 import PizZip from 'pizzip';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { basename, join, normalize } from 'path';
+import { promisify } from 'util';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -22,6 +24,8 @@ import { CreateKycCaseDto } from './dto/create-kyc-case.dto';
 import { UpdateKycCaseDto } from './dto/update-kyc-case.dto';
 import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
+
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class KycService {
@@ -595,6 +599,17 @@ export class KycService {
   async saveRequiredDocuments(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const form = await this.requireWritableForm(user, id, ['OPERATING_TEAM', 'AML_TEAM', 'COMPANY_ADMIN']);
     const rows = this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row));
+    const additionalRows = this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row));
+    const sectionData = {
+      uploadedFilesNote: dto.uploadedFilesNote || '',
+      additionalDocuments: additionalRows.map((row, index) => ({
+        id: this.optionalText(row.id) || `${index + 1}`,
+        documentType: this.optionalText(row.documentType),
+        fileName: this.optionalText(row.fileName),
+        mimeType: this.optionalText(row.mimeType),
+        size: row.size === undefined || row.size === '' ? undefined : Number(row.size)
+      }))
+    };
 
     await this.prisma.$transaction(async (tx) => {
       await tx.kycRequiredDocument.deleteMany({ where: { kycFormId: form.id } });
@@ -621,13 +636,13 @@ export class KycService {
 
       await tx.kycSectionData.upsert({
         where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey: KycFormSectionKey.REQUIRED_DOCUMENTS } },
-        update: { data: this.jsonValue({ uploadedFilesNote: dto.uploadedFilesNote || '' }), updatedBy: user.id },
+        update: { data: this.jsonValue(sectionData), updatedBy: user.id },
         create: {
           tenantId: form.tenantId,
           kycCaseId: id,
           kycFormId: form.id,
           sectionKey: KycFormSectionKey.REQUIRED_DOCUMENTS,
-          data: this.jsonValue({ uploadedFilesNote: dto.uploadedFilesNote || '' }),
+          data: this.jsonValue(sectionData),
           createdBy: user.id,
           updatedBy: user.id
         }
@@ -1145,83 +1160,47 @@ export class KycService {
   }
 
   private async buildPdf(payload: SerializedKycForm) {
-    return new Promise<Buffer>((resolve) => {
-      const doc = new PDFDocument({ size: 'A4', margin: 36 });
-      const chunks: Buffer[] = [];
-      doc.on('data', (chunk: Buffer) => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-
-      const data = this.templateData(payload);
-      doc.fontSize(18).text('NEWOON KYC PART 1', { align: 'center' });
-      doc.fontSize(9).text('Newoon Corporate Services | KYC & Engagement Workflow', { align: 'center' });
-      doc.moveDown();
-      this.pdfSection(doc, 'A. General Company Information', [
-        ['Date', data.date],
-        ['Reference', data.reference],
-        ['Legal Name', data.legalName],
-        ['CR No.', data.commercialRegistrationNo],
-        ['Tax ID', data.taxIdentificationNo],
-        ['Country', data.countryOfIncorporation],
-        ['Business Nature', data.businessNature],
-        ['Prospective Service', data.prospectiveService]
-      ]);
-      this.pdfSection(doc, 'B. Ownership / Shareholders', [
-        ['Total Ownership', `${data.totalOwnershipPercentage}%`],
-        ['UBO Different', data.uboDifferentFromShareholders],
-        ['Shareholders', data.shareholdersText],
-        ['UBOs', data.ubosText]
-      ]);
-      this.pdfSection(doc, 'C. Managers / Signatories', [['Persons', data.managersText]]);
-      this.pdfSection(doc, 'D. Compliance and Risk', [
-        ['PEP', data.pepQuestion],
-        ['PEP Details', data.pepDetails],
-        ['Sanctions', data.sanctionQuestion],
-        ['Sanction Details', data.sanctionDetails],
-        ['Dual Citizenship', data.dualCitizenshipQuestion],
-        ['Dual Citizenship Details', data.dualCitizenshipDetails],
-        ['Dual Citizenship Passport Copy', data.dualCitizenshipPassportFileName]
-      ]);
-      this.pdfSection(doc, 'E. Communication Person', [
-        ['Name', data.communicationFullName],
-        ['Position', data.communicationPosition],
-        ['Email', data.communicationEmail],
-        ['Mobile', data.communicationMobile]
-      ]);
-      this.pdfSection(doc, 'F. Required Documents', [['Checklist', data.requiredDocumentsText]]);
-      this.pdfSection(doc, 'G. Client Declaration', [
-        ['Name', data.declarationFullName],
-        ['Position', data.declarationPosition],
-        ['Date', data.declarationDate]
-      ]);
-      this.pdfSection(doc, 'H. Internal Use Only', [
-        ['Accuracy Checked', data.amlAccuracyChecked],
-        ['Clarification / Findings', data.amlClarificationFindings],
-        ['Risk Classification', data.riskClassification],
-        ['Due Diligence', data.dueDiligenceType],
-        ['AML Supervisor Name', data.amlName],
-        ['AML Supervisor Signature', data.amlSignatureFileName],
-        ['AML Date', data.amlDate],
-        ['DMLRO', data.dmlroName],
-        ['DMLRO Signature', data.dmlroSignatureFileName],
-        ['DMLRO Date', data.dmlroDate],
-        ['DMLRO Comments', data.dmlroComments],
-        ['MLRO', data.mlroName],
-        ['MLRO Signature', data.mlroSignatureFileName],
-        ['MLRO Date', data.mlroDate],
-        ['MLRO Comments', data.mlroComments]
-      ]);
-      doc.fontSize(8).text('Footer service line: Newoon KYC & Engagement Workflow', 36, 780, { align: 'center' });
-      doc.end();
-    });
+    const docx = this.buildDocx(payload);
+    return this.convertDocxToPdf(docx);
   }
 
-  private pdfSection(doc: PDFKit.PDFDocument, title: string, rows: Array<[string, unknown]>) {
-    doc.moveDown(0.6);
-    doc.fontSize(11).fillColor('#123b36').text(title, { underline: true });
-    doc.fillColor('#17211f');
-    rows.forEach(([label, value]) => {
-      doc.fontSize(9).text(`${label}: ${this.text(value)}`);
-    });
+  private async convertDocxToPdf(docx: Buffer) {
+    const workDir = mkdtempSync(join(tmpdir(), 'newoon-kyc-pdf-'));
+    const docxPath = join(workDir, 'kyc-part-1.docx');
+    const pdfPath = join(workDir, 'kyc-part-1.pdf');
+
+    try {
+      writeFileSync(docxPath, docx);
+      const command = await this.resolveLibreOfficeCommand();
+
+      await execFileAsync(command, ['--headless', '--convert-to', 'pdf', '--outdir', workDir, docxPath], {
+        timeout: 60000,
+        windowsHide: true
+      });
+
+      if (!existsSync(pdfPath)) {
+        throw new BadRequestException('Unable to generate PDF from DOCX template.');
+      }
+
+      return readFileSync(pdfPath);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+
+  private async resolveLibreOfficeCommand() {
+    const candidates = [process.env.LIBREOFFICE_PATH, 'soffice', 'libreoffice'].filter(Boolean) as string[];
+
+    for (const candidate of candidates) {
+      try {
+        await execFileAsync(candidate, ['--version'], { timeout: 10000, windowsHide: true });
+        return candidate;
+      } catch {
+        // Try the next configured command.
+      }
+    }
+
+    throw new BadRequestException('PDF conversion requires LibreOffice. Install LibreOffice on the server or set LIBREOFFICE_PATH to the soffice executable.');
   }
 
   private templateData(payload: SerializedKycForm) {
@@ -1230,13 +1209,13 @@ export class KycService {
     const sectionC = payload.sectionC as Record<string, unknown> & { managers?: RowPayload[] };
     const sectionD = payload.sectionD as Record<string, unknown>;
     const sectionE = payload.sectionE as Record<string, unknown>;
-    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[] };
+    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
     const sectionG = payload.sectionG as Record<string, unknown>;
     const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
     const shareholders = this.templateRows(sectionB.shareholders, (row, index) => ({
       shareholderNo: String(index + 1),
       shareholderFullName: this.text(row.fullName),
-      shareholderNationality: this.text(row.nationality),
+      shareholderNationality: this.optionText(row.nationality, row.nationalityOther),
       shareholderDateOfBirth: this.text(row.dateOfBirth),
       shareholderIdentityNumber: this.text(row.identityNumber),
       shareholderOwnershipPercentage: this.text(row.ownershipPercentage),
@@ -1245,7 +1224,7 @@ export class KycService {
     const ubos = this.templateRows(sectionB.ubos, (row, index) => ({
       uboNo: String(index + 1),
       uboFullName: this.text(row.fullName),
-      uboNationality: this.text(row.nationality),
+      uboNationality: this.optionText(row.nationality, row.nationalityOther),
       uboDateOfBirth: this.text(row.dateOfBirth),
       uboIdentityNumber: this.text(row.identityNumber),
       uboOwnershipPercentage: this.text(row.ownershipPercentage),
@@ -1258,7 +1237,7 @@ export class KycService {
       managerNationalityAndAddress: this.text(row.nationalityAndAddress),
       managerDateOfBirth: this.text(row.dateOfBirth),
       managerIdentityNumber: this.text(row.identityNumber),
-      managerPosition: this.text(row.position),
+      managerPosition: this.optionText(row.position, row.positionOther),
       managerAuthorizedSignatory: row.isAuthorizedSignatory ? 'Yes' : 'No'
     }));
     const totalUboPercentage = (sectionB.ubos || []).reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
@@ -1270,16 +1249,16 @@ export class KycService {
       commercialRegistrationNo: this.text(sectionA.commercialRegistrationNo),
       taxIdentificationNo: this.text(sectionA.taxIdentificationNo),
       dateOfIncorporation: this.text(sectionA.dateOfIncorporation),
-      countryOfIncorporation: this.text(sectionA.countryOfIncorporation),
-      legalForm: this.text(sectionA.legalForm),
+      countryOfIncorporation: this.optionText(sectionA.countryOfIncorporation, sectionA.countryOfIncorporationOther),
+      legalForm: this.optionText(sectionA.legalForm, sectionA.legalFormOther),
       registeredOfficeAddress: this.text(sectionA.registeredOfficeAddress),
       telephone: this.text(sectionA.telephone),
       email: this.text(sectionA.email),
       website: this.text(sectionA.website),
-      businessNature: this.text(sectionA.businessNature),
+      businessNature: this.optionText(sectionA.businessNature, sectionA.businessNatureOther),
       licenseActivities: this.text(sectionA.licenseActivities),
-      relatedIndustry: this.text(sectionA.relatedIndustry),
-      prospectiveService: this.listText(sectionA.prospectiveService),
+      relatedIndustry: this.optionText(sectionA.relatedIndustry, sectionA.relatedIndustryOther),
+      prospectiveService: this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther),
       totalOwnershipPercentage: this.text(sectionB.totalOwnershipPercentage),
       uboDifferentFromShareholders: this.text(sectionB.uboDifferentFromShareholders),
       uboDifferentYes: sectionB.uboDifferentFromShareholders === 'Yes' ? '☒' : '☐',
@@ -1303,12 +1282,13 @@ export class KycService {
       dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
       dualCitizenshipPassportFileName: this.text(sectionD.dualCitizenshipPassportFileName),
       communicationFullName: this.text(sectionE.fullName),
-      communicationPosition: this.text(sectionE.position),
-      communicationNationality: this.text(sectionE.nationality),
+      communicationPosition: this.optionText(sectionE.position, sectionE.positionOther),
+      communicationNationality: this.optionText(sectionE.nationality, sectionE.nationalityOther),
       communicationIdentityNumber: this.text(sectionE.identityNumber),
       communicationMobile: this.text(sectionE.mobileNumber),
       communicationEmail: this.text(sectionE.email),
       requiredDocumentsText: this.rowsText(sectionF.documents, ['documentType', 'isProvided', 'fileName']),
+      additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['documentType', 'fileName']),
       docCommercialRegistration: this.documentMark(sectionF.documents, 'Commercial Registration'),
       docEntityCard: this.documentMark(sectionF.documents, 'Entity Card'),
       docCertificateOfIncorporation: this.documentMark(sectionF.documents, 'Certificate of Incorporation'),
@@ -1319,7 +1299,7 @@ export class KycService {
       docAuditedFinancialStatements: this.documentMark(sectionF.documents, 'Latest Audited Financial Statements'),
       docTaxCard: this.documentMark(sectionF.documents, 'Tax Card'),
       declarationFullName: this.text(sectionG.fullName),
-      declarationPosition: this.text(sectionG.position),
+      declarationPosition: this.optionText(sectionG.position, sectionG.positionOther),
       declarationDate: this.text(sectionG.date),
       signatureFileName: this.text(sectionG.signatureFileName),
       stampFileName: this.text(sectionG.stampFileName),
@@ -1357,7 +1337,7 @@ export class KycService {
   private rowsText(rows: RowPayload[] | undefined, fields: string[]) {
     if (!rows?.length) return '';
     return rows
-      .map((row, index) => `${index + 1}. ${fields.map((field) => this.text(row[field])).filter(Boolean).join(' | ')}`)
+      .map((row, index) => `${index + 1}. ${fields.map((field) => this.optionText(row[field], row[`${field}Other`])).filter(Boolean).join(' | ')}`)
       .join('\n');
   }
 
@@ -1368,12 +1348,20 @@ export class KycService {
     return String(value);
   }
 
-  private listText(value: unknown) {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.text(item)).filter(Boolean).join(', ');
+  private optionText(value: unknown, otherValue: unknown) {
+    if (value === 'Other') {
+      return this.text(otherValue) || 'Other';
     }
 
     return this.text(value);
+  }
+
+  private listText(value: unknown, otherValue?: unknown) {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.optionText(item, otherValue)).filter(Boolean).join(', ');
+    }
+
+    return this.optionText(value, otherValue);
   }
 
   private documentCompanyName(payload: SerializedKycForm) {
@@ -1408,18 +1396,20 @@ ${this.docxParagraph('UBOs:\\n{ubosText}')}
 ${this.docxParagraph('C. Manager / Authorized Signatory / Directors / Secretary')}
 ${this.docxParagraph('{managersText}')}
 ${this.docxParagraph('D. Compliance and Risk Information')}
-${this.docxParagraph('PEP: {pepQuestion} {pepDetails}')}
-${this.docxParagraph('Sanctions: {sanctionQuestion} {sanctionDetails}')}
-${this.docxParagraph('Dual Citizenship: {dualCitizenshipQuestion} {dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}')}
+${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails}')}
+${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails}')}
+${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}')}
 ${this.docxParagraph('E. Key Communication Person')}
 ${this.docxParagraph('{communicationFullName} | {communicationPosition} | {communicationNationality} | {communicationIdentityNumber} | {communicationMobile} | {communicationEmail}')}
 ${this.docxParagraph('F. Required Documents Checklist')}
 ${this.docxParagraph('{requiredDocumentsText}')}
+${this.docxParagraph('Additional Documents')}
+${this.docxParagraph('{additionalDocumentsText}')}
 ${this.docxParagraph('G. Client Declaration')}
 ${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
 ${this.docxParagraph('H. Internal Use Only')}
 ${this.docxParagraph('Accuracy checked: {amlAccuracyChecked} | Findings: {amlClarificationFindings}')}
-${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML date: {amlDate}')}
+${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML Supervisor date: {amlDate}')}
 ${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Comments: {dmlroComments}')}
 ${this.docxParagraph('MLRO: {mlroName} | Signature: {mlroSignatureFileName} | Date: {mlroDate} | Comments: {mlroComments}')}
 ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
