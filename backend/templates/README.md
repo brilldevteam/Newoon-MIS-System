@@ -47,6 +47,8 @@ Supported placeholders:
 {communicationMobile}
 {communicationEmail}
 {requiredDocumentsText}
+{additionalDocumentsText}
+{uploadedFilesNote}
 {declarationFullName}
 {declarationPosition}
 {declarationDate}

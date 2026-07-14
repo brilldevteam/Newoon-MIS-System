@@ -41,7 +41,6 @@ const requiredDocuments = [
 function createAdditionalDocumentRow(): Row {
   return {
     id: crypto.randomUUID(),
-    documentType: '',
     fileName: '',
     mimeType: '',
     size: undefined
@@ -862,8 +861,7 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
         </div>
         {additionalDocuments.length ? (
           additionalDocuments.map((document: Row, index: number) => (
-            <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto]">
-              <Field label="Document type" value={document.documentType} onChange={(value) => updateAdditionalDocument(index, { documentType: value })} />
+            <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(220px,1fr)_auto]">
               <label
                 className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
                 title={document.fileName || 'Upload file or ZIP'}
@@ -901,7 +899,7 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
           <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">No additional documents added.</p>
         )}
       </div>
-      <Field label="Upload related document files note" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
+      <Field label="Additional notes for KYC preparation documents" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
     </div>
   );
 }
@@ -975,7 +973,8 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Provided', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
-          <PreviewTable headers={['Additional document', 'Uploaded file']} rows={(form.sectionF.additionalDocuments || []).map((row: Row) => [row.documentType, row.fileName])} />
+          <PreviewTable headers={['Additional uploaded file']} rows={(form.sectionF.additionalDocuments || []).map((row: Row) => [row.fileName])} />
+          <PreviewGrid rows={[['Additional notes for KYC preparation documents', form.sectionF.uploadedFilesNote || '-']]} />
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', form.sectionG.signatureFileName], ['Company stamp', form.sectionG.stampFileName]]} />

@@ -2,10 +2,7 @@ import { Edit3, Eye, FilePlus2, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteKycCase, KycCase, listKycCases } from '../services/kyc-workflow.service';
-
-function label(value: string) {
-  return value.split('_').join(' ');
-}
+import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 function getRequestErrorMessage(error: any, fallback: string) {
   const message = error.response?.data?.message;
@@ -110,7 +107,7 @@ export function KycWorkflowPage() {
                     <td className="px-4 py-3 text-slate-600">{kycCase.legalDocuments.length}</td>
                     <td className="px-4 py-3">
                       <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
-                        {label(kycCase.status)}
+                        {kycStatusLabel(kycCase.status)}
                       </span>
                     </td>
                     <td className="px-4 py-3">
