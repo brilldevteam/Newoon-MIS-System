@@ -74,7 +74,7 @@ export function UploadLegalDocumentsPage() {
   return (
     <form onSubmit={submit} className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-950">Upload Legal Documents</h1>
+        <h1 className="text-2xl font-semibold text-slate-950">Upload Documents Required for KYC Preparation</h1>
         <p className="mt-1 text-sm text-slate-500">{kycCase.title}</p>
       </div>
 

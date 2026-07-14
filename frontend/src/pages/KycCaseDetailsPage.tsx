@@ -1,6 +1,7 @@
 import { Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { SearchableMultiSelect } from '../components/SearchableSelect';
 import {
   addWorkflowComment,
   assignService,
@@ -11,6 +12,7 @@ import {
   updateProposalStatus,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
+import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 
 const steps = [
   'INQUIRY_RECEIVED',
@@ -32,7 +34,7 @@ function formatDate(value: string) {
 export function KycCaseDetailsPage() {
   const { id } = useParams();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
-  const [serviceName, setServiceName] = useState('');
+  const [services, setServices] = useState<string[]>([]);
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
   const [comment, setComment] = useState('');
   const [documentError, setDocumentError] = useState('');
@@ -42,7 +44,7 @@ export function KycCaseDetailsPage() {
     if (id) {
       getKycCase(id).then((item) => {
         setKycCase(item);
-        setServiceName(item.service?.name || '');
+        setServices(serviceListValue(item.service?.name));
         setProposalStatus(item.proposalStatus);
       });
     }
@@ -50,6 +52,7 @@ export function KycCaseDetailsPage() {
 
   async function saveService(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const serviceName = serviceListText(services);
     if (!id || !serviceName) return;
     setKycCase(await assignService(id, { serviceName }));
   }
@@ -143,14 +146,13 @@ export function KycCaseDetailsPage() {
             <h2 className="text-base font-semibold text-slate-950">Service & Proposal</h2>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <form onSubmit={saveService} className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">
-                  Requested service
-                  <input
-                    value={serviceName}
-                    onChange={(event) => setServiceName(event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
+                <SearchableMultiSelect
+                  label="Requested services"
+                  value={services}
+                  options={newoonServiceOptions}
+                  onChange={setServices}
+                  placeholder="Select requested services"
+                />
                 <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                   Save Service
                 </button>
@@ -179,7 +181,7 @@ export function KycCaseDetailsPage() {
 
           <section className="rounded-lg border border-slate-200 bg-white">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-              <h2 className="text-base font-semibold text-slate-950">Legal Documents</h2>
+              <h2 className="text-base font-semibold text-slate-950">Documents Required for KYC Preparation</h2>
               <Link
                 to={`/kyc/${kycCase.id}/documents`}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"

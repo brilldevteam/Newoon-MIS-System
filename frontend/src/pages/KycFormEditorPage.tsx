@@ -2,6 +2,7 @@ import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Trash2, Upl
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
+import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
 import {
   downloadGeneratedKycDocument,
   generateKycDocument,
@@ -12,6 +13,7 @@ import {
   saveKycFormSection
 } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
+import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
 
 const sections = [
   { id: 'section-a', key: 'sectionA', label: 'A. General Company Information' },
@@ -35,6 +37,16 @@ const requiredDocuments = [
   'Latest Audited Financial Statements',
   'Tax Card'
 ];
+
+function createAdditionalDocumentRow(): Row {
+  return {
+    id: crypto.randomUUID(),
+    documentType: '',
+    fileName: '',
+    mimeType: '',
+    size: undefined
+  };
+}
 
 const countryOptions = [
   '',
@@ -456,53 +468,6 @@ const businessNatureOptions = [
   'Holding company'
 ];
 
-const prospectiveServiceOptions = [
-  '',
-  'N001 - Secretary and QFC Compliance Service',
-  'N002 - Address Service',
-  'N003 - Temporary Authorized Signatory Service',
-  'N004 - Open Bank Account - Personal / Corporate',
-  'N005 - Accounting and Bookkeeping Service',
-  'N006 - Nominee Manager in QFZ Company',
-  'N007 - Payroll Service & HR Onboarding',
-  'N008 - Company Formation - QFZ',
-  'N009 - Company Formation - QFC',
-  'N010 - Business Plan Proposal Preparation',
-  'N011 - Senior Executive Function Services',
-  'N012 - Management Account Preparation Service',
-  'N013 - Document Attestation Assistance from MOFA and Embassy',
-  'N014 - PRO Services for Immigration Work',
-  'N015 - Authorized Signatory Service',
-  'N016 - Assist for Capital Gain Tax Assessment',
-  'N017 - Assist in Obtain QID',
-  'N018 - Assist for Company Enhanced Due Diligence',
-  'N019 - Liquidation Service - MOCI',
-  'N020 - Company Formation - MOCI',
-  'N021 - Tax Compliance Service',
-  'N022 - Temporary Secretary and QFC Compliance Service',
-  'N023 - Preparation of FS and Assist in ITR Submission',
-  'N024 - Assist for Share Capital Reduction',
-  'N025 - Assistant with Company Initial Setup Tasks',
-  'N026 - Payroll Service',
-  'N027 - Assist for Share Capital Increase',
-  'N028 - Director Service',
-  'N029 - Assist for Company Ownership Change',
-  'N030 - Audit Documents Filling Service',
-  'N031 - Tax Dhareeba Update Service',
-  'N032 - Assign staff as Admin Coordinator',
-  'N033 - Liquidation Service - QFC',
-  'N034 - Coordinate for Medical and Fingerpring for Visa',
-  'N035 - Shareholder Update in QFC Portal',
-  'N036 - Business Advisory Service for Restructuring Legal Structure',
-  'N037 - Renueve Certification Dervice',
-  'N038 - Nominee Shareholder Service',
-  'N039 - Additional Support Services',
-  'N040 - Secretary and QFC Compliance Service - QFZ',
-  'N041 - Interim Manager Service - MOCI',
-  'N042 - Assistance in Processing Tax Residence Certificate',
-  'N043 - Initial Setup Support and Mandatory Compliance Requirements'
-];
-
 const positionOptions = [
   '',
   'Director',
@@ -528,7 +493,7 @@ const emptyForm: KycFormData = {
   sectionC: { managers: [] },
   sectionD: {},
   sectionE: {},
-  sectionF: { documents: requiredDocuments.map((documentType) => ({ documentType, isRequired: true, isProvided: false })) },
+  sectionF: { documents: requiredDocuments.map((documentType) => ({ documentType, isRequired: true, isProvided: false })), additionalDocuments: [] },
   sectionG: {},
   sectionH: {},
   generatedDocuments: [],
@@ -692,6 +657,7 @@ function SectionAForm({ data, onChange }: FormProps) {
     onChange({
       ...data,
       countryOfIncorporation: country,
+      ...(country === 'Other' ? {} : { countryOfIncorporationOther: '' }),
       telephone: applyCountryDialCode(data.telephone || '', country)
     });
   }
@@ -711,16 +677,16 @@ function SectionAForm({ data, onChange }: FormProps) {
       <Field label="Commercial Registration No." value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
       <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
       <Field label="Date of Incorporation" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
-      <Select label="Country of Incorporation" value={data.countryOfIncorporation} options={countryOptions} onChange={setCountryOfIncorporation} />
-      <Select label="Legal Form" value={data.legalForm} options={legalFormOptions} onChange={(value) => update(data, onChange, 'legalForm', value)} />
+      <Select label="Country of Incorporation" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
+      <Select label="Legal Form" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
       <Field label="Telephone" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
       <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
       <Field label="Website" value={data.website} onChange={(value) => update(data, onChange, 'website', value)} />
       <Field label="Registered Office Address" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
-      <Select label="Main purpose / nature of business" value={data.businessNature} options={businessNatureOptions} onChange={(value) => update(data, onChange, 'businessNature', value)} wide />
+      <Select label="Main purpose / nature of business" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
-      <Select label="Related Industry" value={data.relatedIndustry} options={industryOptions} onChange={(value) => update(data, onChange, 'relatedIndustry', value)} wide />
-      <MultiSelect label="Nature of prospective service from Newoon" value={data.prospectiveService} options={prospectiveServiceOptions} onChange={(value) => update(data, onChange, 'prospectiveService', value)} wide />
+      <Select label="Related Industry" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
+      <MultiSelect label="Nature of prospective service from Newoon" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
     </FormGrid>
   );
 }
@@ -785,6 +751,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
     onChange({
       ...data,
       nationality,
+      ...(nationality === 'Other' ? {} : { nationalityOther: '' }),
       mobileNumber: applyCountryDialCode(data.mobileNumber || '', countryFromNationality(nationality))
     });
   }
@@ -798,8 +765,8 @@ function SectionEContactForm({ data, onChange }: FormProps) {
 
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position / Job title" value={data.position} options={positionOptions} onChange={(value) => update(data, onChange, 'position', value)} />
-    <Select label="Nationality" value={data.nationality} options={nationalityOptions} onChange={setNationality} />
+    <Select label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <Select label="Nationality" value={data.nationality} otherValue={data.nationalityOther} options={nationalityOptions} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
     <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
     <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
@@ -808,6 +775,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
 
 function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
   const documents = data.documents || [];
+  const additionalDocuments = data.additionalDocuments || [];
 
   function uploadDocument(index: number, file: File | null) {
     if (!file) return;
@@ -827,8 +795,25 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
     });
   }
 
+  function updateAdditionalDocument(index: number, patch: Row) {
+    onChange({
+      ...data,
+      additionalDocuments: additionalDocuments.map((row: Row, rowIndex: number) => (rowIndex === index ? { ...row, ...patch } : row))
+    });
+  }
+
+  function uploadAdditionalDocument(index: number, file: File | null) {
+    if (!file) return;
+    updateAdditionalDocument(index, {
+      fileName: file.name,
+      mimeType: file.type || undefined,
+      size: file.size
+    });
+  }
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-5">
+      <div className="space-y-3">
       {documents.map((document: Row, index: number) => (
         <div key={`${document.documentType}-${index}`} className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_110px_minmax(180px,1fr)]">
           <p className="text-sm font-medium text-slate-800">{document.documentType}</p>
@@ -859,6 +844,63 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
           </label>
         </div>
       ))}
+      </div>
+      <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-950">Additional Documents</h3>
+            <p className="mt-1 text-xs text-slate-500">Upload supplementary files or one ZIP file containing multiple supporting documents.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onChange({ ...data, additionalDocuments: [...additionalDocuments, createAdditionalDocumentRow()] })}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Plus className="h-4 w-4" />
+            Add Document
+          </button>
+        </div>
+        {additionalDocuments.length ? (
+          additionalDocuments.map((document: Row, index: number) => (
+            <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_auto]">
+              <Field label="Document type" value={document.documentType} onChange={(value) => updateAdditionalDocument(index, { documentType: value })} />
+              <label
+                className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                title={document.fileName || 'Upload file or ZIP'}
+              >
+                {document.fileName ? (
+                  <span className="truncate">{document.fileName}</span>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4" />
+                    Upload file / ZIP
+                  </>
+                )}
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
+                  className="hidden"
+                  onChange={(event) => {
+                    uploadAdditionalDocument(index, event.target.files?.[0] || null);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
+                title="Remove additional document"
+                aria-label={`Remove additional document ${index + 1}`}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">No additional documents added.</p>
+        )}
+      </div>
       <Field label="Upload related document files note" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
     </div>
   );
@@ -867,7 +909,7 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
 function SectionGDeclarationForm({ data, onChange }: FormProps) {
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position" value={data.position} options={positionOptions} onChange={(value) => update(data, onChange, 'position', value)} />
+    <Select label="Position" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
     <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
     <UploadField label="Authorized signature" fileName={data.signatureFileName} onChange={(file) => update(data, onChange, 'signatureFileName', file.name)} />
     <UploadField label="Company stamp" fileName={data.stampFileName} onChange={(file) => update(data, onChange, 'stampFileName', file.name)} />
@@ -878,11 +920,11 @@ function SectionHInternalReviewForm({ data, onChange }: FormProps) {
   return <FormGrid>
     <Choice label="Accuracy checked by AML Supervisor" value={data.amlAccuracyChecked ? 'Yes' : 'No'} onChange={(value) => onChange({ ...data, reviewPart: 'AML', amlAccuracyChecked: value === 'Yes' })} />
     <Field label="Clarification / findings" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlClarificationFindings', value)} textarea wide />
-    <Select label="Risk classification" value={data.riskClassification} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} />
-    <Select label="Due diligence type" value={data.dueDiligenceType} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} />
+    <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassificationOther', value)} allowOther />
+    <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
     <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
     <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', file.name)} />
-    <Field label="AML date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
+    <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
     <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroName', value)} />
     <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroSignatureFileName', file.name)} />
     <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroDate', value)} />
@@ -912,33 +954,34 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form - Part 1</h2>
         <PreviewSection title="A. General Company Information">
           <PreviewGrid rows={[
-            ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', form.sectionA.countryOfIncorporation], ['Legal Form', form.sectionA.legalForm], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', form.sectionA.businessNature], ['License activities', form.sectionA.licenseActivities], ['Related Industry', form.sectionA.relatedIndustry], ['Nature of prospective service from Newoon', displayList(form.sectionA.prospectiveService)]
+            ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Ownership / Shareholders">
-          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, row.nationality, displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
           <p className="mt-2 font-semibold">Total ownership percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
           <p>UBO different from shareholders: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>UBO group structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
-          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, row.nationality, displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Entity', 'Nationality and address', 'DOB', 'ID No.', 'Position', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, row.entityName, row.nationalityAndAddress, displayDate(row.dateOfBirth), row.identityNumber, row.position, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+          <PreviewTable headers={['Full name', 'Entity', 'Nationality and address', 'DOB', 'ID No.', 'Position', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, row.entityName, row.nationalityAndAddress, displayDate(row.dateOfBirth), row.identityNumber, resolveOtherValue(row.position, row.positionOther), row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
-          <PreviewGrid rows={[['PEP question', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Sanction question', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Dual citizenship question', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />
+          <PreviewGrid rows={[['Any PEP exposure?', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Any sanction exposure?', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
-          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', form.sectionE.position], ['Nationality', form.sectionE.nationality], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
+          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', resolveOtherValue(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Provided', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
+          <PreviewTable headers={['Additional document', 'Uploaded file']} rows={(form.sectionF.additionalDocuments || []).map((row: Row) => [row.documentType, row.fileName])} />
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
-          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', form.sectionG.position], ['Date', form.sectionG.date], ['Authorized signature', form.sectionG.signatureFileName], ['Company stamp', form.sectionG.stampFileName]]} />
+          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', form.sectionG.signatureFileName], ['Company stamp', form.sectionG.stampFileName]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', form.sectionH?.amlSignatureFileName], ['AML date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', form.sectionH?.dmlroSignatureFileName], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', form.sectionH?.mlroSignatureFileName], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', form.sectionH?.amlSignatureFileName], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', form.sectionH?.dmlroSignatureFileName], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', form.sectionH?.mlroSignatureFileName], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -966,7 +1009,7 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
   );
 }
 
-function Select({
+function OldSelect({
   label,
   value,
   options,
@@ -1097,7 +1140,7 @@ function Select({
   );
 }
 
-function MultiSelect({
+function OldMultiSelect({
   label,
   value,
   options,
@@ -1303,7 +1346,21 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
               }
 
               if (type === 'select') {
-                return <Select key={key} label={label} value={row[key]} options={options || ['']} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
+                return (
+                  <Select
+                    key={key}
+                    label={label}
+                    value={row[key]}
+                    otherValue={row[`${key}Other`]}
+                    options={options || ['']}
+                    onChange={(value) => updateRow(rows, index, key, value, (nextRows) => {
+                      const normalizedRows = value === 'Other' ? nextRows : nextRows.map((nextRow, nextIndex) => nextIndex === index ? { ...nextRow, [`${key}Other`]: '' } : nextRow);
+                      onChange(normalizedRows);
+                    })}
+                    onOtherChange={(value) => updateRow(rows, index, `${key}Other`, value, onChange)}
+                    allowOther
+                  />
+                );
               }
 
               return <Field key={key} label={label} type={type || 'text'} value={row[key]} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
@@ -1330,6 +1387,14 @@ function PreviewTable({ headers, rows }: { headers: string[]; rows: any[][] }) {
 
 function update(data: Record<string, any>, onChange: (value: Record<string, any>) => void, key: string, value: any) {
   onChange({ ...data, [key]: value });
+}
+
+function updateSelect(data: Record<string, any>, onChange: (value: Record<string, any>) => void, key: string, value: string) {
+  onChange({
+    ...data,
+    [key]: value,
+    ...(value === 'Other' ? {} : { [`${key}Other`]: '' })
+  });
 }
 
 function updateRow(rows: Row[], index: number, key: string, value: any, onChange: (rows: Row[]) => void) {
