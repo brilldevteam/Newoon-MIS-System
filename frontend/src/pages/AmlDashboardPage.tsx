@@ -2,6 +2,7 @@ import { ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AmlNotification, getAmlNotifications } from '../services/kyc-workflow.service';
+import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -62,7 +63,7 @@ export function AmlDashboardPage() {
                   </div>
                   {notification.kycCase ? (
                     <span className="w-fit rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
-                      {notification.kycCase.status.split('_').join(' ')}
+                      {kycStatusLabel(notification.kycCase.status)}
                     </span>
                   ) : null}
                 </div>

@@ -49,7 +49,7 @@ export function SubmitToAmlPage() {
             </span>
           </div>
           <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-            <span className="text-slate-700">Legal documents uploaded</span>
+            <span className="text-slate-700">Documents required for KYC preparation uploaded</span>
             <span className={canSubmit ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
               {kycCase.legalDocuments.length} document{kycCase.legalDocuments.length === 1 ? '' : 's'}
             </span>

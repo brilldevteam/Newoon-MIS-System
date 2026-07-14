@@ -217,7 +217,7 @@ export class KycService {
             fromStatus: kycCase.status,
             toStatus: KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
             changedById: user.id,
-            note: 'Legal document metadata uploaded'
+            note: 'Documents required for KYC preparation uploaded'
           }
         });
       }
@@ -269,7 +269,7 @@ export class KycService {
     const document = kycCase.legalDocuments.find((item) => item.id === documentId);
 
     if (!document) {
-      throw new NotFoundException('Legal document not found');
+      throw new NotFoundException('Uploaded document not found');
     }
 
     if (!document.storagePath) {
@@ -296,7 +296,7 @@ export class KycService {
     });
 
     if (!document) {
-      throw new NotFoundException('Legal document not found');
+      throw new NotFoundException('Uploaded document not found');
     }
 
     await this.prisma.legalDocument.delete({ where: { id: document.id } });
@@ -321,7 +321,7 @@ export class KycService {
     });
 
     if (!documentsCount) {
-      throw new BadRequestException('Upload at least one legal document before submitting to AML');
+      throw new BadRequestException('Upload at least one document required for KYC preparation before submitting to AML');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -604,7 +604,6 @@ export class KycService {
       uploadedFilesNote: dto.uploadedFilesNote || '',
       additionalDocuments: additionalRows.map((row, index) => ({
         id: this.optionalText(row.id) || `${index + 1}`,
-        documentType: this.optionalText(row.documentType),
         fileName: this.optionalText(row.fileName),
         mimeType: this.optionalText(row.mimeType),
         size: row.size === undefined || row.size === '' ? undefined : Number(row.size)
@@ -1135,7 +1134,8 @@ export class KycService {
     const template = this.loadDocxTemplate();
     const doc = new Docxtemplater(new PizZip(template), {
       paragraphLoop: true,
-      linebreaks: true
+      linebreaks: true,
+      nullGetter: () => ''
     });
 
     doc.render(this.templateData(payload));
@@ -1144,8 +1144,8 @@ export class KycService {
 
   private loadDocxTemplate() {
     const templatePaths = [
-      join(process.cwd(), 'templates', 'kyc-part-1-template.docx'),
       join(process.cwd(), 'backend', 'templates', 'kyc-part-1-template.docx'),
+      join(process.cwd(), 'templates', 'kyc-part-1-template.docx'),
       join(__dirname, '..', '..', 'templates', 'kyc-part-1-template.docx'),
       join(__dirname, '..', '..', '..', 'backend', 'templates', 'kyc-part-1-template.docx')
     ];
@@ -1288,7 +1288,8 @@ export class KycService {
       communicationMobile: this.text(sectionE.mobileNumber),
       communicationEmail: this.text(sectionE.email),
       requiredDocumentsText: this.rowsText(sectionF.documents, ['documentType', 'isProvided', 'fileName']),
-      additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['documentType', 'fileName']),
+      additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['fileName']) || '-',
+      uploadedFilesNote: this.text(sectionF.uploadedFilesNote) || '-',
       docCommercialRegistration: this.documentMark(sectionF.documents, 'Commercial Registration'),
       docEntityCard: this.documentMark(sectionF.documents, 'Entity Card'),
       docCertificateOfIncorporation: this.documentMark(sectionF.documents, 'Certificate of Incorporation'),
@@ -1343,6 +1344,7 @@ export class KycService {
 
   private text(value: unknown) {
     if (value === null || value === undefined) return '';
+    if (value === 'undefined') return '';
     if (value instanceof Prisma.Decimal) return value.toString();
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return String(value);
@@ -1405,6 +1407,7 @@ ${this.docxParagraph('F. Required Documents Checklist')}
 ${this.docxParagraph('{requiredDocumentsText}')}
 ${this.docxParagraph('Additional Documents')}
 ${this.docxParagraph('{additionalDocumentsText}')}
+${this.docxParagraph('Additional notes for KYC preparation documents: {uploadedFilesNote}')}
 ${this.docxParagraph('G. Client Declaration')}
 ${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
 ${this.docxParagraph('H. Internal Use Only')}

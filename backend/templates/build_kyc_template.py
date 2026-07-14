@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.text.paragraph import Paragraph
 
 
 ROOT = Path(__file__).resolve().parent
@@ -10,6 +12,14 @@ OUTPUT = ROOT / "kyc-part-1-template.docx"
 
 def set_cell(table, row, col, text):
     table.rows[row].cells[col].text = text
+
+
+def insert_paragraph_after(paragraph, text):
+    new_paragraph = OxmlElement("w:p")
+    paragraph._p.addnext(new_paragraph)
+    wrapped = Paragraph(new_paragraph, paragraph._parent)
+    wrapped.text = text
+    return wrapped
 
 
 def main():
@@ -126,6 +136,10 @@ def main():
     ]
     for paragraph_index, placeholder in zip(checklist_indexes, checklist_placeholders):
         document.paragraphs[paragraph_index].text = f"{placeholder} " + document.paragraphs[paragraph_index].text
+
+    tax_card_paragraph = document.paragraphs[checklist_indexes[-1]]
+    note_paragraph = insert_paragraph_after(tax_card_paragraph, "Additional documents: {additionalDocumentsText}")
+    insert_paragraph_after(note_paragraph, "Additional notes for KYC preparation documents: {uploadedFilesNote}")
 
     declaration = document.tables[6]
     set_cell(declaration, 0, 1, "{declarationFullName}")
