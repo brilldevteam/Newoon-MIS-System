@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { KycGeneratedDocumentType } from '@prisma/client';
+import { KycGeneratedDocumentType, ReviewStage } from '@prisma/client';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -203,6 +203,68 @@ export class KycController {
   @Post(':id/start-aml-review')
   startAmlReview(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.startAmlReview(user, id);
+  }
+
+  @Get(':id/internal-reviews')
+  getInternalReviewWorkspace(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.kycService.getInternalReviewWorkspace(user, id);
+  }
+
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/:stage/start')
+  startInternalReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('stage') stage: ReviewStage) {
+    return this.kycService.startReviewStage(user, id, stage);
+  }
+
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Patch(':id/internal-reviews/:stage/draft')
+  saveInternalReviewDraft(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('stage') stage: ReviewStage,
+    @Body() dto: Record<string, unknown>
+  ) {
+    return this.kycService.saveReviewDraft(user, id, stage, dto);
+  }
+
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/supervisor/submit')
+  submitSupervisorReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.submitSupervisorReview(user, id, dto);
+  }
+
+  @Roles('DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/dmlro/submit')
+  submitDmlroReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.submitDmlroReview(user, id, dto);
+  }
+
+  @Roles('MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/mlro/decision')
+  decideMlroReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.decideMlroReview(user, id, dto);
+  }
+
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/:stage/comments')
+  addReviewerComment(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('stage') stage: ReviewStage,
+    @Body() dto: Record<string, unknown>
+  ) {
+    return this.kycService.addReviewerComment(user, id, stage, dto);
+  }
+
+  @Roles('DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/signed-documents')
+  uploadSignedKycDocument(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.uploadSignedKycDocument(user, id, dto);
+  }
+
+  @Get(':id/activation-readiness')
+  activationReadiness(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.kycService.recalculateActivationReadiness(user, id);
   }
 
   @Post(':id/comments')
