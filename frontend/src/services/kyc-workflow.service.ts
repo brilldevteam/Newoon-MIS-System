@@ -6,7 +6,30 @@ export type KycCaseStatus =
   | 'LEGAL_DOCUMENTS_PENDING'
   | 'LEGAL_DOCUMENTS_UPLOADED'
   | 'SUBMITTED_TO_AML'
-  | 'AML_REVIEW_STARTED';
+  | 'AML_REVIEW_STARTED'
+  | 'SUPERVISOR_REVIEW_PENDING'
+  | 'SUPERVISOR_REVIEW_IN_PROGRESS'
+  | 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'
+  | 'SUPERVISOR_REVIEW_COMPLETED'
+  | 'DMLRO_REVIEW_PENDING'
+  | 'DMLRO_REVIEW_IN_PROGRESS'
+  | 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED'
+  | 'DMLRO_REVIEW_COMPLETED'
+  | 'MLRO_REVIEW_PENDING'
+  | 'MLRO_REVIEW_IN_PROGRESS'
+  | 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'
+  | 'MLRO_APPROVED'
+  | 'MLRO_APPROVED_WITH_CONDITIONS'
+  | 'MLRO_REJECTED'
+  | 'FINAL_SIGNATURES_PENDING'
+  | 'FINAL_DOCUMENTS_PENDING'
+  | 'KYC_FINAL_APPROVED'
+  | 'CLIENT_ACTIVATION_PENDING'
+  | 'CLIENT_ACTIVE'
+  | 'CLIENT_REJECTED'
+  | 'CLIENT_ON_HOLD';
+
+export type ReviewStage = 'SUPERVISOR' | 'DMLRO' | 'MLRO';
 
 export type ProposalStatus = 'NOT_REQUIRED' | 'REQUIRED' | 'SENT' | 'ACCEPTED' | 'REJECTED';
 
@@ -116,6 +139,20 @@ export type KycFormData = {
   updatedAt: string;
 };
 
+export type InternalReviewWorkspace = {
+  kycCase: KycCase;
+  tasks: Array<Record<string, any>>;
+  reviews: Array<Record<string, any>>;
+  comments: Array<Record<string, any>>;
+  signedDocuments: Array<Record<string, any>>;
+  riskReclassifications: Array<Record<string, any>>;
+  activationChecklist: {
+    checklist: Array<{ key: string; label: string; completed: boolean }>;
+    blockingIssues?: Array<{ key: string; label: string; completed: boolean }>;
+    isReady: boolean;
+  };
+};
+
 export function listClients() {
   return api.get<Client[]>('/clients').then((response) => response.data);
 }
@@ -218,6 +255,38 @@ export function addWorkflowComment(id: string, body: string) {
 
 export function getAmlNotifications() {
   return api.get<AmlNotification[]>('/kyc/aml/notifications').then((response) => response.data);
+}
+
+export function getInternalReviewWorkspace(caseId: string) {
+  return api.get<InternalReviewWorkspace>(`/kyc/${caseId}/internal-reviews`).then((response) => response.data);
+}
+
+export function startInternalReview(caseId: string, stage: ReviewStage) {
+  return api.post(`/kyc/${caseId}/internal-reviews/${stage}/start`).then((response) => response.data);
+}
+
+export function saveInternalReviewDraft(caseId: string, stage: ReviewStage, payload: Record<string, any>) {
+  return api.patch(`/kyc/${caseId}/internal-reviews/${stage}/draft`, payload).then((response) => response.data);
+}
+
+export function submitSupervisorReview(caseId: string, payload: Record<string, any>) {
+  return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/supervisor/submit`, payload).then((response) => response.data);
+}
+
+export function submitDmlroReview(caseId: string, payload: Record<string, any>) {
+  return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/dmlro/submit`, payload).then((response) => response.data);
+}
+
+export function decideMlroReview(caseId: string, payload: Record<string, any>) {
+  return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/mlro/decision`, payload).then((response) => response.data);
+}
+
+export function addReviewerComment(caseId: string, stage: ReviewStage, payload: Record<string, any>) {
+  return api.post(`/kyc/${caseId}/internal-reviews/${stage}/comments`, payload).then((response) => response.data);
+}
+
+export function uploadSignedKycDocument(caseId: string, payload: Record<string, any>) {
+  return api.post(`/kyc/${caseId}/internal-reviews/signed-documents`, payload).then((response) => response.data);
 }
 
 export function getKycForm(caseId: string) {

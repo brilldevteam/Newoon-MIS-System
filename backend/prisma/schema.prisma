@@ -46,6 +46,13 @@ model Tenant {
   kycManagers   KycManager[]
   kycRequiredDocuments KycRequiredDocument[]
   kycInternalReviews KycInternalReview[]
+  internalReviewTasks InternalReviewTask[]
+  internalReviewSubmissions InternalReviewSubmission[]
+  internalReviewVersions InternalReviewVersion[]
+  reviewerComments ReviewerComment[]
+  signedKycDocuments SignedKycDocument[]
+  riskReclassifications RiskReclassification[]
+  clientActivationChecklists ClientActivationChecklist[]
   kycGeneratedDocuments KycGeneratedDocument[]
   statusHistory KycCaseStatusHistory[]
   auditLogs     AuditLog[]
@@ -72,6 +79,11 @@ model User {
   statusHistory KycCaseStatusHistory[]
   createdKycForms KycForm[] @relation("KycFormCreatedBy")
   updatedKycForms KycForm[] @relation("KycFormUpdatedBy")
+  assignedReviewTasks InternalReviewTask[] @relation("InternalReviewTaskAssignee")
+  submittedInternalReviews InternalReviewSubmission[] @relation("InternalReviewSubmittedBy")
+  reviewerComments ReviewerComment[] @relation("ReviewerCommentAuthor")
+  uploadedSignedKycDocuments SignedKycDocument[] @relation("SignedKycDocumentUploader")
+  riskReclassifications RiskReclassification[] @relation("RiskReclassificationUser")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 }
@@ -83,6 +95,27 @@ enum KycCaseStatus {
   LEGAL_DOCUMENTS_UPLOADED
   SUBMITTED_TO_AML
   AML_REVIEW_STARTED
+  SUPERVISOR_REVIEW_PENDING
+  SUPERVISOR_REVIEW_IN_PROGRESS
+  SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+  SUPERVISOR_REVIEW_COMPLETED
+  DMLRO_REVIEW_PENDING
+  DMLRO_REVIEW_IN_PROGRESS
+  DMLRO_ADDITIONAL_INFORMATION_REQUIRED
+  DMLRO_REVIEW_COMPLETED
+  MLRO_REVIEW_PENDING
+  MLRO_REVIEW_IN_PROGRESS
+  MLRO_ADDITIONAL_INFORMATION_REQUIRED
+  MLRO_APPROVED
+  MLRO_APPROVED_WITH_CONDITIONS
+  MLRO_REJECTED
+  FINAL_SIGNATURES_PENDING
+  FINAL_DOCUMENTS_PENDING
+  KYC_FINAL_APPROVED
+  CLIENT_ACTIVATION_PENDING
+  CLIENT_ACTIVE
+  CLIENT_REJECTED
+  CLIENT_ON_HOLD
 }
 
 enum ProposalStatus {
@@ -101,6 +134,19 @@ enum LegalDocumentStatus {
 
 enum NotificationType {
   AML_CASE_SUBMITTED
+  SUPERVISOR_TASK_ASSIGNED
+  SUPERVISOR_REVIEW_COMPLETED
+  DMLRO_TASK_ASSIGNED
+  DMLRO_REVIEW_COMPLETED
+  MLRO_TASK_ASSIGNED
+  ADDITIONAL_INFORMATION_REQUESTED
+  SIGNED_KYC_UPLOADED
+  RISK_CLASSIFICATION_CHANGED
+  MLRO_APPROVAL_COMPLETED
+  MLRO_APPROVAL_WITH_CONDITIONS
+  MLRO_REJECTION
+  CLIENT_READY_FOR_ACTIVATION
+  CLIENT_ACTIVATED
   GENERAL
 }
 
@@ -129,6 +175,67 @@ enum DueDiligenceType {
   SIMPLIFIED
   REGULAR
   ENHANCED
+}
+
+enum ReviewStage {
+  SUPERVISOR
+  DMLRO
+  MLRO
+}
+
+enum ReviewTaskStatus {
+  PENDING
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  RETURNED
+  CANCELLED
+}
+
+enum ReviewSubmissionStatus {
+  DRAFT
+  SUBMITTED
+  RETURNED
+  REOPENED
+}
+
+enum ReviewDecision {
+  APPROVE
+  APPROVE_WITH_CONDITIONS
+  REJECT
+  REQUEST_ADDITIONAL_INFORMATION
+  RETURN_TO_SUPERVISOR
+  RETURN_TO_DMLRO
+}
+
+enum RiskOverrideReason {
+  PEP_IDENTIFIED
+  SANCTIONS_FINDING
+  ADVERSE_MEDIA
+  OWNERSHIP_COMPLEXITY
+  COUNTRY_RISK
+  INDUSTRY_RISK
+  SOURCE_OF_FUNDS_CONCERN
+  ENHANCED_MONITORING_REQUIRED
+  PROFESSIONAL_JUDGEMENT
+  OTHER
+}
+
+enum SignedKycDocumentStage {
+  DMLRO_SIGNED_KYC
+  MLRO_SIGNED_KYC
+  FINAL_SIGNED_KYC
+}
+
+enum ReviewCommentType {
+  FORMAL
+  CONFIDENTIAL
+}
+
+enum ConfidentialVisibilityScope {
+  SUPERVISOR_DMLRO_MLRO
+  DMLRO_MLRO
+  MLRO_ONLY
 }
 
 model Role {
@@ -269,6 +376,13 @@ model KycCase {
   kycManagers       KycManager[]
   kycRequiredDocuments KycRequiredDocument[]
   kycInternalReview KycInternalReview?
+  internalReviewTasks InternalReviewTask[]
+  internalReviewSubmissions InternalReviewSubmission[]
+  internalReviewVersions InternalReviewVersion[]
+  reviewerComments ReviewerComment[]
+  signedKycDocuments SignedKycDocument[]
+  riskReclassifications RiskReclassification[]
+  activationChecklist ClientActivationChecklist?
   kycGeneratedDocuments KycGeneratedDocument[]
   submittedToAmlAt  DateTime?
   amlReviewStartedAt DateTime?
@@ -457,6 +571,166 @@ model KycInternalReview {
   updatedBy                String
   createdAt                DateTime            @default(now())
   updatedAt                DateTime            @updatedAt
+
+  @@index([tenantId])
+}
+
+model InternalReviewTask {
+  id           String           @id @default(uuid())
+  tenantId     String
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase          @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  stage        ReviewStage
+  status       ReviewTaskStatus @default(PENDING)
+  assignedToId String?
+  assignedTo   User?            @relation("InternalReviewTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueDate      DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdBy    String
+  updatedBy    String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([kycCaseId, stage, status])
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([stage])
+  @@index([assignedToId])
+}
+
+model InternalReviewSubmission {
+  id              String                 @id @default(uuid())
+  tenantId        String
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId       String
+  kycCase         KycCase                @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  stage           ReviewStage
+  status          ReviewSubmissionStatus @default(DRAFT)
+  version         Int                    @default(1)
+  data            Json
+  formalComments  String?
+  confidentialNotes String?
+  submittedById   String?
+  submittedBy     User?                  @relation("InternalReviewSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedAt     DateTime?
+  isLocked        Boolean                @default(false)
+  createdBy       String
+  updatedBy       String
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([kycCaseId, stage])
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([stage])
+  @@index([submittedById])
+}
+
+model InternalReviewVersion {
+  id           String      @id @default(uuid())
+  tenantId     String
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase     @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  stage        ReviewStage
+  version      Int
+  snapshot     Json
+  submittedBy  String?
+  submittedAt  DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@unique([kycCaseId, stage, version])
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model ReviewerComment {
+  id              String                       @id @default(uuid())
+  tenantId        String
+  tenant          Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId       String
+  kycCase         KycCase                      @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  stage           ReviewStage
+  type            ReviewCommentType
+  visibilityScope ConfidentialVisibilityScope?
+  body            String
+  isLocked        Boolean                      @default(false)
+  authorId        String?
+  author          User?                        @relation("ReviewerCommentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([stage])
+  @@index([type])
+}
+
+model SignedKycDocument {
+  id              String                 @id @default(uuid())
+  tenantId        String
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId       String
+  kycCase         KycCase                @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  reviewStage     SignedKycDocumentStage
+  fileName        String
+  fileType        String?
+  fileSize        Int?
+  storageKey      String?
+  documentVersion Int                    @default(1)
+  signatureType   String?
+  comments        String?
+  activeVersion   Boolean                @default(true)
+  uploadedById    String?
+  uploadedBy      User?                  @relation("SignedKycDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt      DateTime               @default(now())
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([kycCaseId, reviewStage, documentVersion])
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([reviewStage])
+}
+
+model RiskReclassification {
+  id                     String             @id @default(uuid())
+  tenantId               String
+  tenant                 Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId              String
+  kycCase                KycCase            @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  calculatedRisk         RiskClassification?
+  supervisorRisk         RiskClassification?
+  dmlroRisk              RiskClassification?
+  previousRisk           RiskClassification?
+  newRisk                RiskClassification
+  reasonCategory         RiskOverrideReason
+  explanation            String
+  effectiveDate          DateTime
+  changedById            String?
+  changedBy              User?              @relation("RiskReclassificationUser", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt              DateTime           @default(now())
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+}
+
+model ClientActivationChecklist {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId      String   @unique
+  kycCase        KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  checklist      Json
+  isReady        Boolean  @default(false)
+  blockingIssues Json?
+  completedAt    DateTime?
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([tenantId])
 }

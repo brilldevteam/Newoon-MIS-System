@@ -8,6 +8,7 @@ const roleNames = [
   'COMPANY_ADMIN',
   'OPERATING_TEAM',
   'AML_TEAM',
+  'AML_SUPERVISOR',
   'SEF',
   'MLRO',
   'DMLRO',
@@ -58,6 +59,15 @@ async function main() {
   });
   const operatingTeamRole = await prisma.role.findUniqueOrThrow({
     where: { name: 'OPERATING_TEAM' }
+  });
+  const amlSupervisorRole = await prisma.role.findUniqueOrThrow({
+    where: { name: 'AML_SUPERVISOR' }
+  });
+  const dmlroRole = await prisma.role.findUniqueOrThrow({
+    where: { name: 'DMLRO' }
+  });
+  const mlroRole = await prisma.role.findUniqueOrThrow({
+    where: { name: 'MLRO' }
   });
 
   const passwordHash = await bcrypt.hash('Admin@12345', 12);
@@ -118,6 +128,66 @@ async function main() {
     }
   });
 
+  const amlSupervisorUser = await prisma.user.upsert({
+    where: { email: 'aml.supervisor@newoon.com' },
+    update: {
+      tenantId: tenant.id,
+      status: 'ACTIVE'
+    },
+    create: {
+      tenantId: tenant.id,
+      email: 'aml.supervisor@newoon.com',
+      passwordHash,
+      firstName: 'AML',
+      lastName: 'Supervisor',
+      roles: {
+        create: {
+          roleId: amlSupervisorRole.id
+        }
+      }
+    }
+  });
+
+  const dmlroUser = await prisma.user.upsert({
+    where: { email: 'dmlro@newoon.com' },
+    update: {
+      tenantId: tenant.id,
+      status: 'ACTIVE'
+    },
+    create: {
+      tenantId: tenant.id,
+      email: 'dmlro@newoon.com',
+      passwordHash,
+      firstName: 'DMLRO',
+      lastName: 'Reviewer',
+      roles: {
+        create: {
+          roleId: dmlroRole.id
+        }
+      }
+    }
+  });
+
+  const mlroUser = await prisma.user.upsert({
+    where: { email: 'mlro@newoon.com' },
+    update: {
+      tenantId: tenant.id,
+      status: 'ACTIVE'
+    },
+    create: {
+      tenantId: tenant.id,
+      email: 'mlro@newoon.com',
+      passwordHash,
+      firstName: 'MLRO',
+      lastName: 'Approver',
+      roles: {
+        create: {
+          roleId: mlroRole.id
+        }
+      }
+    }
+  });
+
   await prisma.userRole.upsert({
     where: { userId_roleId: { userId: companyAdmin.id, roleId: companyAdminRole.id } },
     update: {},
@@ -128,6 +198,24 @@ async function main() {
     where: { userId_roleId: { userId: operatingUser.id, roleId: operatingTeamRole.id } },
     update: {},
     create: { userId: operatingUser.id, roleId: operatingTeamRole.id }
+  });
+
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: amlSupervisorUser.id, roleId: amlSupervisorRole.id } },
+    update: {},
+    create: { userId: amlSupervisorUser.id, roleId: amlSupervisorRole.id }
+  });
+
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: dmlroUser.id, roleId: dmlroRole.id } },
+    update: {},
+    create: { userId: dmlroUser.id, roleId: dmlroRole.id }
+  });
+
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: mlroUser.id, roleId: mlroRole.id } },
+    update: {},
+    create: { userId: mlroUser.id, roleId: mlroRole.id }
   });
 
   const allModules = await prisma.module.findMany();

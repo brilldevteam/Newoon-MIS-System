@@ -14,15 +14,16 @@ import {
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 
 const navItems = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/clients', label: 'Clients', icon: UserRoundPlus },
-  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck },
-  { to: '/aml', label: 'AML Dashboard', icon: ShieldCheck },
-  { to: '/tenants', label: 'Tenants', icon: Building2 },
-  { to: '/modules', label: 'Modules', icon: Layers },
-  { to: '/users', label: 'Users', icon: Users }
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
+  { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake },
+  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.kycPreparation, ...workflowRoles.amlDashboard] },
+  { to: '/aml', label: 'AML Dashboard', icon: ShieldCheck, roles: workflowRoles.amlDashboard },
+  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
+  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
+  { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin }
 ];
 
 export function AppLayout() {
@@ -69,7 +70,7 @@ export function AppLayout() {
           )}
         </div>
         <nav className={`space-y-1 py-4 ${useCollapsedSidebar ? 'px-3' : 'px-3'}`}>
-          {navItems.map((item) => (
+          {navItems.filter((item) => !item.roles.length || hasAnyRole(user, item.roles)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -102,7 +103,7 @@ export function AppLayout() {
                 </span>
                 <div className="min-w-0 text-right">
                   <p className="truncate text-sm font-semibold text-slate-950">{fullName || user.email}</p>
-                  <p className="truncate text-xs text-slate-500">{user.email}</p>
+                  <p className="truncate text-xs text-slate-500">{roleList(user)}</p>
                 </div>
               </div>
             ) : null}

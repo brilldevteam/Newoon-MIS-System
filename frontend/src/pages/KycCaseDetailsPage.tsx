@@ -1,6 +1,7 @@
 import { Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import {
   addWorkflowComment,
   assignService,
@@ -8,22 +9,21 @@ import {
   getKycCase,
   KycCase,
   ProposalStatus,
+  KycCaseStatus,
   updateProposalStatus,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
+import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
-const steps = [
+const steps: KycCaseStatus[] = [
   'INQUIRY_RECEIVED',
   'PROPOSAL_OPTIONAL',
   'LEGAL_DOCUMENTS_PENDING',
   'LEGAL_DOCUMENTS_UPLOADED',
   'SUBMITTED_TO_AML',
   'AML_REVIEW_STARTED'
-] as const;
-
-function label(value: string) {
-  return value.split('_').join(' ');
-}
+];
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -31,6 +31,7 @@ function formatDate(value: string) {
 
 export function KycCaseDetailsPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [serviceName, setServiceName] = useState('');
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
@@ -96,6 +97,7 @@ export function KycCaseDetailsPage() {
 
   const currentStep = steps.indexOf(kycCase.status);
   const canSubmitToAml = kycCase.legalDocuments.length > 0 && kycCase.status !== 'SUBMITTED_TO_AML' && kycCase.status !== 'AML_REVIEW_STARTED';
+  const canOpenInternalReview = hasAnyRole(user, workflowRoles.amlDashboard);
 
   return (
     <div className="space-y-6">
@@ -107,7 +109,7 @@ export function KycCaseDetailsPage() {
           </p>
         </div>
         <span className="w-fit rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
-          {label(kycCase.status)}
+          {kycStatusLabel(kycCase.status)}
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -118,6 +120,15 @@ export function KycCaseDetailsPage() {
           <FileText className="h-4 w-4" />
           Open KYC Part 1
         </Link>
+        {canOpenInternalReview ? (
+          <Link
+            to={`/kyc/${kycCase.id}/internal-review`}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <FileText className="h-4 w-4" />
+            Internal Review
+          </Link>
+        ) : null}
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
@@ -131,7 +142,7 @@ export function KycCaseDetailsPage() {
               }`}
             >
               <p className="text-xs font-semibold">Step {index + 1}</p>
-              <p className="mt-1 text-sm font-medium">{label(step)}</p>
+              <p className="mt-1 text-sm font-medium">{kycStatusLabel(step)}</p>
             </div>
           ))}
         </div>
@@ -243,7 +254,7 @@ export function KycCaseDetailsPage() {
             <div className="mt-4 space-y-4">
               {kycCase.statusHistory.map((item) => (
                 <div key={item.id} className="border-l-2 border-brand-200 pl-3">
-                  <p className="text-sm font-medium text-slate-950">{label(item.toStatus)}</p>
+                  <p className="text-sm font-medium text-slate-950">{kycStatusLabel(item.toStatus)}</p>
                   <p className="text-xs text-slate-500">{formatDate(item.createdAt)}</p>
                   {item.note ? <p className="mt-1 text-sm text-slate-600">{item.note}</p> : null}
                 </div>
