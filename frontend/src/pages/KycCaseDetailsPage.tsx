@@ -2,6 +2,7 @@ import { Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
+import { useAuth } from '../hooks/useAuth';
 import {
   addWorkflowComment,
   assignService,
@@ -9,20 +10,22 @@ import {
   getKycCase,
   KycCase,
   ProposalStatus,
+  KycCaseStatus,
   updateProposalStatus,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
-const steps = [
+const steps: KycCaseStatus[] = [
   'INQUIRY_RECEIVED',
   'PROPOSAL_OPTIONAL',
   'LEGAL_DOCUMENTS_PENDING',
   'LEGAL_DOCUMENTS_UPLOADED',
   'SUBMITTED_TO_AML',
   'AML_REVIEW_STARTED'
-] as const;
+];
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -36,6 +39,7 @@ function workflowNoteLabel(value: string) {
 
 export function KycCaseDetailsPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [services, setServices] = useState<string[]>([]);
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
@@ -102,6 +106,7 @@ export function KycCaseDetailsPage() {
 
   const currentStep = steps.indexOf(kycCase.status);
   const canSubmitToAml = kycCase.legalDocuments.length > 0 && kycCase.status !== 'SUBMITTED_TO_AML' && kycCase.status !== 'AML_REVIEW_STARTED';
+  const canOpenInternalReview = hasAnyRole(user, workflowRoles.reviewTasks);
 
   return (
     <div className="space-y-6">
@@ -124,6 +129,15 @@ export function KycCaseDetailsPage() {
           <FileText className="h-4 w-4" />
           Open KYC Part 1
         </Link>
+        {canOpenInternalReview ? (
+          <Link
+            to={`/kyc/${kycCase.id}/internal-review`}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <FileText className="h-4 w-4" />
+            Internal Review
+          </Link>
+        ) : null}
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">

@@ -12,6 +12,7 @@ import {
   KycFormData,
   saveKycFormSection
 } from '../services/kyc-workflow.service';
+import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
 
@@ -548,7 +549,7 @@ export function KycFormEditorPage() {
       setMessage('Draft saved');
       return normalizeForm(updated);
     } catch (requestError: any) {
-      setError(requestError.response?.data?.message || 'Unable to save this KYC section.');
+      setError(getApiErrorMessage(requestError, 'Unable to save this KYC section.'));
       return null;
     } finally {
       setSaving(false);
@@ -569,7 +570,7 @@ export function KycFormEditorPage() {
       await downloadGeneratedKycDocument(id, document.id, document.fileName);
       setMessage(`${type.toUpperCase()} generated and downloaded`);
     } catch (requestError: any) {
-      setError(requestError.response?.data?.message || `Unable to generate ${type.toUpperCase()} document.`);
+      setError(getApiErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
     } finally {
       setSaving(false);
     }
@@ -909,8 +910,8 @@ function SectionGDeclarationForm({ data, onChange }: FormProps) {
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
     <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-    <UploadField label="Authorized signature" fileName={data.signatureFileName} onChange={(file) => update(data, onChange, 'signatureFileName', file.name)} />
-    <UploadField label="Company stamp" fileName={data.stampFileName} onChange={(file) => update(data, onChange, 'stampFileName', file.name)} />
+    <UploadField label="Authorized signature" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
+    <UploadField label="Company stamp" fileName={data.stampFileName} imageDataUrl={data.stampDataUrl} onChange={(file, dataUrl) => onChange({ ...data, stampFileName: file.name, stampDataUrl: dataUrl })} />
   </FormGrid>;
 }
 
@@ -921,14 +922,14 @@ function SectionHInternalReviewForm({ data, onChange }: FormProps) {
     <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassificationOther', value)} allowOther />
     <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
     <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
-    <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlSignatureFileName', file.name)} />
+    <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} imageDataUrl={data.amlSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'AML', amlSignatureFileName: file.name, amlSignatureDataUrl: dataUrl })} />
     <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
     <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroName', value)} />
-    <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroSignatureFileName', file.name)} />
+    <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'DMLRO', dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
     <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroDate', value)} />
     <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroComments', value)} textarea wide />
     <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroName', value)} />
-    <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} onChange={(file) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroSignatureFileName', file.name)} />
+    <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'MLRO', mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
     <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroDate', value)} />
     <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroComments', value)} textarea wide />
   </FormGrid>;
@@ -977,10 +978,10 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Additional notes for KYC preparation documents', form.sectionF.uploadedFilesNote || '-']]} />
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
-          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', form.sectionG.signatureFileName], ['Company stamp', form.sectionG.stampFileName]]} />
+          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', form.sectionH?.amlSignatureFileName], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', form.sectionH?.dmlroSignatureFileName], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', form.sectionH?.mlroSignatureFileName], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -1301,7 +1302,16 @@ function Choice({ label, value, onChange }: { label: string; value: string; onCh
   return <div><p className="text-sm font-medium text-slate-700">{label}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
 }
 
-function UploadField({ label, fileName, onChange }: { label: string; fileName?: string; onChange: (file: File) => void }) {
+function UploadField({ label, fileName, imageDataUrl, onChange }: { label: string; fileName?: string; imageDataUrl?: string; onChange: (file: File, dataUrl?: string) => void }) {
+  async function handleFile(file: File) {
+    if (file.type.startsWith('image/')) {
+      onChange(file, await readSignatureImageDataUrl(file));
+      return;
+    }
+
+    onChange(file);
+  }
+
   return (
     <div className="text-sm font-medium text-slate-700">
       {label}
@@ -1314,17 +1324,64 @@ function UploadField({ label, fileName, onChange }: { label: string; fileName?: 
             className="hidden"
             onChange={(event) => {
               const file = event.target.files?.[0];
-              if (file) onChange(file);
+              if (file) void handleFile(file);
               event.currentTarget.value = '';
             }}
           />
         </label>
-        <div className="flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm font-normal text-slate-600">
-          <span className="truncate">{fileName || 'No file selected'}</span>
+        <div className="flex min-h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 py-1 text-sm font-normal text-slate-600">
+          {imageDataUrl ? (
+            <img src={imageDataUrl} alt={`${label} preview`} className="max-h-12 max-w-full object-contain" />
+          ) : (
+            <span className="truncate">{fileName || 'No file selected'}</span>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+function readFileDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function readSignatureImageDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const maxWidth = 420;
+      const maxHeight = 160;
+      const ratio = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+      const width = Math.max(1, Math.round(image.width * ratio));
+      const height = Math.max(1, Math.round(image.height * ratio));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+
+      if (!context) {
+        URL.revokeObjectURL(image.src);
+        reject(new Error('Unable to process signature image'));
+        return;
+      }
+
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(image.src);
+      resolve(canvas.toDataURL('image/jpeg', 0.82));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(image.src);
+      reject(new Error('Unable to read signature image'));
+    };
+    image.src = URL.createObjectURL(file);
+  });
 }
 
 type DynamicField = [key: string, label: string, type?: string, options?: string[]];
@@ -1377,7 +1434,19 @@ function PreviewSection({ title, children }: { title: string; children: React.Re
 }
 
 function PreviewGrid({ rows }: { rows: Array<[string, any]> }) {
-  return <div className="grid grid-cols-2 border-l border-t border-slate-300">{rows.map(([label, value]) => <div key={label} className="min-h-8 border-b border-r border-slate-300 p-1"><span className="font-semibold">{label}: </span>{value || '-'}</div>)}</div>;
+  return <div className="grid grid-cols-2 border-l border-t border-slate-300">{rows.map(([label, value]) => <div key={label} className="min-h-8 border-b border-r border-slate-300 p-1"><span className="font-semibold">{label}: </span>{renderPreviewValue(label, value)}</div>)}</div>;
+}
+
+function previewImage(imageDataUrl?: string, fileName?: string) {
+  return { imageDataUrl, fileName };
+}
+
+function renderPreviewValue(label: string, value: any) {
+  if (value?.imageDataUrl) {
+    return <img src={value.imageDataUrl} alt={`${label} preview`} className="mt-1 max-h-12 max-w-full object-contain" />;
+  }
+
+  return value?.fileName || value || '-';
 }
 
 function PreviewTable({ headers, rows }: { headers: string[]; rows: any[][] }) {

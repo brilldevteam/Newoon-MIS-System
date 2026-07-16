@@ -2,6 +2,15 @@ import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../services/auth.service';
 
+const testLogins = [
+  { label: 'Super Admin', email: 'admin@newoon.com', note: 'Full platform setup' },
+  { label: 'Company Admin', email: 'company.admin@newoon.com', note: 'Full tenant workflow testing' },
+  { label: 'Operations', email: 'operations@newoon.com', note: 'Clients, KYC preparation, submit to AML' },
+  { label: 'AML Supervisor', email: 'aml.supervisor@newoon.com', note: 'Supervisor review stage' },
+  { label: 'DMLRO', email: 'dmlro@newoon.com', note: 'DMLRO review stage' },
+  { label: 'MLRO', email: 'mlro@newoon.com', note: 'Final MLRO decision' }
+];
+
 export function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('admin@newoon.com');
@@ -63,6 +72,26 @@ export function LoginPage() {
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
+        <div className="mt-6 border-t border-slate-200 pt-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow test logins</p>
+          <div className="mt-3 grid gap-2">
+            {testLogins.map((item) => (
+              <button
+                key={item.email}
+                type="button"
+                onClick={() => {
+                  setEmail(item.email);
+                  setPassword('Admin@12345');
+                }}
+                className="rounded-md border border-slate-200 px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <span className="block text-sm font-semibold text-slate-900">{item.label}</span>
+                <span className="block text-xs text-slate-500">{item.email} | {item.note}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-slate-500">Default test password: Admin@12345</p>
+        </div>
       </div>
     </section>
   );

@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
+  ConfidentialVisibilityScope,
   DueDiligenceType,
   KycCaseStatus,
   KycFormSectionKey,
@@ -7,7 +8,14 @@ import {
   NotificationType,
   Prisma,
   ProposalStatus,
-  RiskClassification
+  ReviewCommentType,
+  ReviewDecision,
+  ReviewStage,
+  ReviewSubmissionStatus,
+  ReviewTaskStatus,
+  RiskClassification,
+  RiskOverrideReason,
+  SignedKycDocumentStage
 } from '@prisma/client';
 import { execFile } from 'child_process';
 import Docxtemplater from 'docxtemplater';
@@ -368,9 +376,300 @@ export class KycService {
       throw new BadRequestException('Case must be submitted to AML before review starts');
     }
 
-    return this.updateStatus(user, id, KycCaseStatus.AML_REVIEW_STARTED, 'AML team started KYC review', {
+    await this.ensureReviewTask(user, id, ReviewStage.SUPERVISOR, NotificationType.SUPERVISOR_TASK_ASSIGNED);
+
+    return this.updateStatus(user, id, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, 'Supervisor review task assigned', {
       amlAssigneeId: user.id,
       amlReviewStartedAt: new Date()
+    });
+  }
+
+  async getInternalReviewWorkspace(user: RequestUser, id: string) {
+    const kycCase = await this.findOne(user, id);
+    const confidentialWhere = this.confidentialCommentWhere(user);
+
+    return {
+      kycCase,
+      tasks: await this.prisma.internalReviewTask.findMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        include: { assignedTo: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: { createdAt: 'asc' }
+      }),
+      reviews: await this.prisma.internalReviewSubmission.findMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        include: { submittedBy: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: { createdAt: 'asc' }
+      }),
+      comments: await this.prisma.reviewerComment.findMany({
+        where: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          OR: [{ type: ReviewCommentType.FORMAL }, confidentialWhere]
+        },
+        include: { author: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: { createdAt: 'desc' }
+      }),
+      signedDocuments: await this.prisma.signedKycDocument.findMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        include: { uploadedBy: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: [{ reviewStage: 'asc' }, { documentVersion: 'desc' }]
+      }),
+      riskReclassifications: await this.prisma.riskReclassification.findMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        orderBy: { createdAt: 'desc' }
+      }),
+      activationChecklist: await this.recalculateActivationReadiness(user, id)
+    };
+  }
+
+  async startReviewStage(user: RequestUser, id: string, stage: ReviewStage) {
+    this.assertStageRole(user, stage);
+    const kycCase = await this.findOne(user, id);
+    await this.assertPreviousStageComplete(kycCase.id, stage);
+
+    return this.prisma.$transaction(async (tx) => {
+      const task = await tx.internalReviewTask.upsert({
+        where: { kycCaseId_stage_status: { kycCaseId: id, stage, status: ReviewTaskStatus.PENDING } },
+        update: { status: ReviewTaskStatus.IN_PROGRESS, assignedToId: user.id, startedAt: new Date(), updatedBy: user.id },
+        create: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          stage,
+          status: ReviewTaskStatus.IN_PROGRESS,
+          assignedToId: user.id,
+          startedAt: new Date(),
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+
+      const status = this.stageStatus(stage, 'inProgress');
+      await this.recordStatus(tx, kycCase, user, status, `${this.stageLabel(stage)} review started`);
+      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewTask', task.id, { action: 'REVIEW_STARTED', stage });
+      return task;
+    });
+  }
+
+  async saveReviewDraft(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>) {
+    this.assertStageRole(user, stage);
+    const kycCase = await this.findOne(user, id);
+    await this.assertEditableReview(id, stage);
+
+    return this.prisma.internalReviewSubmission.upsert({
+      where: { kycCaseId_stage: { kycCaseId: id, stage } },
+      update: {
+        data: this.jsonValue(dto.data || dto),
+        formalComments: this.optionalText(dto.formalComments),
+        confidentialNotes: this.optionalText(dto.confidentialNotes),
+        updatedBy: user.id
+      },
+      create: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: id,
+        stage,
+        data: this.jsonValue(dto.data || dto),
+        formalComments: this.optionalText(dto.formalComments),
+        confidentialNotes: this.optionalText(dto.confidentialNotes),
+        createdBy: user.id,
+        updatedBy: user.id
+      }
+    });
+  }
+
+  async submitSupervisorReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    this.assertStageRole(user, ReviewStage.SUPERVISOR);
+    return this.submitReviewAndRoute(user, id, ReviewStage.SUPERVISOR, dto, ReviewStage.DMLRO);
+  }
+
+  async submitDmlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    this.assertStageRole(user, ReviewStage.DMLRO);
+    return this.submitReviewAndRoute(user, id, ReviewStage.DMLRO, dto, ReviewStage.MLRO);
+  }
+
+  async decideMlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    this.assertStageRole(user, ReviewStage.MLRO);
+    const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'], 'MLRO decision') as ReviewDecision;
+    const kycCase = await this.findOne(user, id);
+    await this.assertPreviousStageComplete(id, ReviewStage.MLRO);
+
+    const decisionsRequiringReason: ReviewDecision[] = [
+      ReviewDecision.REJECT,
+      ReviewDecision.APPROVE_WITH_CONDITIONS,
+      ReviewDecision.REQUEST_ADDITIONAL_INFORMATION,
+      ReviewDecision.RETURN_TO_DMLRO
+    ];
+    if (decisionsRequiringReason.includes(decision) && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions)) {
+      throw new BadRequestException('Provide a reason or conditions for this MLRO decision');
+    }
+
+    if (dto.finalRiskClassification && dto.finalRiskClassification !== dto.previousRiskClassification && !this.optionalText(dto.riskExplanation)) {
+      throw new BadRequestException('Risk classification changes require an explanation');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, dto);
+      const targetStatus = this.mlroDecisionStatus(decision);
+      await this.recordStatus(tx, kycCase, user, targetStatus, `MLRO decision: ${decision}`);
+      await tx.internalReviewTask.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+        data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
+      });
+
+      if (dto.finalRiskClassification) {
+        await this.saveRiskReclassification(tx, user, kycCase, dto);
+      }
+
+      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'MLRO_DECISION', decision });
+      await this.createNotification(tx, kycCase, this.mlroNotificationType(decision), 'MLRO review completed', `${kycCase.title}: ${decision}`);
+      await this.upsertActivationChecklist(tx, user, kycCase);
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+    });
+  }
+
+  async addReviewerComment(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>) {
+    const kycCase = await this.findOne(user, id);
+    const type = this.enumValue(dto.type || 'FORMAL', ['FORMAL', 'CONFIDENTIAL'], 'Comment type') as ReviewCommentType;
+    if (type === ReviewCommentType.CONFIDENTIAL && !this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('You cannot create confidential reviewer comments');
+    }
+
+    const comment = await this.prisma.reviewerComment.create({
+      data: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: id,
+        stage,
+        type,
+        visibilityScope: type === ReviewCommentType.CONFIDENTIAL ? (this.enumValue(dto.visibilityScope || 'SUPERVISOR_DMLRO_MLRO', ['SUPERVISOR_DMLRO_MLRO', 'DMLRO_MLRO', 'MLRO_ONLY'], 'Visibility scope') as ConfidentialVisibilityScope) : null,
+        body: this.requiredText(dto.body, 'Comment'),
+        authorId: user.id
+      }
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        tenantId: kycCase.tenantId,
+        actorId: user.id,
+        action: 'CREATE',
+        entityType: type === ReviewCommentType.CONFIDENTIAL ? 'ConfidentialComment' : 'ReviewerComment',
+        entityId: comment.id,
+        metadata: this.jsonValue({ stage, type })
+      }
+    });
+
+    return comment;
+  }
+
+  async uploadSignedKycDocument(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const kycCase = await this.findOne(user, id);
+    const reviewStage = this.enumValue(dto.reviewStage, ['DMLRO_SIGNED_KYC', 'MLRO_SIGNED_KYC', 'FINAL_SIGNED_KYC'], 'Signed KYC document stage') as SignedKycDocumentStage;
+    if (reviewStage === SignedKycDocumentStage.DMLRO_SIGNED_KYC && !this.hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only DMLRO can upload this signed KYC document');
+    }
+    if (reviewStage === SignedKycDocumentStage.MLRO_SIGNED_KYC && !this.hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only MLRO can upload this signed KYC document');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const latest = await tx.signedKycDocument.findFirst({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id, reviewStage },
+        orderBy: { documentVersion: 'desc' }
+      });
+      await tx.signedKycDocument.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, reviewStage }, data: { activeVersion: false } });
+      const document = await tx.signedKycDocument.create({
+        data: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          reviewStage,
+          fileName: this.requiredText(dto.fileName, 'File name'),
+          fileType: this.optionalText(dto.fileType),
+          fileSize: dto.fileSize === undefined || dto.fileSize === '' ? null : Number(dto.fileSize),
+          storageKey: this.optionalText(dto.storageKey),
+          signatureType: this.optionalText(dto.signatureType),
+          comments: this.optionalText(dto.comments),
+          documentVersion: (latest?.documentVersion || 0) + 1,
+          uploadedById: user.id
+        }
+      });
+      await this.audit(tx, user, kycCase.tenantId, 'SignedKycDocument', document.id, { action: 'SIGNED_KYC_UPLOADED', reviewStage });
+      await this.createNotification(tx, kycCase, NotificationType.SIGNED_KYC_UPLOADED, 'Signed KYC uploaded', `${document.fileName} uploaded`);
+      return document;
+    });
+  }
+
+  async uploadSignedKycDocumentFile(
+    user: RequestUser,
+    id: string,
+    reviewStageValue: string,
+    file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Upload a signed KYC document file');
+    }
+
+    const kycCase = await this.findOne(user, id);
+    const reviewStage = this.enumValue(reviewStageValue, ['DMLRO_SIGNED_KYC', 'MLRO_SIGNED_KYC', 'FINAL_SIGNED_KYC'], 'Signed KYC document stage') as SignedKycDocumentStage;
+    if (reviewStage === SignedKycDocumentStage.DMLRO_SIGNED_KYC && !this.hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only DMLRO can upload this signed KYC document');
+    }
+    if (reviewStage === SignedKycDocumentStage.MLRO_SIGNED_KYC && !this.hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only MLRO can upload this signed KYC document');
+    }
+
+    const uploadRoot = this.signedKycDocumentUploadRoot();
+    const caseDirectory = join(uploadRoot, kycCase.tenantId, kycCase.id);
+    mkdirSync(caseDirectory, { recursive: true });
+
+    const fileName = this.safeFileName(file.originalname);
+    const storedFileName = `${Date.now()}-${fileName}`;
+    const absolutePath = join(caseDirectory, storedFileName);
+    writeFileSync(absolutePath, file.buffer);
+
+    return this.uploadSignedKycDocument(user, id, {
+      reviewStage,
+      fileName,
+      fileType: file.mimetype,
+      fileSize: file.size,
+      storageKey: join(kycCase.tenantId, kycCase.id, storedFileName),
+      signatureType: 'UPLOADED'
+    });
+  }
+
+  async recalculateActivationReadiness(user: RequestUser, id: string) {
+    const kycCase = await this.prisma.kycCase.findFirst({
+      where: { id, ...this.tenantWhere(user) },
+      include: {
+        legalDocuments: true,
+        kycForm: { include: { sections: true, requiredDocuments: true } },
+        internalReviewSubmissions: true,
+        signedKycDocuments: true,
+        riskReclassifications: true
+      }
+    });
+
+    if (!kycCase) throw new NotFoundException('KYC case not found');
+    const checklist = this.activationChecklistItems(kycCase);
+    const isReady = checklist.every((item) => item.completed);
+    const blockingIssues = checklist.filter((item) => !item.completed);
+
+    return this.prisma.clientActivationChecklist.upsert({
+      where: { kycCaseId: id },
+      update: {
+        checklist: this.jsonValue(checklist),
+        isReady,
+        blockingIssues: this.jsonValue(blockingIssues),
+        completedAt: isReady ? new Date() : null,
+        updatedBy: user.id
+      },
+      create: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: id,
+        checklist: this.jsonValue(checklist),
+        isReady,
+        blockingIssues: this.jsonValue(blockingIssues),
+        completedAt: isReady ? new Date() : null,
+        createdBy: user.id,
+        updatedBy: user.id
+      }
     });
   }
 
@@ -633,6 +932,8 @@ export class KycService {
         });
       }
 
+      await this.syncRequiredDocumentsToLegalDocuments(tx, form, user, rows, additionalRows);
+
       await tx.kycSectionData.upsert({
         where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey: KycFormSectionKey.REQUIRED_DOCUMENTS } },
         update: { data: this.jsonValue(sectionData), updatedBy: user.id },
@@ -646,10 +947,111 @@ export class KycService {
           updatedBy: user.id
         }
       });
+      await this.markDocumentsUploadedFromSectionF(tx, form, user, rows, additionalRows);
       await tx.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
     });
 
     return this.getForm(user, id);
+  }
+
+  private async syncRequiredDocumentsToLegalDocuments(
+    tx: Prisma.TransactionClient,
+    form: { id: string; tenantId: string; kycCaseId: string },
+    user: RequestUser,
+    rows: RowPayload[],
+    additionalRows: RowPayload[]
+  ) {
+    const syncRows = [
+      ...rows
+        .filter((row) => Boolean(row.isProvided) && Boolean(this.optionalText(row.fileName)))
+        .map((row) => ({
+          documentType: this.requiredText(row.documentType, 'Document type'),
+          fileName: this.requiredText(row.fileName, 'File name'),
+          storagePath: this.optionalText(row.storagePath),
+          mimeType: this.optionalText(row.mimeType),
+          size: row.size === undefined || row.size === '' ? null : Number(row.size)
+        })),
+      ...additionalRows
+        .filter((row) => Boolean(this.optionalText(row.fileName)))
+        .map((row, index) => ({
+          documentType: this.optionalText(row.documentType) || `Additional document ${index + 1}`,
+          fileName: this.requiredText(row.fileName, 'File name'),
+          storagePath: this.optionalText(row.storagePath),
+          mimeType: this.optionalText(row.mimeType),
+          size: row.size === undefined || row.size === '' ? null : Number(row.size)
+        }))
+    ];
+
+    if (!syncRows.length) return;
+
+    const existing = await tx.legalDocument.findMany({
+      where: { tenantId: form.tenantId, kycCaseId: form.kycCaseId },
+      select: { id: true, documentType: true, fileName: true }
+    });
+    const existingKeys = new Set(existing.map((document) => this.legalDocumentSyncKey(document.documentType, document.fileName)));
+
+    for (const row of syncRows) {
+      const key = this.legalDocumentSyncKey(row.documentType, row.fileName);
+      if (existingKeys.has(key)) continue;
+
+      await tx.legalDocument.create({
+        data: {
+          tenantId: form.tenantId,
+          kycCaseId: form.kycCaseId,
+          documentType: row.documentType,
+          fileName: row.fileName,
+          storagePath: row.storagePath,
+          mimeType: row.mimeType,
+          size: row.size,
+          uploadedById: user.id
+        }
+      });
+      existingKeys.add(key);
+    }
+  }
+
+  private async markDocumentsUploadedFromSectionF(
+    tx: Prisma.TransactionClient,
+    form: { tenantId: string; kycCaseId: string },
+    user: RequestUser,
+    rows: RowPayload[],
+    additionalRows: RowPayload[]
+  ) {
+    const hasProvidedDocument =
+      rows.some((row) => Boolean(row.isProvided) && Boolean(this.optionalText(row.fileName))) ||
+      additionalRows.some((row) => Boolean(this.optionalText(row.fileName)));
+
+    if (!hasProvidedDocument) return;
+
+    const kycCase = await tx.kycCase.findFirst({
+      where: { id: form.kycCaseId, tenantId: form.tenantId },
+      select: { id: true, status: true }
+    });
+
+    const uploadableStatuses: KycCaseStatus[] = [
+      KycCaseStatus.INQUIRY_RECEIVED,
+      KycCaseStatus.PROPOSAL_OPTIONAL,
+      KycCaseStatus.LEGAL_DOCUMENTS_PENDING
+    ];
+
+    if (!kycCase || !uploadableStatuses.includes(kycCase.status)) {
+      return;
+    }
+
+    await tx.kycCase.update({
+      where: { id: form.kycCaseId },
+      data: { status: KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED }
+    });
+    await tx.kycCaseStatusHistory.create({
+      data: {
+        tenantId: form.tenantId,
+        kycCaseId: form.kycCaseId,
+        fromStatus: kycCase.status,
+        toStatus: KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+        changedById: user.id,
+        note: 'Documents required for KYC preparation uploaded'
+      }
+    });
   }
 
   async saveInternalReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -748,6 +1150,48 @@ export class KycService {
       },
       orderBy: { createdAt: 'desc' }
     });
+  }
+
+  async getMyReviewTasks(user: RequestUser) {
+    const stages = this.reviewStagesForUser(user);
+    const notificationTypes = this.reviewNotificationTypesForUser(user);
+    const tenantWhere = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
+
+    const [tasks, notifications] = await Promise.all([
+      stages.length
+        ? this.prisma.internalReviewTask.findMany({
+            where: {
+              ...tenantWhere,
+              stage: { in: stages },
+              status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] }
+            },
+            include: {
+              assignedTo: { select: { id: true, firstName: true, lastName: true, email: true } },
+              kycCase: { include: { client: true, service: true } }
+            },
+            orderBy: [{ status: 'asc' }, { createdAt: 'desc' }]
+          })
+        : [],
+      notificationTypes.length
+        ? this.prisma.notification.findMany({
+            where: {
+              ...tenantWhere,
+              type: { in: notificationTypes },
+              isRead: false
+            },
+            include: {
+              kycCase: { include: { client: true, service: true } }
+            },
+            orderBy: { createdAt: 'desc' }
+          })
+        : []
+    ]);
+
+    return {
+      tasks,
+      notifications,
+      stages
+    };
   }
 
   private async saveSectionData(
@@ -994,12 +1438,367 @@ export class KycService {
     return user.roles.some((role) => roles.includes(role));
   }
 
+  private assertStageRole(user: RequestUser, stage: ReviewStage) {
+    const rolesByStage: Record<ReviewStage, string[]> = {
+      SUPERVISOR: ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'],
+      DMLRO: ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'],
+      MLRO: ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']
+    };
+
+    if (!this.hasAnyRole(user, rolesByStage[stage])) {
+      throw new ForbiddenException(`You cannot edit the ${this.stageLabel(stage)} review`);
+    }
+  }
+
+  private stageLabel(stage: ReviewStage) {
+    if (stage === ReviewStage.SUPERVISOR) return 'AML Supervisor';
+    return stage;
+  }
+
+  private stageStatus(stage: ReviewStage, state: 'pending' | 'inProgress' | 'additionalInfo' | 'completed') {
+    const statuses: Record<ReviewStage, Record<typeof state, KycCaseStatus>> = {
+      SUPERVISOR: {
+        pending: KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
+        inProgress: KycCaseStatus.SUPERVISOR_REVIEW_IN_PROGRESS,
+        additionalInfo: KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED,
+        completed: KycCaseStatus.SUPERVISOR_REVIEW_COMPLETED
+      },
+      DMLRO: {
+        pending: KycCaseStatus.DMLRO_REVIEW_PENDING,
+        inProgress: KycCaseStatus.DMLRO_REVIEW_IN_PROGRESS,
+        additionalInfo: KycCaseStatus.DMLRO_ADDITIONAL_INFORMATION_REQUIRED,
+        completed: KycCaseStatus.DMLRO_REVIEW_COMPLETED
+      },
+      MLRO: {
+        pending: KycCaseStatus.MLRO_REVIEW_PENDING,
+        inProgress: KycCaseStatus.MLRO_REVIEW_IN_PROGRESS,
+        additionalInfo: KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED,
+        completed: KycCaseStatus.MLRO_APPROVED
+      }
+    };
+
+    return statuses[stage][state];
+  }
+
+  private async assertPreviousStageComplete(kycCaseId: string, stage: ReviewStage) {
+    if (stage === ReviewStage.SUPERVISOR) return;
+    const previous = stage === ReviewStage.DMLRO ? ReviewStage.SUPERVISOR : ReviewStage.DMLRO;
+    const submission = await this.prisma.internalReviewSubmission.findUnique({
+      where: { kycCaseId_stage: { kycCaseId, stage: previous } }
+    });
+
+    if (!submission?.isLocked) {
+      throw new BadRequestException(`${this.stageLabel(previous)} review must be submitted first`);
+    }
+  }
+
+  private async assertEditableReview(kycCaseId: string, stage: ReviewStage) {
+    const existing = await this.prisma.internalReviewSubmission.findUnique({
+      where: { kycCaseId_stage: { kycCaseId, stage } }
+    });
+
+    if (existing?.isLocked) {
+      throw new BadRequestException(`${this.stageLabel(stage)} review is locked after submission`);
+    }
+  }
+
+  private async ensureReviewTask(user: RequestUser, id: string, stage: ReviewStage, notificationType: NotificationType) {
+    const kycCase = await this.findOne(user, id);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.internalReviewTask.upsert({
+        where: { kycCaseId_stage_status: { kycCaseId: id, stage, status: ReviewTaskStatus.PENDING } },
+        update: { updatedBy: user.id },
+        create: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          stage,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+      await this.createNotification(tx, kycCase, notificationType, `${this.stageLabel(stage)} task assigned`, `${kycCase.title} is ready for ${this.stageLabel(stage)} review.`);
+    });
+  }
+
+  private async submitReviewAndRoute(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>, nextStage: ReviewStage) {
+    const kycCase = await this.findOne(user, id);
+    await this.assertPreviousStageComplete(id, stage);
+    await this.assertEditableReview(id, stage);
+
+    return this.prisma.$transaction(async (tx) => {
+      const saved = await this.lockReviewSubmission(tx, user, kycCase, stage, dto);
+      await tx.internalReviewTask.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id, stage, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+        data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
+      });
+      await tx.internalReviewTask.upsert({
+        where: { kycCaseId_stage_status: { kycCaseId: id, stage: nextStage, status: ReviewTaskStatus.PENDING } },
+        update: { updatedBy: user.id },
+        create: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          stage: nextStage,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+
+      await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
+      await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);
+      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'REVIEW_SUBMITTED', stage, routedTo: nextStage });
+      await this.createNotification(
+        tx,
+        kycCase,
+        nextStage === ReviewStage.DMLRO ? NotificationType.DMLRO_TASK_ASSIGNED : NotificationType.MLRO_TASK_ASSIGNED,
+        `${this.stageLabel(nextStage)} task assigned`,
+        `${kycCase.title} is ready for ${this.stageLabel(nextStage)} review.`
+      );
+
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+    });
+  }
+
+  private async lockReviewSubmission(
+    tx: Prisma.TransactionClient,
+    user: RequestUser,
+    kycCase: { id: string; tenantId: string },
+    stage: ReviewStage,
+    dto: Record<string, unknown>
+  ) {
+    const existing = await tx.internalReviewSubmission.findUnique({
+      where: { kycCaseId_stage: { kycCaseId: kycCase.id, stage } }
+    });
+    const version = existing?.version || 1;
+    const data = this.jsonValue(dto.data || dto);
+
+    const saved = await tx.internalReviewSubmission.upsert({
+      where: { kycCaseId_stage: { kycCaseId: kycCase.id, stage } },
+      update: {
+        data,
+        formalComments: this.optionalText(dto.formalComments),
+        confidentialNotes: this.optionalText(dto.confidentialNotes),
+        status: ReviewSubmissionStatus.SUBMITTED,
+        submittedById: user.id,
+        submittedAt: new Date(),
+        isLocked: true,
+        updatedBy: user.id
+      },
+      create: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: kycCase.id,
+        stage,
+        data,
+        formalComments: this.optionalText(dto.formalComments),
+        confidentialNotes: this.optionalText(dto.confidentialNotes),
+        status: ReviewSubmissionStatus.SUBMITTED,
+        submittedById: user.id,
+        submittedAt: new Date(),
+        isLocked: true,
+        createdBy: user.id,
+        updatedBy: user.id
+      }
+    });
+
+    await tx.internalReviewVersion.create({
+      data: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: kycCase.id,
+        stage,
+        version,
+        snapshot: data,
+        submittedBy: user.id,
+        submittedAt: new Date()
+      }
+    });
+
+    await tx.reviewerComment.updateMany({
+      where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage, type: ReviewCommentType.FORMAL },
+      data: { isLocked: true }
+    });
+
+    return saved;
+  }
+
+  private recordStatus(
+    tx: Prisma.TransactionClient,
+    kycCase: { id: string; tenantId: string; status: KycCaseStatus },
+    user: RequestUser,
+    toStatus: KycCaseStatus,
+    note: string
+  ) {
+    return Promise.all([
+      tx.kycCase.update({ where: { id: kycCase.id }, data: { status: toStatus } }),
+      kycCase.status === toStatus
+        ? Promise.resolve()
+        : tx.kycCaseStatusHistory.create({
+            data: {
+              tenantId: kycCase.tenantId,
+              kycCaseId: kycCase.id,
+              fromStatus: kycCase.status,
+              toStatus,
+              changedById: user.id,
+              note
+            }
+          })
+    ]);
+  }
+
+  private audit(tx: Prisma.TransactionClient, user: RequestUser, tenantId: string, entityType: string, entityId: string | null, metadata: Record<string, unknown>) {
+    return tx.auditLog.create({
+      data: {
+        tenantId,
+        actorId: user.id,
+        action: 'UPDATE',
+        entityType,
+        entityId,
+        metadata: this.jsonValue(metadata)
+      }
+    });
+  }
+
+  private createNotification(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }, type: NotificationType, title: string, message: string) {
+    return tx.notification.create({
+      data: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: kycCase.id,
+        type,
+        title,
+        message
+      }
+    });
+  }
+
+  private mlroDecisionStatus(decision: ReviewDecision) {
+    if (decision === ReviewDecision.APPROVE_WITH_CONDITIONS) return KycCaseStatus.MLRO_APPROVED_WITH_CONDITIONS;
+    if (decision === ReviewDecision.REJECT) return KycCaseStatus.MLRO_REJECTED;
+    if (decision === ReviewDecision.REQUEST_ADDITIONAL_INFORMATION) return KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED;
+    if (decision === ReviewDecision.RETURN_TO_DMLRO) return KycCaseStatus.DMLRO_REVIEW_PENDING;
+    return KycCaseStatus.MLRO_APPROVED;
+  }
+
+  private mlroNotificationType(decision: ReviewDecision) {
+    if (decision === ReviewDecision.APPROVE_WITH_CONDITIONS) return NotificationType.MLRO_APPROVAL_WITH_CONDITIONS;
+    if (decision === ReviewDecision.REJECT) return NotificationType.MLRO_REJECTION;
+    return NotificationType.MLRO_APPROVAL_COMPLETED;
+  }
+
+  private reviewStagesForUser(user: RequestUser) {
+    const stages: ReviewStage[] = [];
+    if (this.hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN'])) {
+      return [ReviewStage.SUPERVISOR, ReviewStage.DMLRO, ReviewStage.MLRO];
+    }
+    if (this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR'])) stages.push(ReviewStage.SUPERVISOR);
+    if (this.hasAnyRole(user, ['DMLRO'])) stages.push(ReviewStage.DMLRO);
+    if (this.hasAnyRole(user, ['MLRO'])) stages.push(ReviewStage.MLRO);
+    return stages;
+  }
+
+  private reviewNotificationTypesForUser(user: RequestUser) {
+    const types: NotificationType[] = [];
+    if (this.hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN'])) {
+      return [
+        NotificationType.AML_CASE_SUBMITTED,
+        NotificationType.SUPERVISOR_TASK_ASSIGNED,
+        NotificationType.DMLRO_TASK_ASSIGNED,
+        NotificationType.MLRO_TASK_ASSIGNED
+      ];
+    }
+    if (this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR'])) {
+      types.push(NotificationType.AML_CASE_SUBMITTED, NotificationType.SUPERVISOR_TASK_ASSIGNED);
+    }
+    if (this.hasAnyRole(user, ['DMLRO'])) types.push(NotificationType.DMLRO_TASK_ASSIGNED);
+    if (this.hasAnyRole(user, ['MLRO'])) types.push(NotificationType.MLRO_TASK_ASSIGNED);
+    return types;
+  }
+
+  private async saveRiskReclassification(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string }, dto: Record<string, unknown>) {
+    const newRisk = this.enumValue(dto.finalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification') as RiskClassification;
+    const reasonCategory = this.enumValue(dto.riskReasonCategory || 'PROFESSIONAL_JUDGEMENT', ['PEP_IDENTIFIED', 'SANCTIONS_FINDING', 'ADVERSE_MEDIA', 'OWNERSHIP_COMPLEXITY', 'COUNTRY_RISK', 'INDUSTRY_RISK', 'SOURCE_OF_FUNDS_CONCERN', 'ENHANCED_MONITORING_REQUIRED', 'PROFESSIONAL_JUDGEMENT', 'OTHER'], 'Risk override reason') as RiskOverrideReason;
+    const previousRisk = this.enumValue(dto.previousRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Previous risk classification') as RiskClassification | null;
+    const explanation = this.requiredText(dto.riskExplanation, 'Risk classification explanation');
+
+    const record = await tx.riskReclassification.create({
+      data: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: kycCase.id,
+        previousRisk,
+        newRisk,
+        reasonCategory,
+        explanation,
+        effectiveDate: this.dateValue(dto.riskEffectiveDate) || new Date(),
+        changedById: user.id
+      }
+    });
+
+    await this.audit(tx, user, kycCase.tenantId, 'RiskReclassification', record.id, { action: 'RISK_CLASSIFICATION_CHANGED', previousRisk, newRisk, reasonCategory });
+    await this.createNotification(tx, kycCase, NotificationType.RISK_CLASSIFICATION_CHANGED, 'Risk classification changed', `Final risk classification changed to ${newRisk}.`);
+  }
+
+  private confidentialCommentWhere(user: RequestUser): Prisma.ReviewerCommentWhereInput {
+    if (!this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      return { id: '__none__' };
+    }
+    if (this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'MLRO'])) return { type: ReviewCommentType.CONFIDENTIAL };
+    if (this.hasAnyRole(user, ['DMLRO'])) {
+      return { type: ReviewCommentType.CONFIDENTIAL, visibilityScope: { in: [ConfidentialVisibilityScope.SUPERVISOR_DMLRO_MLRO, ConfidentialVisibilityScope.DMLRO_MLRO] } };
+    }
+    return { type: ReviewCommentType.CONFIDENTIAL, visibilityScope: ConfidentialVisibilityScope.SUPERVISOR_DMLRO_MLRO };
+  }
+
+  private activationChecklistItems(kycCase: {
+    proposalStatus: ProposalStatus;
+    legalDocuments: unknown[];
+    kycForm: ({ status: string; requiredDocuments: Array<{ isRequired: boolean; isProvided: boolean }> } & Record<string, unknown>) | null;
+    internalReviewSubmissions: Array<{ stage: ReviewStage; isLocked: boolean }>;
+    signedKycDocuments: Array<{ reviewStage: SignedKycDocumentStage; activeVersion: boolean }>;
+    riskReclassifications: unknown[];
+  }) {
+    const submittedStages = new Set(kycCase.internalReviewSubmissions.filter((item) => item.isLocked).map((item) => item.stage));
+    const activeSignedStages = new Set(kycCase.signedKycDocuments.filter((item) => item.activeVersion).map((item) => item.reviewStage));
+    const requiredDocumentsAccepted = kycCase.kycForm?.requiredDocuments?.filter((item) => item.isRequired).every((item) => item.isProvided) ?? false;
+    return [
+      { key: 'proposal', label: 'Proposal submitted or not required', completed: ['NOT_REQUIRED', 'SENT', 'ACCEPTED'].includes(kycCase.proposalStatus) },
+      { key: 'kycPart1', label: 'KYC Part 1 prepared', completed: Boolean(kycCase.kycForm) },
+      { key: 'legalDocuments', label: 'Mandatory documents accepted', completed: kycCase.legalDocuments.length > 0 && requiredDocumentsAccepted },
+      { key: 'supervisorReview', label: 'Supervisor review completed', completed: submittedStages.has(ReviewStage.SUPERVISOR) },
+      { key: 'dmlroReview', label: 'DMLRO review completed', completed: submittedStages.has(ReviewStage.DMLRO) },
+      { key: 'mlroApproval', label: 'MLRO final approval completed', completed: submittedStages.has(ReviewStage.MLRO) },
+      { key: 'finalRisk', label: 'Final risk classification assigned', completed: kycCase.riskReclassifications.length > 0 },
+      { key: 'signedKyc', label: 'DMLRO and MLRO signed KYC documents uploaded', completed: activeSignedStages.has(SignedKycDocumentStage.DMLRO_SIGNED_KYC) && activeSignedStages.has(SignedKycDocumentStage.MLRO_SIGNED_KYC) }
+    ];
+  }
+
+  private async upsertActivationChecklist(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string }) {
+    const fullCase = await tx.kycCase.findUniqueOrThrow({
+      where: { id: kycCase.id },
+      include: {
+        legalDocuments: true,
+        kycForm: { include: { requiredDocuments: true } },
+        internalReviewSubmissions: true,
+        signedKycDocuments: true,
+        riskReclassifications: true
+      }
+    });
+    const checklist = this.activationChecklistItems(fullCase);
+    const isReady = checklist.every((item) => item.completed);
+    const blockingIssues = checklist.filter((item) => !item.completed);
+    await tx.clientActivationChecklist.upsert({
+      where: { kycCaseId: kycCase.id },
+      update: { checklist: this.jsonValue(checklist), isReady, blockingIssues: this.jsonValue(blockingIssues), completedAt: isReady ? new Date() : null, updatedBy: user.id },
+      create: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, checklist: this.jsonValue(checklist), isReady, blockingIssues: this.jsonValue(blockingIssues), completedAt: isReady ? new Date() : null, createdBy: user.id, updatedBy: user.id }
+    });
+    if (isReady) {
+      await this.recordStatus(tx, fullCase, user, KycCaseStatus.CLIENT_ACTIVATION_PENDING, 'Client ready for activation');
+      await this.createNotification(tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION, 'Client ready for activation', `${fullCase.title} is ready for activation.`);
+    }
+  }
+
   private internalReviewAllowedRoles(dto: Record<string, unknown>) {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
-    if (part === 'ALL') return ['COMPANY_ADMIN'];
-    if (part === 'DMLRO') return ['DMLRO', 'COMPANY_ADMIN'];
-    if (part === 'MLRO') return ['MLRO', 'COMPANY_ADMIN'];
-    return ['AML_TEAM', 'COMPANY_ADMIN'];
+    if (part === 'ALL') return ['OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+    if (part === 'DMLRO') return ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+    if (part === 'MLRO') return ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+    return ['OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
   }
 
   private internalReviewData(dto: Record<string, unknown>): ReviewPatch {
@@ -1016,13 +1815,16 @@ export class KycService {
         dueDiligenceType: dueDiligenceType as DueDiligenceType | null,
         amlName: this.optionalText(dto.amlName),
         amlSignatureFileName: this.optionalText(dto.amlSignatureFileName),
+        amlSignatureDataUrl: this.optionalText(dto.amlSignatureDataUrl),
         amlDate: this.dateValue(dto.amlDate),
         dmlroName: this.optionalText(dto.dmlroName),
         dmlroSignatureFileName: this.optionalText(dto.dmlroSignatureFileName),
+        dmlroSignatureDataUrl: this.optionalText(dto.dmlroSignatureDataUrl),
         dmlroDate: this.dateValue(dto.dmlroDate),
         dmlroComments: this.optionalText(dto.dmlroComments),
         mlroName: this.optionalText(dto.mlroName),
         mlroSignatureFileName: this.optionalText(dto.mlroSignatureFileName),
+        mlroSignatureDataUrl: this.optionalText(dto.mlroSignatureDataUrl),
         mlroDate: this.dateValue(dto.mlroDate),
         mlroComments: this.optionalText(dto.mlroComments)
       };
@@ -1032,6 +1834,7 @@ export class KycService {
       return {
         dmlroName: this.optionalText(dto.dmlroName),
         dmlroSignatureFileName: this.optionalText(dto.dmlroSignatureFileName),
+        dmlroSignatureDataUrl: this.optionalText(dto.dmlroSignatureDataUrl),
         dmlroDate: this.dateValue(dto.dmlroDate),
         dmlroComments: this.optionalText(dto.dmlroComments)
       };
@@ -1041,6 +1844,7 @@ export class KycService {
       return {
         mlroName: this.optionalText(dto.mlroName),
         mlroSignatureFileName: this.optionalText(dto.mlroSignatureFileName),
+        mlroSignatureDataUrl: this.optionalText(dto.mlroSignatureDataUrl),
         mlroDate: this.dateValue(dto.mlroDate),
         mlroComments: this.optionalText(dto.mlroComments)
       };
@@ -1056,6 +1860,7 @@ export class KycService {
       dueDiligenceType: dueDiligenceType as DueDiligenceType | null,
       amlName: this.optionalText(dto.amlName),
       amlSignatureFileName: this.optionalText(dto.amlSignatureFileName),
+      amlSignatureDataUrl: this.optionalText(dto.amlSignatureDataUrl),
       amlDate: this.dateValue(dto.amlDate)
     };
   }
@@ -1117,8 +1922,8 @@ export class KycService {
     return new Prisma.Decimal(this.numberValue(value));
   }
 
-  private jsonValue(data: Record<string, unknown>): Prisma.InputJsonObject {
-    return JSON.parse(JSON.stringify(data)) as Prisma.InputJsonObject;
+  private jsonValue(data: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(data)) as Prisma.InputJsonValue;
   }
 
   private async nextGeneratedVersion(kycFormId: string, documentType: KycGeneratedDocumentType) {
@@ -1132,14 +1937,17 @@ export class KycService {
 
   private buildDocx(payload: SerializedKycForm) {
     const template = this.loadDocxTemplate();
+    const templateData = this.templateData(payload);
     const doc = new Docxtemplater(new PizZip(template), {
       paragraphLoop: true,
       linebreaks: true,
       nullGetter: () => ''
     });
 
-    doc.render(this.templateData(payload));
-    return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    doc.render(templateData);
+    const zip = doc.getZip();
+    this.applyDocxImages(zip, this.docxImageReplacements(templateData));
+    return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
 
   private loadDocxTemplate() {
@@ -1189,7 +1997,13 @@ export class KycService {
   }
 
   private async resolveLibreOfficeCommand() {
-    const candidates = [process.env.LIBREOFFICE_PATH, 'soffice', 'libreoffice'].filter(Boolean) as string[];
+    const candidates = [
+      process.env.LIBREOFFICE_PATH,
+      'soffice',
+      'libreoffice',
+      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+    ].filter(Boolean) as string[];
 
     for (const candidate of candidates) {
       try {
@@ -1302,28 +2116,121 @@ export class KycService {
       declarationFullName: this.text(sectionG.fullName),
       declarationPosition: this.optionText(sectionG.position, sectionG.positionOther),
       declarationDate: this.text(sectionG.date),
-      signatureFileName: this.text(sectionG.signatureFileName),
-      stampFileName: this.text(sectionG.stampFileName),
+      signatureFileName: this.signatureDisplay('declarationSignature', sectionG.signatureFileName, sectionG.signatureDataUrl),
+      stampFileName: this.signatureDisplay('companyStamp', sectionG.stampFileName, sectionG.stampDataUrl),
       amlAccuracyChecked: this.text(sectionH.amlAccuracyChecked),
       amlClarificationFindings: this.text(sectionH.amlClarificationFindings),
       riskClassification: this.text(sectionH.riskClassification),
       dueDiligenceType: this.text(sectionH.dueDiligenceType),
       amlName: this.text(sectionH.amlName),
-      amlSignatureFileName: this.text(sectionH.amlSignatureFileName),
+      amlSignatureFileName: this.signatureDisplay('amlSignature', sectionH.amlSignatureFileName, sectionH.amlSignatureDataUrl),
       amlDate: this.text(sectionH.amlDate),
       dmlroName: this.text(sectionH.dmlroName),
-      dmlroSignatureFileName: this.text(sectionH.dmlroSignatureFileName),
+      dmlroSignatureFileName: this.signatureDisplay('dmlroSignature', sectionH.dmlroSignatureFileName, sectionH.dmlroSignatureDataUrl),
       dmlroDate: this.text(sectionH.dmlroDate),
       dmlroComments: this.text(sectionH.dmlroComments),
       mlroName: this.text(sectionH.mlroName),
-      mlroSignatureFileName: this.text(sectionH.mlroSignatureFileName),
+      mlroSignatureFileName: this.signatureDisplay('mlroSignature', sectionH.mlroSignatureFileName, sectionH.mlroSignatureDataUrl),
       mlroDate: this.text(sectionH.mlroDate),
-      mlroComments: this.text(sectionH.mlroComments)
+      mlroComments: this.text(sectionH.mlroComments),
+      _docxImages: {
+        declarationSignature: this.text(sectionG.signatureDataUrl),
+        companyStamp: this.text(sectionG.stampDataUrl),
+        amlSignature: this.text(sectionH.amlSignatureDataUrl),
+        dmlroSignature: this.text(sectionH.dmlroSignatureDataUrl),
+        mlroSignature: this.text(sectionH.mlroSignatureDataUrl)
+      }
     };
   }
 
   private templateRows<T extends Record<string, string>>(rows: RowPayload[] | undefined, mapper: (row: RowPayload, index: number) => T) {
     return rows?.length ? rows.map(mapper) : [];
+  }
+
+  private signatureDisplay(key: string, fileName: unknown, dataUrl: unknown) {
+    return this.parseImageDataUrl(this.text(dataUrl)) ? this.imageToken(key) : this.text(fileName);
+  }
+
+  private imageToken(key: string) {
+    return `__KYC_IMAGE_${key}__`;
+  }
+
+  private docxImageReplacements(templateData: Record<string, unknown>) {
+    const images = (templateData._docxImages || {}) as Record<string, unknown>;
+    const replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer } }> = [];
+
+    for (const [key, value] of Object.entries(images)) {
+      const image = this.parseImageDataUrl(this.text(value));
+      if (image) {
+        replacements.push({ key, token: this.imageToken(key), image });
+      }
+    }
+
+    return replacements;
+  }
+
+  private applyDocxImages(
+    zip: PizZip,
+    replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer } }>
+  ) {
+    if (!replacements.length) return;
+
+    const documentFile = zip.file('word/document.xml');
+    if (!documentFile) return;
+
+    let documentXml = documentFile.asText();
+    let relsXml =
+      zip.file('word/_rels/document.xml.rels')?.asText() ||
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+    let contentTypesXml = zip.file('[Content_Types].xml')?.asText() || '';
+
+    replacements.forEach((replacement, index) => {
+      const relId = `rIdKycSignature${Date.now()}${index}`;
+      const fileName = `kyc-signature-${replacement.key}.${replacement.image.extension}`;
+      zip.file(`word/media/${fileName}`, replacement.image.buffer);
+
+      relsXml = relsXml.replace(
+        '</Relationships>',
+        `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${fileName}"/></Relationships>`
+      );
+
+      contentTypesXml = this.ensureContentType(contentTypesXml, replacement.image.extension, replacement.image.mimeType);
+      documentXml = documentXml.replace(
+        new RegExp(`<w:t[^>]*>${this.escapeRegExp(replacement.token)}</w:t>`, 'g'),
+        this.docxImageDrawing(relId)
+      );
+    });
+
+    zip.file('word/document.xml', documentXml);
+    zip.file('word/_rels/document.xml.rels', relsXml);
+    zip.file('[Content_Types].xml', contentTypesXml);
+  }
+
+  private parseImageDataUrl(value: string) {
+    const match = /^data:(image\/(?:png|jpeg|jpg|gif));base64,(.+)$/i.exec(value);
+    if (!match) return null;
+    const mimeType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.split('/')[1];
+    return {
+      mimeType,
+      extension,
+      buffer: Buffer.from(match[2], 'base64')
+    };
+  }
+
+  private ensureContentType(contentTypesXml: string, extension: string, mimeType: string) {
+    if (contentTypesXml.includes(`Extension="${extension}"`)) return contentTypesXml;
+    return contentTypesXml.replace('</Types>', `<Default Extension="${extension}" ContentType="${mimeType}"/></Types>`);
+  }
+
+  private docxImageDrawing(relId: string) {
+    const cx = 1900000;
+    const cy = 650000;
+    return `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="Signature"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="Signature"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private yesNoMark(value: unknown, expected: 'Yes' | 'No') {
@@ -1438,6 +2345,10 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
     return normalize(process.env.UPLOAD_DIR || join(process.cwd(), 'uploads', 'legal-documents'));
   }
 
+  private signedKycDocumentUploadRoot() {
+    return normalize(process.env.SIGNED_KYC_UPLOAD_DIR || join(process.cwd(), 'uploads', 'signed-kyc-documents'));
+  }
+
   private resolveLegalDocumentPath(storagePath: string) {
     const uploadRoot = this.legalDocumentUploadRoot();
     const absolutePath = normalize(join(uploadRoot, storagePath));
@@ -1453,6 +2364,10 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
       .trim();
 
     return name || 'document';
+  }
+
+  private legalDocumentSyncKey(documentType: string, fileName: string) {
+    return `${documentType.trim().toLowerCase()}::${fileName.trim().toLowerCase()}`;
   }
 
   private caseInclude() {
@@ -1494,13 +2409,16 @@ type ReviewPatch = {
   dueDiligenceType?: DueDiligenceType | null;
   amlName?: string | null;
   amlSignatureFileName?: string | null;
+  amlSignatureDataUrl?: string | null;
   amlDate?: Date | null;
   dmlroName?: string | null;
   dmlroSignatureFileName?: string | null;
+  dmlroSignatureDataUrl?: string | null;
   dmlroDate?: Date | null;
   dmlroComments?: string | null;
   mlroName?: string | null;
   mlroSignatureFileName?: string | null;
+  mlroSignatureDataUrl?: string | null;
   mlroDate?: Date | null;
   mlroComments?: string | null;
 };
