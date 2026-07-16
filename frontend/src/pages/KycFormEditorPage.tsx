@@ -1446,11 +1446,13 @@ function renderPreviewValue(label: string, value: any) {
     return <img src={value.imageDataUrl} alt={`${label} preview`} className="mt-1 max-h-12 max-w-full object-contain" />;
   }
 
-  return value?.fileName || value || '-';
+  if (value?.fileName) return value.fileName;
+  if (value && typeof value === 'object') return '-';
+  return value || '-';
 }
 
 function PreviewTable({ headers, rows }: { headers: string[]; rows: any[][] }) {
-  return <table className="mt-2 w-full border-collapse text-[10px]"><thead><tr>{headers.map((header) => <th key={header} className="border border-slate-300 bg-slate-100 p-1 text-left">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{headers.map((_, cellIndex) => <td key={cellIndex} className="border border-slate-300 p-1">{row[cellIndex] || '-'}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-slate-300 p-2 text-center text-slate-500">No rows added</td></tr>}</tbody></table>;
+  return <table className="mt-2 w-full border-collapse text-[10px]"><thead><tr>{headers.map((header) => <th key={header} className="border border-slate-300 bg-slate-100 p-1 text-left">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{headers.map((header, cellIndex) => <td key={cellIndex} className="border border-slate-300 p-1">{renderPreviewValue(header, row[cellIndex])}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-slate-300 p-2 text-center text-slate-500">No rows added</td></tr>}</tbody></table>;
 }
 
 function update(data: Record<string, any>, onChange: (value: Record<string, any>) => void, key: string, value: any) {
