@@ -1,7 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AddClientPage } from '../pages/AddClientPage';
 import { AccessDeniedPage } from '../pages/AccessDeniedPage';
-import { AmlDashboardPage } from '../pages/AmlDashboardPage';
 import { ClientDetailsPage } from '../pages/ClientDetailsPage';
 import { ClientListPage } from '../pages/ClientListPage';
 import { CreateKycCasePage } from '../pages/CreateKycCasePage';
@@ -58,30 +57,36 @@ export const router = createBrowserRouter([
             children: [{ path: '/users', element: <UsersPage /> }]
           },
           {
-            element: <RequireRoles roles={[...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
+            element: <RequireRoles roles={[...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
             children: [
               { path: '/kyc-workflow', element: <KycWorkflowPage /> },
               { path: '/kyc/:id', element: <KycCaseDetailsPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.kycPreparation} />,
+            element: <RequireRoles roles={workflowRoles.caseCreation} />,
             children: [
               { path: '/kyc/new', element: <CreateKycCasePage /> },
-              { path: '/kyc/:id/edit', element: <CreateKycCasePage /> },
+              { path: '/kyc/:id/edit', element: <CreateKycCasePage /> }
+            ]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.kycFormBuilder} />,
+            children: [
               { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
               { path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> },
               { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.amlDashboard} />,
-            children: [{ path: '/aml', element: <AmlDashboardPage /> }]
+            element: <RequireRoles roles={workflowRoles.userAdmin} />,
+            children: [
+              { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> }
+            ]
           },
           {
             element: <RequireRoles roles={workflowRoles.reviewTasks} />,
             children: [
-              { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> },
               { path: '/review-tasks', element: <ReviewTasksPage /> }
             ]
           }

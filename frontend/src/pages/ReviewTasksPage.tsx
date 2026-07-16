@@ -24,7 +24,7 @@ function caseSubtitle(taskOrNotification: { kycCase?: ReviewTask['kycCase'] | Am
 }
 
 function reviewLink(caseId?: string) {
-  return caseId ? `/kyc/${caseId}/internal-review` : '/review-tasks';
+  return caseId ? `/kyc/${caseId}/form` : '/review-tasks';
 }
 
 export function ReviewTasksPage() {

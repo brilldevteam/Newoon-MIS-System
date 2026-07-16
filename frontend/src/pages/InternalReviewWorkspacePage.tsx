@@ -1,4 +1,4 @@
-import { FileUp, MessageSquare, Save, Send } from 'lucide-react';
+import { FileText, FileUp, MessageSquare, Save, Send } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -19,7 +19,6 @@ import { allowedReviewStages, hasAnyRole, roleList, workflowRoles } from '../uti
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 const stages: Array<{ id: ReviewStage; title: string; submitLabel: string }> = [
-  { id: 'SUPERVISOR', title: 'AML Supervisor Review', submitLabel: 'Submit to DMLRO' },
   { id: 'DMLRO', title: 'DMLRO Review', submitLabel: 'Submit to MLRO' },
   { id: 'MLRO', title: 'MLRO Final Review', submitLabel: 'Submit MLRO Decision' }
 ];
@@ -41,7 +40,7 @@ export function InternalReviewWorkspacePage() {
   const { id } = useParams();
   const { user } = useAuth();
   const [workspace, setWorkspace] = useState<InternalReviewWorkspace | null>(null);
-  const [activeStage, setActiveStage] = useState<ReviewStage>('SUPERVISOR');
+  const [activeStage, setActiveStage] = useState<ReviewStage>('DMLRO');
   const [forms, setForms] = useState<Record<ReviewStage, Record<string, string>>>({
     SUPERVISOR: { ...emptyForm },
     DMLRO: { ...emptyForm },
@@ -148,6 +147,13 @@ export function InternalReviewWorkspacePage() {
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Internal Review Workspace</h1>
           <p className="mt-1 text-sm text-slate-500">{workspace.kycCase.title} | {kycStatusLabel(workspace.kycCase.status)}</p>
         </div>
+        <Link
+          to={`/kyc/${workspace.kycCase.id}/form`}
+          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <FileText className="h-4 w-4" />
+          Open KYC Part 1
+        </Link>
       </div>
 
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
@@ -155,7 +161,7 @@ export function InternalReviewWorkspacePage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-base font-semibold text-slate-950">Approval Sequence</h2>
-        <p className="mt-1 text-sm text-slate-500">Logged in as {roleList(user)}. Only the matching review stage is editable for each role.</p>
+        <p className="mt-1 text-sm text-slate-500">Logged in as {roleList(user)}. DMLRO and MLRO update their own approval stage and signature details.</p>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {stages.map((stage) => (
             <button
@@ -194,12 +200,6 @@ export function InternalReviewWorkspacePage() {
           <form onSubmit={saveDraft} className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="Reviewer name" value={activeForm.reviewerName} disabled={!canEdit} onChange={(value) => updateField('reviewerName', value)} />
             <Field label="Review date" type="date" value={activeForm.reviewDate} disabled={!canEdit} onChange={(value) => updateField('reviewDate', value)} />
-            {activeStage === 'SUPERVISOR' ? (
-              <>
-                <Select label="Initial risk classification" value={activeForm.finalRiskClassification} disabled={!canEdit} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateField('finalRiskClassification', value)} />
-                <Select label="Due diligence type" value={activeForm.dueDiligenceType || ''} disabled={!canEdit} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateField('dueDiligenceType', value)} />
-              </>
-            ) : null}
             {activeStage === 'MLRO' ? (
               <>
                 <Select label="Final decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO']} onChange={(value) => updateField('decision', value)} />
