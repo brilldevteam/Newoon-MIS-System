@@ -1,20 +1,25 @@
-import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Send, Trash2, Upload, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
+import { useAuth } from '../hooks/useAuth';
 import {
   downloadGeneratedKycDocument,
+  decideMlroReview,
   generateKycDocument,
   getKycCase,
   getKycForm,
   KycCase,
   KycFormData,
-  saveKycFormSection
+  saveKycFormSection,
+  submitDmlroReview,
+  uploadLegalDocumentFile
 } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
 const sections = [
   { id: 'section-a', key: 'sectionA', label: 'A. General Company Information' },
@@ -481,6 +486,24 @@ const positionOptions = [
   'Compliance Officer'
 ];
 
+const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
+const riskClassificationOptions = ['', 'LOW', 'MEDIUM', 'HIGH'];
+const riskReasonCategoryOptions = [
+  '',
+  'PROFESSIONAL_JUDGEMENT',
+  'PEP_IDENTIFIED',
+  'SANCTIONS_FINDING',
+  'ADVERSE_MEDIA',
+  'OWNERSHIP_COMPLEXITY',
+  'COUNTRY_RISK',
+  'INDUSTRY_RISK',
+  'SOURCE_OF_FUNDS_CONCERN',
+  'ENHANCED_MONITORING_REQUIRED',
+  'OTHER'
+];
+
+const approvedStatuses = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'] as const;
+
 const emptyForm: KycFormData = {
   id: '',
   tenantId: '',
@@ -501,10 +524,13 @@ const emptyForm: KycFormData = {
 };
 
 type SectionKey = (typeof sections)[number]['key'];
+type SectionDefinition = (typeof sections)[number];
 type Row = Record<string, any>;
+type SectionHMode = 'AML' | 'DMLRO' | 'MLRO' | 'ALL';
 
 export function KycFormEditorPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [form, setForm] = useState<KycFormData>(emptyForm);
   const [activeSection, setActiveSection] = useState<SectionKey>('sectionA');
@@ -524,6 +550,19 @@ export function KycFormEditorPage() {
     () => (form.sectionB.shareholders || []).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0),
     [form.sectionB.shareholders]
   );
+  const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
+  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
+  const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : 'AML';
+  const visibleSections = useMemo(
+    () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
+    [canEditAllSections, canPrepareKyc]
+  );
+
+  useEffect(() => {
+    if (!visibleSections.some((section) => section.key === activeSection)) {
+      setActiveSection(visibleSections[0]?.key || 'sectionH');
+    }
+  }, [activeSection, visibleSections]);
 
   function setSection(section: SectionKey, value: Record<string, any>) {
     setForm((current) => ({ ...current, [section]: value }));
@@ -541,7 +580,7 @@ export function KycFormEditorPage() {
       section === 'sectionB'
         ? { ...form.sectionB, totalOwnershipPercentage: totalOwnership }
         : section === 'sectionH'
-          ? { ...(form.sectionH || {}), reviewPart: 'ALL' }
+          ? { ...(form.sectionH || {}), reviewPart: sectionHMode }
           : (form[section] as Record<string, any>);
     try {
       const updated = await saveKycFormSection(id, endpoint, payload);
@@ -576,9 +615,104 @@ export function KycFormEditorPage() {
     }
   }
 
+  async function submitDmlroFromKycForm() {
+    if (!id) return;
+    const sectionH = form.sectionH || {};
+    if (!sectionH.dmlroName || !sectionH.dmlroDate || (!sectionH.dmlroSignatureDataUrl && !sectionH.dmlroSignatureFileName)) {
+      setError('Complete the DMLRO name, date, and signature before submitting to MLRO.');
+      return;
+    }
+
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const saved = await save('sectionH');
+      if (!saved) return;
+      const latestSectionH = saved.sectionH || sectionH;
+      await submitDmlroReview(id, {
+        data: {
+          reviewerName: latestSectionH.dmlroName || '',
+          reviewDate: latestSectionH.dmlroDate || '',
+          comments: latestSectionH.dmlroComments || '',
+          conditions: latestSectionH.dmlroComments || ''
+        },
+        formalComments: latestSectionH.dmlroComments || ''
+      });
+      const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
+      setKycCase(caseData);
+      setForm(normalizeForm(formData));
+      setMessage('DMLRO approval submitted to MLRO');
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, 'Unable to submit DMLRO approval.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function submitMlroFromKycForm() {
+    if (!id) return;
+    const sectionH = form.sectionH || {};
+    const decision = sectionH.mlroDecision || 'APPROVE';
+    const finalRiskClassification = sectionH.mlroFinalRiskClassification || sectionH.riskClassification || '';
+    const riskExplanation = sectionH.mlroRiskExplanation || sectionH.mlroComments || '';
+
+    if (!sectionH.mlroName || !sectionH.mlroDate || (!sectionH.mlroSignatureDataUrl && !sectionH.mlroSignatureFileName)) {
+      setError('Complete the MLRO name, date, and signature before submitting the final decision.');
+      return;
+    }
+    if (!decision) {
+      setError('Select the MLRO final decision before submitting.');
+      return;
+    }
+    if (!finalRiskClassification || !riskExplanation) {
+      setError('Select the final risk classification and add a risk explanation before submitting the final decision.');
+      return;
+    }
+
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const saved = await save('sectionH');
+      if (!saved) return;
+      const latestSectionH = saved.sectionH || sectionH;
+      await decideMlroReview(id, {
+        decision,
+        reason: latestSectionH.mlroComments || latestSectionH.mlroRiskExplanation || latestSectionH.mlroConditions || '',
+        conditions: latestSectionH.mlroConditions || '',
+        finalRiskClassification,
+        previousRiskClassification: latestSectionH.riskClassification || '',
+        riskReasonCategory: latestSectionH.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT',
+        riskExplanation,
+        data: {
+          reviewerName: latestSectionH.mlroName || '',
+          reviewDate: latestSectionH.mlroDate || '',
+          comments: latestSectionH.mlroComments || '',
+          conditions: latestSectionH.mlroConditions || '',
+          decision,
+          finalRiskClassification,
+          riskReasonCategory: latestSectionH.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT',
+          riskExplanation
+        },
+        formalComments: latestSectionH.mlroComments || ''
+      });
+      const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
+      setKycCase(caseData);
+      setForm(normalizeForm(formData));
+      setMessage('MLRO final decision submitted');
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, 'Unable to submit MLRO final decision.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!kycCase) {
     return <p className="text-sm text-slate-500">Loading KYC form builder...</p>;
   }
+
+  const isApproved = approvedStatuses.includes(kycCase.status as (typeof approvedStatuses)[number]);
 
   return (
     <div className="space-y-5">
@@ -597,6 +731,18 @@ export function KycFormEditorPage() {
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
           </button>
+          {sectionHMode === 'DMLRO' ? (
+            <button onClick={submitDmlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+              <Send className="h-4 w-4" />
+              Submit to MLRO
+            </button>
+          ) : null}
+          {sectionHMode === 'MLRO' ? (
+            <button onClick={submitMlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+              <Send className="h-4 w-4" />
+              Submit Final Decision
+            </button>
+          ) : null}
           <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
             <Download className="h-4 w-4" />
             DOCX
@@ -610,9 +756,34 @@ export function KycFormEditorPage() {
 
       {message ? <p className="rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {isApproved ? (
+        <section className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-base font-semibold text-brand-900">KYC approval completed</p>
+              <p className="mt-1 text-sm text-brand-700">
+                The client profile, KYC Part 1 sections, uploaded preparation documents, approval details, and generated downloads are stored against this KYC case.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                <Download className="h-4 w-4" />
+                Download DOCX
+              </button>
+              <button onClick={() => generate('pdf')} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+                <FileText className="h-4 w-4" />
+                Download PDF
+              </button>
+              <Link to={`/kyc/${kycCase.id}`} className="inline-flex items-center gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-50">
+                View Case Summary
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid gap-5 2xl:grid-cols-[220px_minmax(430px,0.85fr)_minmax(520px,1.15fr)]">
-        <KycFormSectionSidebar active={activeSection} onChange={setActiveSection} />
+        <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
         <section className="rounded-lg border border-slate-200 bg-white">
           <div className="border-b border-slate-200 px-5 py-4">
             <p className="text-sm font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</p>
@@ -624,9 +795,9 @@ export function KycFormEditorPage() {
             {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
             {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
             {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
-            {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
+            {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
             {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
-            {activeSection === 'sectionH' ? <SectionHInternalReviewForm data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
+            {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
           </div>
         </section>
         <LiveDocumentPreviewPanel form={{ ...form, sectionB: { ...form.sectionB, totalOwnershipPercentage: totalOwnership } }} />
@@ -635,7 +806,7 @@ export function KycFormEditorPage() {
   );
 }
 
-function KycFormSectionSidebar({ active, onChange }: { active: SectionKey; onChange: (key: SectionKey) => void }) {
+function KycFormSectionSidebar({ sections, active, onChange }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void }) {
   return (
     <aside className="rounded-lg border border-slate-200 bg-white p-2 2xl:sticky 2xl:top-20 2xl:h-fit">
       {sections.map((section) => (
@@ -773,26 +944,41 @@ function SectionEContactForm({ data, onChange }: FormProps) {
   </FormGrid>;
 }
 
-function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
+function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProps & { caseId: string }) {
   const documents = data.documents || [];
   const additionalDocuments = data.additionalDocuments || [];
+  const [uploadingKey, setUploadingKey] = useState('');
+  const [uploadError, setUploadError] = useState('');
 
-  function uploadDocument(index: number, file: File | null) {
-    if (!file) return;
-    onChange({
-      ...data,
-      documents: documents.map((row: Row, rowIndex: number) =>
-        rowIndex === index
-          ? {
-              ...row,
-              isProvided: true,
-              fileName: file.name,
-              mimeType: file.type || undefined,
-              size: file.size
-            }
-          : row
-      )
-    });
+  async function uploadDocument(index: number, file: File | null) {
+    if (!file || !caseId) return;
+    const row = documents[index];
+    const documentType = row?.documentType || `Document ${index + 1}`;
+    setUploadingKey(`required-${index}`);
+    setUploadError('');
+    try {
+      const updatedCase = await uploadLegalDocumentFile(caseId, { documentType, file });
+      const uploaded = [...updatedCase.legalDocuments].find((document) => document.documentType === documentType && document.fileName === file.name);
+      onChange({
+        ...data,
+        documents: documents.map((documentRow: Row, rowIndex: number) =>
+          rowIndex === index
+            ? {
+                ...documentRow,
+                isProvided: true,
+                fileName: uploaded?.fileName || file.name,
+                storagePath: uploaded?.storagePath,
+                mimeType: uploaded?.mimeType || file.type || undefined,
+                size: uploaded?.size || file.size
+              }
+            : documentRow
+        )
+      });
+    } catch (requestError: any) {
+      setUploadError(getApiErrorMessage(requestError, 'Unable to upload this document.'));
+    } finally {
+      setUploadingKey('');
+    }
   }
 
   function updateAdditionalDocument(index: number, patch: Row) {
@@ -802,17 +988,30 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
     });
   }
 
-  function uploadAdditionalDocument(index: number, file: File | null) {
-    if (!file) return;
-    updateAdditionalDocument(index, {
-      fileName: file.name,
-      mimeType: file.type || undefined,
-      size: file.size
-    });
+  async function uploadAdditionalDocument(index: number, file: File | null) {
+    if (!file || !caseId) return;
+    const documentType = `Additional document ${index + 1}`;
+    setUploadingKey(`additional-${index}`);
+    setUploadError('');
+    try {
+      const updatedCase = await uploadLegalDocumentFile(caseId, { documentType, file });
+      const uploaded = [...updatedCase.legalDocuments].find((document) => document.documentType === documentType && document.fileName === file.name);
+      updateAdditionalDocument(index, {
+        fileName: uploaded?.fileName || file.name,
+        storagePath: uploaded?.storagePath,
+        mimeType: uploaded?.mimeType || file.type || undefined,
+        size: uploaded?.size || file.size
+      });
+    } catch (requestError: any) {
+      setUploadError(getApiErrorMessage(requestError, 'Unable to upload this document.'));
+    } finally {
+      setUploadingKey('');
+    }
   }
 
   return (
     <div className="space-y-5">
+      {uploadError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p> : null}
       <div className="space-y-3">
       {documents.map((document: Row, index: number) => (
         <div key={`${document.documentType}-${index}`} className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_110px_minmax(180px,1fr)]">
@@ -825,7 +1024,9 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
             className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
             title={document.fileName || 'Upload'}
           >
-            {document.fileName ? (
+            {uploadingKey === `required-${index}` ? (
+              <span className="truncate">Uploading...</span>
+            ) : document.fileName ? (
               <span className="truncate">{document.fileName}</span>
             ) : (
               <>
@@ -867,7 +1068,9 @@ function SectionFRequiredDocumentsChecklist({ data, onChange }: FormProps) {
                 className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
                 title={document.fileName || 'Upload file or ZIP'}
               >
-                {document.fileName ? (
+                {uploadingKey === `additional-${index}` ? (
+                  <span className="truncate">Uploading...</span>
+                ) : document.fileName ? (
                   <span className="truncate">{document.fileName}</span>
                 ) : (
                   <>
@@ -915,23 +1118,44 @@ function SectionGDeclarationForm({ data, onChange }: FormProps) {
   </FormGrid>;
 }
 
-function SectionHInternalReviewForm({ data, onChange }: FormProps) {
+function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode: SectionHMode }) {
+  const showAml = mode === 'AML' || mode === 'ALL';
+  const showDmlro = mode === 'DMLRO' || mode === 'ALL';
+  const showMlro = mode === 'MLRO' || mode === 'ALL';
+
   return <FormGrid>
-    <Choice label="Accuracy checked by AML Supervisor" value={data.amlAccuracyChecked ? 'Yes' : 'No'} onChange={(value) => onChange({ ...data, reviewPart: 'AML', amlAccuracyChecked: value === 'Yes' })} />
-    <Field label="Clarification / findings" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlClarificationFindings', value)} textarea wide />
-    <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'riskClassificationOther', value)} allowOther />
-    <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
-    <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlName', value)} />
-    <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} imageDataUrl={data.amlSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'AML', amlSignatureFileName: file.name, amlSignatureDataUrl: dataUrl })} />
-    <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: 'AML' }, onChange, 'amlDate', value)} />
-    <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroName', value)} />
-    <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'DMLRO', dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
-    <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroDate', value)} />
-    <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: 'DMLRO' }, onChange, 'dmlroComments', value)} textarea wide />
-    <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroName', value)} />
-    <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: 'MLRO', mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
-    <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroDate', value)} />
-    <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: 'MLRO' }, onChange, 'mlroComments', value)} textarea wide />
+    {showAml ? (
+      <>
+        <Choice label="Accuracy checked by AML Supervisor" value={data.amlAccuracyChecked ? 'Yes' : 'No'} onChange={(value) => onChange({ ...data, reviewPart: mode, amlAccuracyChecked: value === 'Yes' })} />
+        <Field label="Clarification / findings" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
+        <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
+        <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
+        <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlName', value)} />
+        <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} imageDataUrl={data.amlSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, amlSignatureFileName: file.name, amlSignatureDataUrl: dataUrl })} />
+        <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
+      </>
+    ) : null}
+    {showDmlro ? (
+      <>
+        <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroName', value)} />
+        <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
+        <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDate', value)} />
+        <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroComments', value)} textarea wide />
+      </>
+    ) : null}
+    {showMlro ? (
+      <>
+        <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroName', value)} />
+        <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
+        <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDate', value)} />
+        <Select label="MLRO final decision" value={data.mlroDecision || 'APPROVE'} options={mlroDecisionOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDecision', value)} />
+        <Select label="Final risk classification" value={data.mlroFinalRiskClassification || data.riskClassification} options={riskClassificationOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroFinalRiskClassification', value)} />
+        <Select label="Risk reason category" value={data.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT'} options={riskReasonCategoryOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskReasonCategory', value)} />
+        <Field label="Risk explanation" value={data.mlroRiskExplanation} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskExplanation', value)} textarea wide />
+        <Field label="Conditions" value={data.mlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroConditions', value)} textarea wide />
+        <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroComments', value)} textarea wide />
+      </>
+    ) : null}
   </FormGrid>;
 }
 
@@ -981,7 +1205,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', form.sectionH?.mlroRiskReasonCategory], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>

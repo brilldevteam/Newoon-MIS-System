@@ -260,8 +260,22 @@ export async function viewLegalDocument(caseId: string, document: LegalDocument)
   });
   const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
   const url = window.URL.createObjectURL(blob);
-  window.open(url, '_blank', 'noopener,noreferrer');
-  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+  const mimeType = blob.type.toLowerCase();
+  const canPreview = mimeType.startsWith('image/') || mimeType === 'application/pdf' || mimeType.startsWith('text/');
+
+  if (canPreview) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+
+  const link = window.document.createElement('a');
+  link.href = url;
+  link.download = document.fileName;
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export function deleteLegalDocument(caseId: string, documentId: string) {

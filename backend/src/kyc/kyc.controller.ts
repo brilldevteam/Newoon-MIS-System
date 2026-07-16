@@ -60,71 +60,85 @@ export class KycController {
     return this.kycService.remove(user, id);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form')
   createForm(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.createForm(user, id);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id/form')
   getForm(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.getForm(user, id);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/autosave')
   autoSaveForm(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.autoSaveForm(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-a')
   saveSectionA(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveSectionA(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-b')
   saveSectionB(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveOwnership(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-c')
   saveSectionC(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveManagers(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-d')
   saveSectionD(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveSectionD(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-e')
   saveSectionE(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveSectionE(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-f')
   saveSectionF(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveRequiredDocuments(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-g')
   saveSectionG(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveSectionG(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-h')
   saveSectionH(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveInternalReview(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form/generate-docx')
   generateDocx(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.generateDocument(user, id, KycGeneratedDocumentType.DOCX);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form/generate-pdf')
   generatePdf(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.generateDocument(user, id, KycGeneratedDocumentType.PDF);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id/form/generated-documents/:documentId/download')
   async downloadGeneratedDocument(
     @CurrentUser() user: RequestUser,
@@ -138,13 +152,13 @@ export class KycController {
     response.send(Buffer.from(document.content));
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/service')
   assignService(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AssignServiceDto) {
     return this.kycService.assignService(user, id, dto);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/proposal-status')
   updateProposalStatus(
     @CurrentUser() user: RequestUser,
@@ -154,7 +168,7 @@ export class KycController {
     return this.kycService.updateProposalStatus(user, id, dto);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/legal-documents')
   uploadLegalDocument(
     @CurrentUser() user: RequestUser,
@@ -164,7 +178,7 @@ export class KycController {
     return this.kycService.uploadLegalDocument(user, id, dto);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/legal-documents/upload')
   @UseInterceptors(FileInterceptor('file'))
   uploadLegalDocumentFile(
@@ -189,7 +203,7 @@ export class KycController {
     response.send(document.content);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Delete(':id/legal-documents/:documentId')
   deleteLegalDocument(
     @CurrentUser() user: RequestUser,
@@ -199,7 +213,7 @@ export class KycController {
     return this.kycService.deleteLegalDocument(user, id, documentId);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/submit-to-aml')
   submitToAml(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.submitToAml(user, id);

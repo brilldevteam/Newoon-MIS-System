@@ -1,4 +1,4 @@
-import { Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
+import { Download, Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
@@ -7,11 +7,14 @@ import {
   addWorkflowComment,
   assignService,
   deleteLegalDocument,
+  downloadGeneratedKycDocument,
+  generateKycDocument,
   getKycCase,
   KycCase,
   ProposalStatus,
   KycCaseStatus,
   updateProposalStatus,
+  uploadLegalDocumentFile,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
@@ -23,9 +26,13 @@ const steps: KycCaseStatus[] = [
   'PROPOSAL_OPTIONAL',
   'LEGAL_DOCUMENTS_PENDING',
   'LEGAL_DOCUMENTS_UPLOADED',
-  'SUBMITTED_TO_AML',
-  'AML_REVIEW_STARTED'
+  'DMLRO_REVIEW_PENDING',
+  'DMLRO_REVIEW_COMPLETED',
+  'MLRO_REVIEW_PENDING',
+  'MLRO_APPROVED'
 ];
+
+const approvedStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -46,6 +53,9 @@ export function KycCaseDetailsPage() {
   const [comment, setComment] = useState('');
   const [documentError, setDocumentError] = useState('');
   const [deletingDocumentId, setDeletingDocumentId] = useState('');
+  const [uploadingDocumentId, setUploadingDocumentId] = useState('');
+  const [downloadError, setDownloadError] = useState('');
+  const [generatingType, setGeneratingType] = useState<'docx' | 'pdf' | ''>('');
 
   useEffect(() => {
     if (id) {
@@ -79,6 +89,10 @@ export function KycCaseDetailsPage() {
 
   async function openDocument(document: KycCase['legalDocuments'][number]) {
     if (!id) return;
+    if (!document.storagePath) {
+      setDocumentError('This document row has no stored file yet. Reupload the file once to make it viewable.');
+      return;
+    }
     setDocumentError('');
     try {
       await viewLegalDocument(id, document);
@@ -100,13 +114,46 @@ export function KycCaseDetailsPage() {
     }
   }
 
+  async function downloadFinalDocument(type: 'docx' | 'pdf') {
+    if (!id) return;
+    setDownloadError('');
+    setGeneratingType(type);
+    try {
+      const document = await generateKycDocument(id, type);
+      await downloadGeneratedKycDocument(id, document.id, document.fileName);
+      setKycCase(await getKycCase(id));
+    } catch (requestError: any) {
+      const message = requestError.response?.data?.message;
+      setDownloadError(typeof message === 'string' ? message : `Unable to generate ${type.toUpperCase()} document.`);
+    } finally {
+      setGeneratingType('');
+    }
+  }
+
+  async function replaceDocumentFile(document: KycCase['legalDocuments'][number], file: File | null) {
+    if (!id || !file) return;
+    setDocumentError('');
+    setUploadingDocumentId(document.id);
+    try {
+      setKycCase(await uploadLegalDocumentFile(id, { documentType: document.documentType, file }));
+    } catch (requestError: any) {
+      setDocumentError(requestError.response?.data?.message || 'Unable to upload replacement file.');
+    } finally {
+      setUploadingDocumentId('');
+    }
+  }
+
   if (!kycCase) {
     return <p className="text-sm text-slate-500">Loading KYC case...</p>;
   }
 
   const currentStep = steps.indexOf(kycCase.status);
-  const canSubmitToAml = kycCase.legalDocuments.length > 0 && kycCase.status !== 'SUBMITTED_TO_AML' && kycCase.status !== 'AML_REVIEW_STARTED';
-  const canOpenInternalReview = hasAnyRole(user, workflowRoles.reviewTasks);
+  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
+  const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
+  const canSubmitToAml = canPrepareKyc && kycCase.legalDocuments.length > 0 && ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED'].includes(kycCase.status);
+  const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
+  const isApproved = approvedStatuses.includes(kycCase.status);
+  const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
 
   return (
     <div className="space-y-6">
@@ -122,13 +169,15 @@ export function KycCaseDetailsPage() {
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Link
-          to={`/kyc/${kycCase.id}/form`}
-          className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-        >
-          <FileText className="h-4 w-4" />
-          Open KYC Part 1
-        </Link>
+        {canOpenKycForm ? (
+          <Link
+            to={`/kyc/${kycCase.id}/form`}
+            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <FileText className="h-4 w-4" />
+            Open KYC Part 1
+          </Link>
+        ) : null}
         {canOpenInternalReview ? (
           <Link
             to={`/kyc/${kycCase.id}/internal-review`}
@@ -139,6 +188,58 @@ export function KycCaseDetailsPage() {
           </Link>
         ) : null}
       </div>
+
+      {isApproved ? (
+        <section className="rounded-lg border border-brand-200 bg-brand-50 p-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <p className="text-base font-semibold text-brand-900">KYC fully approved and ready for activation</p>
+              <p className="mt-1 text-sm text-brand-700">
+                Client details, KYC Part 1 data, approval signatures, uploaded preparation documents, workflow comments, and generated documents are stored against this case.
+              </p>
+              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <dt className="font-semibold text-brand-900">Client</dt>
+                  <dd className="text-brand-700">{kycCase.client.name}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-brand-900">Primary contact</dt>
+                  <dd className="text-brand-700">{primaryContact?.name || 'Not assigned'}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-brand-900">Uploaded documents</dt>
+                  <dd className="text-brand-700">{kycCase.legalDocuments.length}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-brand-900">Current status</dt>
+                  <dd className="text-brand-700">{kycStatusLabel(kycCase.status)}</dd>
+                </div>
+              </dl>
+              {downloadError ? <p className="mt-3 text-sm text-red-700">{downloadError}</p> : null}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => downloadFinalDocument('docx')}
+                disabled={Boolean(generatingType)}
+                className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+              >
+                <Download className="h-4 w-4" />
+                {generatingType === 'docx' ? 'Preparing DOCX...' : 'Download DOCX'}
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadFinalDocument('pdf')}
+                disabled={Boolean(generatingType)}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                <FileText className="h-4 w-4" />
+                {generatingType === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         <h2 className="text-base font-semibold text-slate-950">Workflow Progress</h2>
@@ -159,53 +260,57 @@ export function KycCaseDetailsPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_0.8fr]">
         <div className="space-y-6">
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-base font-semibold text-slate-950">Service & Proposal</h2>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <form onSubmit={saveService} className="space-y-3">
-                <SearchableMultiSelect
-                  label="Requested services"
-                  value={services}
-                  options={newoonServiceOptions}
-                  onChange={setServices}
-                  placeholder="Select requested services"
-                />
-                <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                  Save Service
-                </button>
-              </form>
-              <form onSubmit={saveProposal} className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">
-                  Proposal status
-                  <select
-                    value={proposalStatus}
-                    onChange={(event) => setProposalStatus(event.target.value as ProposalStatus)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  >
-                    <option value="NOT_REQUIRED">Not required</option>
-                    <option value="REQUIRED">Required</option>
-                    <option value="SENT">Sent</option>
-                    <option value="ACCEPTED">Accepted</option>
-                    <option value="REJECTED">Rejected</option>
-                  </select>
-                </label>
-                <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                  Save Proposal
-                </button>
-              </form>
-            </div>
-          </section>
+          {canPrepareKyc ? (
+            <section className="rounded-lg border border-slate-200 bg-white p-5">
+              <h2 className="text-base font-semibold text-slate-950">Service & Proposal</h2>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <form onSubmit={saveService} className="space-y-3">
+                  <SearchableMultiSelect
+                    label="Requested services"
+                    value={services}
+                    options={newoonServiceOptions}
+                    onChange={setServices}
+                    placeholder="Select requested services"
+                  />
+                  <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Save Service
+                  </button>
+                </form>
+                <form onSubmit={saveProposal} className="space-y-3">
+                  <label className="text-sm font-medium text-slate-700">
+                    Proposal status
+                    <select
+                      value={proposalStatus}
+                      onChange={(event) => setProposalStatus(event.target.value as ProposalStatus)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="NOT_REQUIRED">Not required</option>
+                      <option value="REQUIRED">Required</option>
+                      <option value="SENT">Sent</option>
+                      <option value="ACCEPTED">Accepted</option>
+                      <option value="REJECTED">Rejected</option>
+                    </select>
+                  </label>
+                  <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Save Proposal
+                  </button>
+                </form>
+              </div>
+            </section>
+          ) : null}
 
           <section className="rounded-lg border border-slate-200 bg-white">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <h2 className="text-base font-semibold text-slate-950">Documents Required for KYC Preparation</h2>
-              <Link
-                to={`/kyc/${kycCase.id}/documents`}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <Upload className="h-4 w-4" />
-                Upload
-              </Link>
+              {canPrepareKyc ? (
+                <Link
+                  to={`/kyc/${kycCase.id}/documents`}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  Upload
+                </Link>
+              ) : null}
             </div>
             <div className="divide-y divide-slate-100">
               {documentError ? <p className="px-5 py-3 text-sm text-red-600">{documentError}</p> : null}
@@ -220,12 +325,30 @@ export function KycCaseDetailsPage() {
                       <button
                         type="button"
                         onClick={() => openDocument(document)}
+                        disabled={!document.storagePath}
                         title="View document"
                         aria-label={`View ${document.fileName}`}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Eye className="h-4 w-4" />
                       </button>
+                      {canPrepareKyc ? (
+                        <label
+                          title={document.storagePath ? 'Replace file' : 'Upload missing file'}
+                          aria-label={`${document.storagePath ? 'Replace' : 'Upload'} ${document.fileName}`}
+                          className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
+                        >
+                          <Upload className={`h-4 w-4 ${uploadingDocumentId === document.id ? 'animate-pulse' : ''}`} />
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={(event) => {
+                              replaceDocumentFile(document, event.target.files?.[0] || null);
+                              event.currentTarget.value = '';
+                            }}
+                          />
+                        </label>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => removeDocument(document)}
@@ -251,7 +374,7 @@ export function KycCaseDetailsPage() {
               className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
             >
               <Send className="h-4 w-4" />
-              Submit to AML
+              Submit to DMLRO
             </Link>
           ) : null}
         </div>

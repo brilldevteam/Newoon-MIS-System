@@ -1,7 +1,9 @@
-import { Edit3, Eye, FilePlus2, Trash2 } from 'lucide-react';
+import { Download, Edit3, Eye, FilePlus2, FileText, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { deleteKycCase, KycCase, listKycCases } from '../services/kyc-workflow.service';
+import { useAuth } from '../hooks/useAuth';
+import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCase, KycCaseStatus, listKycCases } from '../services/kyc-workflow.service';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 function getRequestErrorMessage(error: any, fallback: string) {
@@ -19,11 +21,16 @@ function getRequestErrorMessage(error: any, fallback: string) {
   return typeof responseError === 'string' ? responseError : fallback;
 }
 
+const documentReadyStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
+
 export function KycWorkflowPage() {
+  const { user } = useAuth();
   const [cases, setCases] = useState<KycCase[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
+  const [generatingKey, setGeneratingKey] = useState('');
   const [error, setError] = useState('');
+  const canManageCases = hasAnyRole(user, workflowRoles.caseCreation);
 
   useEffect(() => {
     loadCases();
@@ -56,6 +63,20 @@ export function KycWorkflowPage() {
     }
   }
 
+  async function downloadDocument(kycCase: KycCase, type: 'docx' | 'pdf') {
+    const key = `${kycCase.id}-${type}`;
+    setGeneratingKey(key);
+    setError('');
+    try {
+      const document = await generateKycDocument(kycCase.id, type);
+      await downloadGeneratedKycDocument(kycCase.id, document.id, document.fileName);
+    } catch (requestError: any) {
+      setError(getRequestErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
+    } finally {
+      setGeneratingKey('');
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -63,13 +84,15 @@ export function KycWorkflowPage() {
           <h1 className="text-2xl font-semibold text-slate-950">KYC Workflow</h1>
           <p className="mt-1 text-sm text-slate-500">Client intake cases from inquiry through AML handoff.</p>
         </div>
-        <Link
-          to="/kyc/new"
-          className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-        >
-          <FilePlus2 className="h-4 w-4" />
-          Create KYC Case
-        </Link>
+        {canManageCases ? (
+          <Link
+            to="/kyc/new"
+            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <FilePlus2 className="h-4 w-4" />
+            Create KYC Case
+          </Link>
+        ) : null}
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
@@ -120,24 +143,52 @@ export function KycWorkflowPage() {
                         >
                           <Eye className="h-4 w-4" />
                         </Link>
-                        <Link
-                          to={`/kyc/${kycCase.id}/edit`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
-                          aria-label={`Edit ${kycCase.title}`}
-                          title="Edit"
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </Link>
-                        <button
-                          type="button"
-                          onClick={() => removeCase(kycCase)}
-                          disabled={deletingId === kycCase.id}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          aria-label={`Delete ${kycCase.title}`}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {documentReadyStatuses.includes(kycCase.status) ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => downloadDocument(kycCase, 'docx')}
+                              disabled={generatingKey === `${kycCase.id}-docx`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                              aria-label={`Download DOCX for ${kycCase.title}`}
+                              title="Download DOCX"
+                            >
+                              <FileText className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => downloadDocument(kycCase, 'pdf')}
+                              disabled={generatingKey === `${kycCase.id}-pdf`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                              aria-label={`Download PDF for ${kycCase.title}`}
+                              title="Download PDF"
+                            >
+                              <Download className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : null}
+                        {canManageCases ? (
+                          <>
+                            <Link
+                              to={`/kyc/${kycCase.id}/edit`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+                              aria-label={`Edit ${kycCase.title}`}
+                              title="Edit"
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </Link>
+                            <button
+                              type="button"
+                              onClick={() => removeCase(kycCase)}
+                              disabled={deletingId === kycCase.id}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                              aria-label={`Delete ${kycCase.title}`}
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
