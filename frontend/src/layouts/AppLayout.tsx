@@ -3,6 +3,7 @@ import {
   ClipboardCheck,
   LayoutDashboard,
   Layers,
+  ListChecks,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,8 +20,9 @@ import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake },
-  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.kycPreparation, ...workflowRoles.amlDashboard] },
+  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks] },
   { to: '/aml', label: 'AML Dashboard', icon: ShieldCheck, roles: workflowRoles.amlDashboard },
+  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks },
   { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
   { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
   { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin }

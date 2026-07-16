@@ -2,6 +2,7 @@ import { FileUp, MessageSquare, Save, Send } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { getApiErrorMessage } from '../services/api';
 import {
   addReviewerComment,
   decideMlroReview,
@@ -12,7 +13,7 @@ import {
   startInternalReview,
   submitDmlroReview,
   submitSupervisorReview,
-  uploadSignedKycDocument
+  uploadSignedKycDocumentFile
 } from '../services/kyc-workflow.service';
 import { allowedReviewStages, hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
@@ -50,7 +51,7 @@ export function InternalReviewWorkspacePage() {
   const [error, setError] = useState('');
   const [comment, setComment] = useState('');
   const [confidentialComment, setConfidentialComment] = useState('');
-  const [signedFileName, setSignedFileName] = useState('');
+  const [signedFile, setSignedFile] = useState<File | null>(null);
 
   useEffect(() => {
     load();
@@ -74,7 +75,10 @@ export function InternalReviewWorkspacePage() {
   const stageAccess = allowedReviewStages(user);
   const canUseActiveStage = stageAccess[activeStage];
   const canEdit = canUseActiveStage && !submittedStages.has(activeStage);
-  const canUploadSignedDocuments = hasAnyRole(user, workflowRoles.signedDocuments);
+  const signedUploadStage = getSignedUploadStage(user, activeStage);
+  const canUploadSignedDocuments = Boolean(signedUploadStage);
+  const signedDocumentStageLabel = signedUploadStage === 'DMLRO_SIGNED_KYC' ? 'DMLRO signed KYC' : signedUploadStage === 'MLRO_SIGNED_KYC' ? 'MLRO signed KYC' : 'Final signed KYC';
+  const signedStageSet = new Set(workspace?.signedDocuments?.filter((document: any) => document.activeVersion).map((document: any) => document.reviewStage) || []);
 
   function updateField(key: string, value: string) {
     setForms((current) => ({ ...current, [activeStage]: { ...current[activeStage], [key]: value } }));
@@ -88,7 +92,7 @@ export function InternalReviewWorkspacePage() {
       await load();
       setMessage(success);
     } catch (requestError: any) {
-      setError(requestError.response?.data?.message || 'Unable to complete this review action.');
+      setError(getApiErrorMessage(requestError, 'Unable to complete this review action.'));
     }
   }
 
@@ -122,10 +126,16 @@ export function InternalReviewWorkspacePage() {
   }
 
   async function submitSignedDocument() {
-    if (!id || !signedFileName.trim()) return;
-    const reviewStage = activeStage === 'DMLRO' ? 'DMLRO_SIGNED_KYC' : activeStage === 'MLRO' ? 'MLRO_SIGNED_KYC' : 'FINAL_SIGNED_KYC';
-    await run(() => uploadSignedKycDocument(id, { reviewStage, fileName: signedFileName.trim(), signatureType: 'UPLOADED' }), 'Signed KYC document recorded');
-    setSignedFileName('');
+    if (!id || !signedFile) {
+      setError('Choose a signed KYC document file first.');
+      return;
+    }
+    if (!signedUploadStage) {
+      setError('Your current login cannot upload a signed KYC document.');
+      return;
+    }
+    await run(() => uploadSignedKycDocumentFile(id, { reviewStage: signedUploadStage, file: signedFile }), 'Signed KYC document uploaded');
+    setSignedFile(null);
   }
 
   if (!workspace) return <p className="text-sm text-slate-500">Loading internal review workspace...</p>;
@@ -222,23 +232,48 @@ export function InternalReviewWorkspacePage() {
 
           <section className="rounded-lg border border-slate-200 bg-white p-5">
             <h2 className="text-base font-semibold text-slate-950">Signed KYC Document</h2>
-            <div className="mt-3 flex gap-2">
-              <input
-                disabled={!canUploadSignedDocuments}
-                value={signedFileName}
-                onChange={(event) => setSignedFileName(event.target.value)}
-                placeholder="Signed document file name"
-                className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
-              />
+            <p className="mt-1 text-xs text-slate-500">Current upload type: {signedDocumentStageLabel}</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+              <label className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 ${canUploadSignedDocuments ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
+                <FileUp className="h-4 w-4" />
+                Upload
+                <input
+                  disabled={!canUploadSignedDocuments}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+                  onChange={(event) => {
+                    setSignedFile(event.target.files?.[0] || null);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              <div className="flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm text-slate-600">
+                <span className="truncate">{signedFile?.name || 'No file selected'}</span>
+              </div>
               <button
                 disabled={!canUploadSignedDocuments}
                 onClick={submitSignedDocument}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <FileUp className="h-4 w-4" /> Add
+                <FileUp className="h-4 w-4" /> Save
               </button>
             </div>
             {!canUploadSignedDocuments ? <p className="mt-2 text-xs text-slate-500">Signed document metadata is managed by DMLRO, MLRO, or admin roles.</p> : null}
+            <div className="mt-4 grid gap-2">
+              <SignedStageStatus label="DMLRO signed KYC" done={signedStageSet.has('DMLRO_SIGNED_KYC')} />
+              <SignedStageStatus label="MLRO signed KYC" done={signedStageSet.has('MLRO_SIGNED_KYC')} />
+            </div>
+            {workspace.signedDocuments?.length ? (
+              <div className="mt-4 space-y-2">
+                {workspace.signedDocuments.map((document: any) => (
+                  <div key={document.id} className="rounded-md border border-slate-200 px-3 py-2">
+                    <p className="truncate text-sm font-semibold text-slate-900">{document.fileName}</p>
+                    <p className="text-xs text-slate-500">{document.reviewStage} | Version {document.documentVersion}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
 
           <section className="rounded-lg border border-slate-200 bg-white p-5">
@@ -276,4 +311,25 @@ function Select({ label, value, options, onChange, disabled = false }: { label: 
       </select>
     </label>
   );
+}
+
+function SignedStageStatus({ label, done }: { label: string; done: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2 text-sm">
+      <span>{label}</span>
+      <span className={done ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{done ? 'Done' : 'Pending'}</span>
+    </div>
+  );
+}
+
+function getSignedUploadStage(user: any, activeStage: ReviewStage) {
+  if (hasAnyRole(user, ['DMLRO'])) return 'DMLRO_SIGNED_KYC';
+  if (hasAnyRole(user, ['MLRO'])) return 'MLRO_SIGNED_KYC';
+  if (hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+    if (activeStage === 'DMLRO') return 'DMLRO_SIGNED_KYC';
+    if (activeStage === 'MLRO') return 'MLRO_SIGNED_KYC';
+    return 'FINAL_SIGNED_KYC';
+  }
+
+  return null;
 }

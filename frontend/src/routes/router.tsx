@@ -14,6 +14,7 @@ import { InternalReviewWorkspacePage } from '../pages/InternalReviewWorkspacePag
 import { KycWorkflowPage } from '../pages/KycWorkflowPage';
 import { LoginPage } from '../pages/LoginPage';
 import { ModulesPage } from '../pages/ModulesPage';
+import { ReviewTasksPage } from '../pages/ReviewTasksPage';
 import { SubmitToAmlPage } from '../pages/SubmitToAmlPage';
 import { TenantsPage } from '../pages/TenantsPage';
 import { UploadLegalDocumentsPage } from '../pages/UploadLegalDocumentsPage';
@@ -57,7 +58,7 @@ export const router = createBrowserRouter([
             children: [{ path: '/users', element: <UsersPage /> }]
           },
           {
-            element: <RequireRoles roles={[...workflowRoles.kycPreparation, ...workflowRoles.amlDashboard]} />,
+            element: <RequireRoles roles={[...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
             children: [
               { path: '/kyc-workflow', element: <KycWorkflowPage /> },
               { path: '/kyc/:id', element: <KycCaseDetailsPage /> }
@@ -75,9 +76,13 @@ export const router = createBrowserRouter([
           },
           {
             element: <RequireRoles roles={workflowRoles.amlDashboard} />,
+            children: [{ path: '/aml', element: <AmlDashboardPage /> }]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.reviewTasks} />,
             children: [
               { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> },
-              { path: '/aml', element: <AmlDashboardPage /> }
+              { path: '/review-tasks', element: <ReviewTasksPage /> }
             ]
           }
         ]

@@ -107,8 +107,31 @@ export type AmlNotification = {
   id: string;
   title: string;
   message: string;
+  type?: string;
+  isRead?: boolean;
   createdAt: string;
   kycCase?: KycCase | null;
+};
+
+export type ReviewTask = {
+  id: string;
+  stage: ReviewStage;
+  status: string;
+  createdAt: string;
+  dueAt?: string | null;
+  assignedTo?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+  kycCase: KycCase;
+};
+
+export type ReviewTaskDashboard = {
+  tasks: ReviewTask[];
+  notifications: AmlNotification[];
+  stages: ReviewStage[];
 };
 
 export type KycGeneratedDocument = {
@@ -257,6 +280,10 @@ export function getAmlNotifications() {
   return api.get<AmlNotification[]>('/kyc/aml/notifications').then((response) => response.data);
 }
 
+export function getMyReviewTasks() {
+  return api.get<ReviewTaskDashboard>('/kyc/review/tasks').then((response) => response.data);
+}
+
 export function getInternalReviewWorkspace(caseId: string) {
   return api.get<InternalReviewWorkspace>(`/kyc/${caseId}/internal-reviews`).then((response) => response.data);
 }
@@ -287,6 +314,15 @@ export function addReviewerComment(caseId: string, stage: ReviewStage, payload: 
 
 export function uploadSignedKycDocument(caseId: string, payload: Record<string, any>) {
   return api.post(`/kyc/${caseId}/internal-reviews/signed-documents`, payload).then((response) => response.data);
+}
+
+export function uploadSignedKycDocumentFile(caseId: string, payload: { reviewStage: string; file: File }) {
+  const data = new FormData();
+  data.append('reviewStage', payload.reviewStage);
+  data.append('file', payload.file);
+  return api.post(`/kyc/${caseId}/internal-reviews/signed-documents/upload`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((response) => response.data);
 }
 
 export function getKycForm(caseId: string) {

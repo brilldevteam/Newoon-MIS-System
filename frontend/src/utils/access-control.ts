@@ -28,7 +28,8 @@ export const roleLabels: Record<string, string> = {
 export const workflowRoles = {
   clientIntake: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   kycPreparation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
-  amlDashboard: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
+  amlDashboard: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
+  reviewTasks: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
   supervisorReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   dmlroReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO'],
   mlroReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'MLRO'],
@@ -48,6 +49,7 @@ export function roleList(user: AuthUser | null | undefined) {
 
 export function defaultRouteForUser(user: AuthUser | null | undefined) {
   if (hasAnyRole(user, workflowRoles.clientIntake)) return '/dashboard';
+  if (hasAnyRole(user, workflowRoles.reviewTasks)) return '/review-tasks';
   if (hasAnyRole(user, workflowRoles.amlDashboard)) return '/aml';
   return '/dashboard';
 }

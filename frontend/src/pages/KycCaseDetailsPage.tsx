@@ -106,7 +106,7 @@ export function KycCaseDetailsPage() {
 
   const currentStep = steps.indexOf(kycCase.status);
   const canSubmitToAml = kycCase.legalDocuments.length > 0 && kycCase.status !== 'SUBMITTED_TO_AML' && kycCase.status !== 'AML_REVIEW_STARTED';
-  const canOpenInternalReview = hasAnyRole(user, workflowRoles.amlDashboard);
+  const canOpenInternalReview = hasAnyRole(user, workflowRoles.reviewTasks);
 
   return (
     <div className="space-y-6">

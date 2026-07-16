@@ -37,6 +37,12 @@ export class KycController {
     return this.kycService.getPendingAmlNotifications(user);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get('review/tasks')
+  getMyReviewTasks(@CurrentUser() user: RequestUser) {
+    return this.kycService.getMyReviewTasks(user);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.findOne(user, id);
@@ -260,6 +266,18 @@ export class KycController {
   @Post(':id/internal-reviews/signed-documents')
   uploadSignedKycDocument(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.uploadSignedKycDocument(user, id, dto);
+  }
+
+  @Roles('DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/signed-documents/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadSignedKycDocumentFile(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('reviewStage') reviewStage: string,
+    @UploadedFile() file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    return this.kycService.uploadSignedKycDocumentFile(user, id, reviewStage, file);
   }
 
   @Get(':id/activation-readiness')

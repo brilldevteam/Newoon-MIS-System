@@ -558,13 +558,16 @@ model KycInternalReview {
   dueDiligenceType         DueDiligenceType?
   amlName                  String?
   amlSignatureFileName     String?
+  amlSignatureDataUrl      String?
   amlDate                  DateTime?
   dmlroName                String?
   dmlroSignatureFileName   String?
+  dmlroSignatureDataUrl    String?
   dmlroDate                DateTime?
   dmlroComments            String?
   mlroName                 String?
   mlroSignatureFileName    String?
+  mlroSignatureDataUrl     String?
   mlroDate                 DateTime?
   mlroComments             String?
   createdBy                String
