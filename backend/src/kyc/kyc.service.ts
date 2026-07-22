@@ -550,6 +550,7 @@ export class KycService {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, dto);
       const targetStatus = this.mlroDecisionStatus(decision);
       await this.recordStatus(tx, kycCase, user, targetStatus, this.mlroStatusNote(decision));
+      await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
         data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
@@ -628,6 +629,7 @@ export class KycService {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.SEF, dto);
       const targetStatus = decision === ReviewDecision.REJECT ? KycCaseStatus.SEF_REJECTED : KycCaseStatus.SEF_APPROVED;
       await this.recordStatus(tx, kycCase, user, targetStatus, `SEF decision: ${decision}`);
+      await this.clearReviewTaskStatus(tx, id, ReviewStage.SEF, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SEF, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
         data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
@@ -1641,42 +1643,63 @@ export class KycService {
     });
   }
 
+  private clearReviewTaskStatus(tx: Prisma.TransactionClient, kycCaseId: string, stage: ReviewStage, status: ReviewTaskStatus) {
+    return tx.internalReviewTask.deleteMany({
+      where: { kycCaseId, stage, status }
+    });
+  }
+
   private async submitReviewAndRoute(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>, nextStage: ReviewStage) {
     const kycCase = await this.findOne(user, id);
     await this.assertPreviousStageComplete(id, stage);
     await this.assertEditableReview(id, stage);
 
-    return this.prisma.$transaction(async (tx) => {
-      const saved = await this.lockReviewSubmission(tx, user, kycCase, stage, dto);
-      await tx.internalReviewTask.updateMany({
-        where: { tenantId: kycCase.tenantId, kycCaseId: id, stage, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
-        data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
-      });
-      await tx.internalReviewTask.upsert({
-        where: { kycCaseId_stage_status: { kycCaseId: id, stage: nextStage, status: ReviewTaskStatus.PENDING } },
-        update: { updatedBy: user.id },
-        create: {
-          tenantId: kycCase.tenantId,
-          kycCaseId: id,
-          stage: nextStage,
-          createdBy: user.id,
-          updatedBy: user.id
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const saved = await this.lockReviewSubmission(tx, user, kycCase, stage, dto);
+        await this.clearReviewTaskStatus(tx, id, stage, ReviewTaskStatus.COMPLETED);
+        await tx.internalReviewTask.updateMany({
+          where: { tenantId: kycCase.tenantId, kycCaseId: id, stage, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+          data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
+        });
+        if (nextStage === ReviewStage.MLRO) {
+          await tx.internalReviewSubmission.updateMany({
+            where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO },
+            data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id }
+          });
         }
+        await tx.internalReviewTask.upsert({
+          where: { kycCaseId_stage_status: { kycCaseId: id, stage: nextStage, status: ReviewTaskStatus.PENDING } },
+          update: { updatedBy: user.id },
+          create: {
+            tenantId: kycCase.tenantId,
+            kycCaseId: id,
+            stage: nextStage,
+            createdBy: user.id,
+            updatedBy: user.id
+          }
+        });
+
+        await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
+        await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);
+        await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'REVIEW_SUBMITTED', stage, routedTo: nextStage });
+        await this.createNotification(
+          tx,
+          kycCase,
+          nextStage === ReviewStage.DMLRO ? NotificationType.DMLRO_TASK_ASSIGNED : NotificationType.MLRO_TASK_ASSIGNED,
+          `${this.stageLabel(nextStage)} task assigned`,
+          `${kycCase.title} is ready for ${this.stageLabel(nextStage)} review.`
+        );
+
+        return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
       });
-
-      await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
-      await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);
-      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'REVIEW_SUBMITTED', stage, routedTo: nextStage });
-      await this.createNotification(
-        tx,
-        kycCase,
-        nextStage === ReviewStage.DMLRO ? NotificationType.DMLRO_TASK_ASSIGNED : NotificationType.MLRO_TASK_ASSIGNED,
-        `${this.stageLabel(nextStage)} task assigned`,
-        `${kycCase.title} is ready for ${this.stageLabel(nextStage)} review.`
-      );
-
-      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      if (stage === ReviewStage.DMLRO && nextStage === ReviewStage.MLRO) {
+        throw new InternalServerErrorException('Unable to resubmit this KYC file to MLRO. The review queue was refreshed; please try again.');
+      }
+      throw error;
+    }
   }
 
   private async returnDmlroReviewToSupervisor(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -1694,6 +1717,7 @@ export class KycService {
 
     return this.prisma.$transaction(async (tx) => {
       const saved = await this.saveReturnedReviewSubmission(tx, user, kycCase, dto);
+      await this.clearReviewTaskStatus(tx, id, ReviewStage.DMLRO, ReviewTaskStatus.RETURNED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.DMLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
         data: { status: ReviewTaskStatus.RETURNED, completedAt: new Date(), updatedBy: user.id }
