@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from docx import Document
+from docx.shared import Inches
 from docx.oxml import OxmlElement
 from docx.text.paragraph import Paragraph
 
@@ -20,6 +21,11 @@ def insert_paragraph_after(paragraph, text):
     wrapped = Paragraph(new_paragraph, paragraph._parent)
     wrapped.text = text
     return wrapped
+
+
+def remove_rows_after(table, row_index):
+    for row in list(table.rows[row_index + 1 :]):
+        table._tbl.remove(row._tr)
 
 
 def main():
@@ -93,6 +99,7 @@ def main():
     ]
     for col, placeholder in enumerate(manager_placeholders):
         set_cell(managers, 2, col, placeholder)
+    remove_rows_after(managers, 2)
 
     document.paragraphs[31].text = "Yes, if yes, please provide full details: {pepQuestion}"
     document.paragraphs[32].text = "{pepDetails}"
@@ -105,22 +112,23 @@ def main():
     document.paragraphs[51].text = "No {dualCitizenshipNo}"
 
     contact = document.tables[5]
-    contact_labels = [
-        "Full name",
-        "Position / Job title",
-        "Nationality",
-        "QID / Passport Number",
-        "Mobile Number",
-        "Email",
+    while len(contact.columns) < 4:
+        contact.add_column(Inches(1.5))
+    contact_widths = [Inches(1.45), Inches(1.75), Inches(1.45), Inches(1.75)]
+    for row in contact.rows:
+        for col_index, width in enumerate(contact_widths):
+            row.cells[col_index].width = width
+    contact_rows = [
+        ("Full name", "{communicationFullName}", "Position / Job title", "{communicationPosition}"),
+        ("Nationality", "{communicationNationality}", "QID / Passport Number", "{communicationIdentityNumber}"),
+        ("Mobile Number", "{communicationMobile}", "Email", "{communicationEmail}"),
     ]
-    for row, label in enumerate(contact_labels):
-        set_cell(contact, row, 0, label)
-    set_cell(contact, 0, 1, "{communicationFullName}")
-    set_cell(contact, 1, 1, "{communicationPosition}")
-    set_cell(contact, 2, 1, "{communicationNationality}")
-    set_cell(contact, 3, 1, "{communicationIdentityNumber}")
-    set_cell(contact, 4, 1, "{communicationMobile}")
-    set_cell(contact, 5, 1, "{communicationEmail}")
+    for row_index, row_values in enumerate(contact_rows):
+        for col_index, value in enumerate(row_values):
+            set_cell(contact, row_index, col_index, value)
+    for row_index in range(3, len(contact.rows)):
+        for col_index in range(len(contact.columns)):
+            set_cell(contact, row_index, col_index, "")
 
     checklist_indexes = list(range(57, 66))
     checklist_placeholders = [
@@ -162,13 +170,33 @@ def main():
     set_cell(dmlro, 1, 1, "{dmlroName}")
     set_cell(dmlro, 2, 1, "{dmlroSignatureFileName}")
     set_cell(dmlro, 3, 1, "{dmlroDate}")
-    set_cell(dmlro, 4, 1, "{dmlroComments}")
+    set_cell(dmlro, 4, 0, "Decision:")
+    set_cell(dmlro, 4, 1, "{dmlroDecision}")
+    for label, placeholder in [
+        ("Conditions:", "{dmlroConditions}"),
+        ("Reason / additional information:", "{dmlroReason}"),
+        ("Comments:", "{dmlroComments}"),
+    ]:
+        row = dmlro.add_row()
+        row.cells[0].text = label
+        row.cells[1].text = placeholder
 
     mlro = document.tables[10]
     set_cell(mlro, 1, 1, "{mlroName}")
     set_cell(mlro, 2, 1, "{mlroSignatureFileName}")
     set_cell(mlro, 3, 1, "{mlroDate}")
-    set_cell(mlro, 4, 1, "{mlroComments}")
+    set_cell(mlro, 4, 0, "Final decision:")
+    set_cell(mlro, 4, 1, "{mlroDecision}")
+    for label, placeholder in [
+        ("Final risk classification:", "{mlroFinalRiskClassification}"),
+        ("Risk reason category:", "{mlroRiskReasonCategory}"),
+        ("Risk explanation:", "{mlroRiskExplanation}"),
+        ("Conditions:", "{mlroConditions}"),
+        ("Comments:", "{mlroComments}"),
+    ]:
+        row = mlro.add_row()
+        row.cells[0].text = label
+        row.cells[1].text = placeholder
 
     document.save(OUTPUT)
     print(OUTPUT)

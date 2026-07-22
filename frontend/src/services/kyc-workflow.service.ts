@@ -21,6 +21,10 @@ export type KycCaseStatus =
   | 'MLRO_APPROVED'
   | 'MLRO_APPROVED_WITH_CONDITIONS'
   | 'MLRO_REJECTED'
+  | 'SEF_DECISION_PENDING'
+  | 'SEF_DECISION_IN_PROGRESS'
+  | 'SEF_APPROVED'
+  | 'SEF_REJECTED'
   | 'FINAL_SIGNATURES_PENDING'
   | 'FINAL_DOCUMENTS_PENDING'
   | 'KYC_FINAL_APPROVED'
@@ -29,7 +33,7 @@ export type KycCaseStatus =
   | 'CLIENT_REJECTED'
   | 'CLIENT_ON_HOLD';
 
-export type ReviewStage = 'SUPERVISOR' | 'DMLRO' | 'MLRO';
+export type ReviewStage = 'SUPERVISOR' | 'DMLRO' | 'MLRO' | 'SEF';
 
 export type ProposalStatus = 'NOT_REQUIRED' | 'REQUIRED' | 'SENT' | 'ACCEPTED' | 'REJECTED';
 
@@ -320,6 +324,10 @@ export function submitDmlroReview(caseId: string, payload: Record<string, any>) 
 
 export function decideMlroReview(caseId: string, payload: Record<string, any>) {
   return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/mlro/decision`, payload).then((response) => response.data);
+}
+
+export function decideSefReview(caseId: string, payload: Record<string, any>) {
+  return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/sef/decision`, payload).then((response) => response.data);
 }
 
 export function addReviewerComment(caseId: string, stage: ReviewStage, payload: Record<string, any>) {

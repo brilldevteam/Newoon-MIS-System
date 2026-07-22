@@ -79,7 +79,7 @@ export const router = createBrowserRouter([
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.userAdmin} />,
+            element: <RequireRoles roles={workflowRoles.reviewTasks} />,
             children: [
               { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> }
             ]

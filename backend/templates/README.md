@@ -64,10 +64,18 @@ Supported placeholders:
 {dmlroName}
 {dmlroSignatureFileName}
 {dmlroDate}
+{dmlroDecision}
+{dmlroConditions}
+{dmlroReason}
 {dmlroComments}
 {mlroName}
 {mlroSignatureFileName}
 {mlroDate}
+{mlroDecision}
+{mlroFinalRiskClassification}
+{mlroRiskReasonCategory}
+{mlroRiskExplanation}
+{mlroConditions}
 {mlroComments}
 ```
 

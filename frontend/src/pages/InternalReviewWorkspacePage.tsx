@@ -6,6 +6,7 @@ import { getApiErrorMessage } from '../services/api';
 import {
   addReviewerComment,
   decideMlroReview,
+  decideSefReview,
   getInternalReviewWorkspace,
   InternalReviewWorkspace,
   ReviewStage,
@@ -20,7 +21,8 @@ import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 const stages: Array<{ id: ReviewStage; title: string; submitLabel: string }> = [
   { id: 'DMLRO', title: 'DMLRO Review', submitLabel: 'Submit to MLRO' },
-  { id: 'MLRO', title: 'MLRO Final Review', submitLabel: 'Submit MLRO Decision' }
+  { id: 'MLRO', title: 'MLRO Final Review', submitLabel: 'Submit MLRO Decision' },
+  { id: 'SEF', title: 'SEF Management Decision', submitLabel: 'Submit SEF Decision' }
 ];
 
 const emptyForm = {
@@ -36,6 +38,46 @@ const emptyForm = {
   decision: 'APPROVE'
 };
 
+function decisionSuccessMessage(stage: ReviewStage, decision: string) {
+  if (stage === 'DMLRO') {
+    if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'DMLRO requested additional information from AML Supervisor.';
+    if (decision === 'RETURN_TO_SUPERVISOR') return 'KYC file returned to AML Supervisor.';
+    if (decision === 'APPROVE_WITH_CONDITIONS') return 'DMLRO approval with conditions submitted to MLRO.';
+    return 'DMLRO review submitted to MLRO.';
+  }
+  if (stage === 'MLRO') {
+    if (decision === 'RETURN_TO_DMLRO') return 'KYC file sent back to DMLRO.';
+    if (decision === 'SEND_TO_SEF') return 'KYC file sent to SEF for management decision.';
+    if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Additional information requested by MLRO.';
+    if (decision === 'REJECT') return 'MLRO rejection submitted.';
+    if (decision === 'APPROVE_WITH_CONDITIONS') return 'MLRO approval with conditions submitted.';
+    return 'MLRO final approval submitted.';
+  }
+  if (stage === 'SEF') {
+    if (decision === 'REJECT') return 'SEF rejection submitted.';
+    if (decision === 'APPROVE_WITH_CONDITIONS') return 'SEF approval with conditions submitted.';
+    return 'SEF management approval submitted.';
+  }
+  return 'Review action completed.';
+}
+
+function decisionErrorMessage(stage: ReviewStage, decision: string) {
+  if (stage === 'DMLRO') {
+    if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Unable to request additional information from AML Supervisor.';
+    if (decision === 'RETURN_TO_SUPERVISOR') return 'Unable to return KYC file to AML Supervisor.';
+    return 'Unable to submit DMLRO review.';
+  }
+  if (stage === 'MLRO') {
+    if (decision === 'RETURN_TO_DMLRO') return 'Unable to send KYC file back to DMLRO.';
+    if (decision === 'SEND_TO_SEF') return 'Unable to send KYC file to SEF.';
+    if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Unable to request additional information.';
+    if (decision === 'REJECT') return 'Unable to submit MLRO rejection.';
+    return 'Unable to submit MLRO final decision.';
+  }
+  if (stage === 'SEF') return 'Unable to submit SEF management decision.';
+  return 'Unable to complete this review action.';
+}
+
 export function InternalReviewWorkspacePage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -44,7 +86,8 @@ export function InternalReviewWorkspacePage() {
   const [forms, setForms] = useState<Record<ReviewStage, Record<string, string>>>({
     SUPERVISOR: { ...emptyForm },
     DMLRO: { ...emptyForm },
-    MLRO: { ...emptyForm }
+    MLRO: { ...emptyForm },
+    SEF: { ...emptyForm }
   });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -74,16 +117,24 @@ export function InternalReviewWorkspacePage() {
   const stageAccess = allowedReviewStages(user);
   const canUseActiveStage = stageAccess[activeStage];
   const canEdit = canUseActiveStage && !submittedStages.has(activeStage);
+  const canOpenKycPart1 = hasAnyRole(user, workflowRoles.kycFormBuilder);
   const signedUploadStage = getSignedUploadStage(user, activeStage);
   const canUploadSignedDocuments = Boolean(signedUploadStage);
   const signedDocumentStageLabel = signedUploadStage === 'DMLRO_SIGNED_KYC' ? 'DMLRO signed KYC' : signedUploadStage === 'MLRO_SIGNED_KYC' ? 'MLRO signed KYC' : 'Final signed KYC';
   const signedStageSet = new Set(workspace?.signedDocuments?.filter((document: any) => document.activeVersion).map((document: any) => document.reviewStage) || []);
 
+  useEffect(() => {
+    const firstAllowedStage = stages.find((stage) => stageAccess[stage.id])?.id;
+    if (firstAllowedStage && !stageAccess[activeStage]) {
+      setActiveStage(firstAllowedStage);
+    }
+  }, [activeStage, stageAccess.DMLRO, stageAccess.MLRO, stageAccess.SEF]);
+
   function updateField(key: string, value: string) {
     setForms((current) => ({ ...current, [activeStage]: { ...current[activeStage], [key]: value } }));
   }
 
-  async function run(action: () => Promise<unknown>, success: string) {
+  async function run(action: () => Promise<unknown>, success: string, fallbackError = 'Unable to complete this review action.') {
     setError('');
     setMessage('');
     try {
@@ -91,7 +142,7 @@ export function InternalReviewWorkspacePage() {
       await load();
       setMessage(success);
     } catch (requestError: any) {
-      setError(getApiErrorMessage(requestError, 'Unable to complete this review action.'));
+      setError(getApiErrorMessage(requestError, fallbackError));
     }
   }
 
@@ -104,11 +155,13 @@ export function InternalReviewWorkspacePage() {
   async function submitStage() {
     if (!id) return;
     if (activeStage === 'SUPERVISOR') {
-      await run(() => submitSupervisorReview(id, { data: activeForm, formalComments: activeForm.comments }), 'Supervisor review submitted to DMLRO');
+      await run(() => submitSupervisorReview(id, { data: activeForm, formalComments: activeForm.comments }), 'Supervisor review submitted to DMLRO', 'Unable to submit supervisor review.');
     } else if (activeStage === 'DMLRO') {
-      await run(() => submitDmlroReview(id, { data: activeForm, formalComments: activeForm.comments }), 'DMLRO review submitted to MLRO');
+      await run(() => submitDmlroReview(id, { ...activeForm, data: activeForm, formalComments: activeForm.comments }), decisionSuccessMessage(activeStage, activeForm.decision), decisionErrorMessage(activeStage, activeForm.decision));
+    } else if (activeStage === 'MLRO') {
+      await run(() => decideMlroReview(id, { ...activeForm, data: activeForm, formalComments: activeForm.comments }), decisionSuccessMessage(activeStage, activeForm.decision), decisionErrorMessage(activeStage, activeForm.decision));
     } else {
-      await run(() => decideMlroReview(id, { ...activeForm, data: activeForm, formalComments: activeForm.comments }), 'MLRO decision submitted');
+      await run(() => decideSefReview(id, { ...activeForm, data: activeForm, formalComments: activeForm.comments }), decisionSuccessMessage(activeStage, activeForm.decision), decisionErrorMessage(activeStage, activeForm.decision));
     }
   }
 
@@ -147,13 +200,15 @@ export function InternalReviewWorkspacePage() {
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Internal Review Workspace</h1>
           <p className="mt-1 text-sm text-slate-500">{workspace.kycCase.title} | {kycStatusLabel(workspace.kycCase.status)}</p>
         </div>
-        <Link
-          to={`/kyc/${workspace.kycCase.id}/form`}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <FileText className="h-4 w-4" />
-          Open KYC Part 1
-        </Link>
+        {canOpenKycPart1 ? (
+          <Link
+            to={`/kyc/${workspace.kycCase.id}/form`}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <FileText className="h-4 w-4" />
+            Open KYC Part 1
+          </Link>
+        ) : null}
       </div>
 
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
@@ -161,7 +216,7 @@ export function InternalReviewWorkspacePage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-base font-semibold text-slate-950">Approval Sequence</h2>
-        <p className="mt-1 text-sm text-slate-500">Logged in as {roleList(user)}. DMLRO and MLRO update their own approval stage and signature details.</p>
+        <p className="mt-1 text-sm text-slate-500">Logged in as {roleList(user)}. DMLRO, MLRO, and SEF update their assigned decision stage.</p>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
           {stages.map((stage) => (
             <button
@@ -202,10 +257,16 @@ export function InternalReviewWorkspacePage() {
             <Field label="Review date" type="date" value={activeForm.reviewDate} disabled={!canEdit} onChange={(value) => updateField('reviewDate', value)} />
             {activeStage === 'MLRO' ? (
               <>
-                <Select label="Final decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO']} onChange={(value) => updateField('decision', value)} />
+                <Select label="Final decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF']} onChange={(value) => updateField('decision', value)} />
                 <Select label="Final risk classification" value={activeForm.finalRiskClassification} disabled={!canEdit} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateField('finalRiskClassification', value)} />
                 <Select label="Risk reason category" value={activeForm.riskReasonCategory} disabled={!canEdit} options={['PROFESSIONAL_JUDGEMENT', 'PEP_IDENTIFIED', 'SANCTIONS_FINDING', 'ADVERSE_MEDIA', 'OWNERSHIP_COMPLEXITY', 'COUNTRY_RISK', 'INDUSTRY_RISK', 'SOURCE_OF_FUNDS_CONCERN', 'ENHANCED_MONITORING_REQUIRED', 'OTHER']} onChange={(value) => updateField('riskReasonCategory', value)} />
                 <Field label="Risk explanation" value={activeForm.riskExplanation} disabled={!canEdit} onChange={(value) => updateField('riskExplanation', value)} textarea />
+              </>
+            ) : null}
+            {activeStage === 'SEF' ? (
+              <>
+                <Select label="Management decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT']} onChange={(value) => updateField('decision', value)} />
+                <Field label="Management decision rationale" value={activeForm.riskExplanation} disabled={!canEdit} onChange={(value) => updateField('riskExplanation', value)} textarea />
               </>
             ) : null}
             <Field label="Recommendation / comments" value={activeForm.comments} disabled={!canEdit} onChange={(value) => updateField('comments', value)} textarea wide />

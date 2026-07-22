@@ -37,7 +37,7 @@ export class KycController {
     return this.kycService.getPendingAmlNotifications(user);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('review/tasks')
   getMyReviewTasks(@CurrentUser() user: RequestUser) {
     return this.kycService.getMyReviewTasks(user);
@@ -230,13 +230,13 @@ export class KycController {
     return this.kycService.getInternalReviewWorkspace(user, id);
   }
 
-  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/internal-reviews/:stage/start')
   startInternalReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('stage') stage: ReviewStage) {
     return this.kycService.startReviewStage(user, id, stage);
   }
 
-  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/internal-reviews/:stage/draft')
   saveInternalReviewDraft(
     @CurrentUser() user: RequestUser,
@@ -265,7 +265,13 @@ export class KycController {
     return this.kycService.decideMlroReview(user, id, dto);
   }
 
-  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/internal-reviews/sef/decision')
+  decideSefReview(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.decideSefReview(user, id, dto);
+  }
+
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/internal-reviews/:stage/comments')
   addReviewerComment(
     @CurrentUser() user: RequestUser,

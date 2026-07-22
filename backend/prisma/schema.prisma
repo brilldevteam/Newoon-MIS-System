@@ -109,6 +109,10 @@ enum KycCaseStatus {
   MLRO_APPROVED
   MLRO_APPROVED_WITH_CONDITIONS
   MLRO_REJECTED
+  SEF_DECISION_PENDING
+  SEF_DECISION_IN_PROGRESS
+  SEF_APPROVED
+  SEF_REJECTED
   FINAL_SIGNATURES_PENDING
   FINAL_DOCUMENTS_PENDING
   KYC_FINAL_APPROVED
@@ -145,6 +149,8 @@ enum NotificationType {
   MLRO_APPROVAL_COMPLETED
   MLRO_APPROVAL_WITH_CONDITIONS
   MLRO_REJECTION
+  SEF_TASK_ASSIGNED
+  SEF_DECISION_COMPLETED
   CLIENT_READY_FOR_ACTIVATION
   CLIENT_ACTIVATED
   GENERAL
@@ -181,6 +187,7 @@ enum ReviewStage {
   SUPERVISOR
   DMLRO
   MLRO
+  SEF
 }
 
 enum ReviewTaskStatus {
@@ -206,6 +213,7 @@ enum ReviewDecision {
   REQUEST_ADDITIONAL_INFORMATION
   RETURN_TO_SUPERVISOR
   RETURN_TO_DMLRO
+  SEND_TO_SEF
 }
 
 enum RiskOverrideReason {
@@ -564,11 +572,19 @@ model KycInternalReview {
   dmlroSignatureFileName   String?
   dmlroSignatureDataUrl    String?
   dmlroDate                DateTime?
+  dmlroDecision            ReviewDecision?
+  dmlroConditions          String?
+  dmlroReason              String?
   dmlroComments            String?
   mlroName                 String?
   mlroSignatureFileName    String?
   mlroSignatureDataUrl     String?
   mlroDate                 DateTime?
+  mlroDecision             ReviewDecision?
+  mlroFinalRiskClassification RiskClassification?
+  mlroRiskReasonCategory   RiskOverrideReason?
+  mlroRiskExplanation      String?
+  mlroConditions           String?
   mlroComments             String?
   createdBy                String
   updatedBy                String

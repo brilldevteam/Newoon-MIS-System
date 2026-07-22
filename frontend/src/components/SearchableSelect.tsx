@@ -64,6 +64,7 @@ type SearchableSelectProps = {
   allowOther?: boolean;
   otherValue?: string;
   onOtherChange?: (value: string) => void;
+  optionLabels?: Record<string, string>;
 };
 
 export function SearchableSelect({
@@ -75,7 +76,8 @@ export function SearchableSelect({
   wide = false,
   allowOther = false,
   otherValue = '',
-  onOtherChange
+  onOtherChange,
+  optionLabels = {}
 }: SearchableSelectProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -84,8 +86,8 @@ export function SearchableSelect({
   const normalizedOptions = useMemo(() => optionsWithOther(options, allowOther), [options, allowOther]);
   const filteredOptions = useMemo(() => {
     const search = query.trim().toLowerCase();
-    return search ? normalizedOptions.filter((option) => option.toLowerCase().includes(search)) : normalizedOptions;
-  }, [normalizedOptions, query]);
+    return search ? normalizedOptions.filter((option) => `${option} ${optionLabels[option] || ''}`.toLowerCase().includes(search)) : normalizedOptions;
+  }, [normalizedOptions, optionLabels, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -131,7 +133,7 @@ export function SearchableSelect({
         }}
         className="mt-1 flex w-full items-center justify-between rounded-md border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-900"
       >
-        <span className={value ? '' : 'text-slate-400'}>{resolveOtherValue(value, otherValue) || placeholder}</span>
+        <span className={value ? '' : 'text-slate-400'}>{value === 'Other' ? resolveOtherValue(value, otherValue) : optionLabels[value] || resolveOtherValue(value, otherValue) || placeholder}</span>
         <ChevronDown className="h-4 w-4 text-slate-500" />
       </button>
       {open
@@ -165,7 +167,7 @@ export function SearchableSelect({
                           selected ? 'bg-brand-50 text-brand-900' : 'text-slate-700 hover:bg-slate-50'
                         }`}
                       >
-                        <span>{option || placeholder}</span>
+                        <span>{option ? optionLabels[option] || option : placeholder}</span>
                         {selected ? <Check className="h-4 w-4 text-brand-700" /> : null}
                       </button>
                     );
