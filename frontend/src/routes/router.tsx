@@ -74,9 +74,12 @@ export const router = createBrowserRouter([
             element: <RequireRoles roles={workflowRoles.kycFormBuilder} />,
             children: [
               { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
-              { path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> },
               { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
             ]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.documentUpload} />,
+            children: [{ path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> }]
           },
           {
             element: <RequireRoles roles={workflowRoles.reviewTasks} />,

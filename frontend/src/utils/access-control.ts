@@ -28,6 +28,8 @@ export const roleLabels: Record<string, string> = {
 export const workflowRoles = {
   clientIntake: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   caseCreation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
+  documentUpload: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR'],
+  documentDelete: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   kycPreparation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   kycFormBuilder: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
   amlDashboard: [],
