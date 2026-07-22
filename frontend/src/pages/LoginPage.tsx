@@ -8,7 +8,8 @@ const testLogins = [
   { label: 'Operations', email: 'operations@newoon.com', note: 'Clients, KYC preparation, submit to AML' },
   { label: 'AML Supervisor', email: 'aml.supervisor@newoon.com', note: 'Supervisor review stage' },
   { label: 'DMLRO', email: 'dmlro@newoon.com', note: 'DMLRO review stage' },
-  { label: 'MLRO', email: 'mlro@newoon.com', note: 'Final MLRO decision' }
+  { label: 'MLRO', email: 'mlro@newoon.com', note: 'Final MLRO decision' },
+  { label: 'SEF', email: 'sef@newoon.com', note: 'Management decision for high-risk files' }
 ];
 
 export function LoginPage() {

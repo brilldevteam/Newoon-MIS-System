@@ -486,7 +486,54 @@ const positionOptions = [
   'Compliance Officer'
 ];
 
-const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
+const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'];
+const dmlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'];
+const dmlroDecisionLabels: Record<string, string> = {
+  APPROVE: 'Send to MLRO',
+  APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+  REQUEST_ADDITIONAL_INFORMATION: 'Request additional information from AML Supervisor',
+  RETURN_TO_SUPERVISOR: 'Return to AML Supervisor'
+};
+const mlroDecisionLabels: Record<string, string> = {
+  APPROVE: 'Approve',
+  APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+  REJECT: 'Reject',
+  REQUEST_ADDITIONAL_INFORMATION: 'Request additional information',
+  RETURN_TO_DMLRO: 'Return to DMLRO',
+  SEND_TO_SEF: 'Send to SEF for management decision'
+};
+
+function dmlroDecisionSuccessMessage(decision: string) {
+  if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'DMLRO requested additional information from AML Supervisor.';
+  if (decision === 'RETURN_TO_SUPERVISOR') return 'KYC file returned to AML Supervisor.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'DMLRO approval with conditions submitted to MLRO.';
+  return 'DMLRO review submitted to MLRO.';
+}
+
+function dmlroDecisionErrorMessage(decision: string) {
+  if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Unable to request additional information from AML Supervisor.';
+  if (decision === 'RETURN_TO_SUPERVISOR') return 'Unable to return KYC file to AML Supervisor.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit DMLRO approval with conditions.';
+  return 'Unable to submit DMLRO review to MLRO.';
+}
+
+function mlroDecisionSuccessMessage(decision: string) {
+  if (decision === 'RETURN_TO_DMLRO') return 'KYC file sent back to DMLRO.';
+  if (decision === 'SEND_TO_SEF') return 'KYC file sent to SEF for management decision.';
+  if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Additional information requested by MLRO.';
+  if (decision === 'REJECT') return 'MLRO rejection submitted.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'MLRO approval with conditions submitted.';
+  return 'MLRO final approval submitted.';
+}
+
+function mlroDecisionErrorMessage(decision: string) {
+  if (decision === 'RETURN_TO_DMLRO') return 'Unable to send KYC file back to DMLRO.';
+  if (decision === 'SEND_TO_SEF') return 'Unable to send KYC file to SEF.';
+  if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'Unable to request additional information.';
+  if (decision === 'REJECT') return 'Unable to submit MLRO rejection.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit MLRO approval with conditions.';
+  return 'Unable to submit MLRO final approval.';
+}
 const riskClassificationOptions = ['', 'LOW', 'MEDIUM', 'HIGH'];
 const riskReasonCategoryOptions = [
   '',
@@ -533,6 +580,7 @@ export function KycFormEditorPage() {
   const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [form, setForm] = useState<KycFormData>(emptyForm);
+  const formRef = useRef<KycFormData>(emptyForm);
   const [activeSection, setActiveSection] = useState<SectionKey>('sectionA');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -541,8 +589,10 @@ export function KycFormEditorPage() {
   useEffect(() => {
     if (!id) return;
     Promise.all([getKycCase(id), getKycForm(id)]).then(([caseData, formData]) => {
+      const normalized = normalizeForm(formData);
       setKycCase(caseData);
-      setForm(normalizeForm(formData));
+      formRef.current = normalized;
+      setForm(normalized);
     });
   }, [id]);
 
@@ -565,7 +615,11 @@ export function KycFormEditorPage() {
   }, [activeSection, visibleSections]);
 
   function setSection(section: SectionKey, value: Record<string, any>) {
-    setForm((current) => ({ ...current, [section]: value }));
+    setForm((current) => {
+      const next = { ...current, [section]: value };
+      formRef.current = next;
+      return next;
+    });
   }
 
   async function save(section: SectionKey) {
@@ -576,15 +630,18 @@ export function KycFormEditorPage() {
     const endpoint = sections.find((item) => item.key === section)?.id;
     if (!endpoint) return;
 
+    const currentForm = formRef.current;
     const payload =
       section === 'sectionB'
-        ? { ...form.sectionB, totalOwnershipPercentage: totalOwnership }
+        ? { ...currentForm.sectionB, totalOwnershipPercentage: totalOwnership }
         : section === 'sectionH'
-          ? { ...(form.sectionH || {}), reviewPart: sectionHMode }
-          : (form[section] as Record<string, any>);
+          ? { ...(currentForm.sectionH || {}), reviewPart: sectionHMode }
+          : (currentForm[section] as Record<string, any>);
     try {
       const updated = await saveKycFormSection(id, endpoint, payload);
-      setForm(normalizeForm(updated));
+      const normalized = normalizeForm(updated);
+      formRef.current = normalized;
+      setForm(normalized);
       setMessage('Draft saved');
       return normalizeForm(updated);
     } catch (requestError: any) {
@@ -605,7 +662,9 @@ export function KycFormEditorPage() {
       if (!saved) return;
       const document = await generateKycDocument(id, type);
       const updated = await getKycForm(id);
-      setForm(normalizeForm(updated));
+      const normalized = normalizeForm(updated);
+      formRef.current = normalized;
+      setForm(normalized);
       await downloadGeneratedKycDocument(id, document.id, document.fileName);
       setMessage(`${type.toUpperCase()} generated and downloaded`);
     } catch (requestError: any) {
@@ -618,8 +677,15 @@ export function KycFormEditorPage() {
   async function submitDmlroFromKycForm() {
     if (!id) return;
     const sectionH = form.sectionH || {};
+    const decision = sectionH.dmlroDecision || 'APPROVE';
+    const reason = sectionH.dmlroReason || sectionH.dmlroComments || '';
+    const conditions = sectionH.dmlroConditions || '';
     if (!sectionH.dmlroName || !sectionH.dmlroDate || (!sectionH.dmlroSignatureDataUrl && !sectionH.dmlroSignatureFileName)) {
-      setError('Complete the DMLRO name, date, and signature before submitting to MLRO.');
+      setError('Complete the DMLRO name, date, and signature before submitting the DMLRO decision.');
+      return;
+    }
+    if (['APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'].includes(decision) && !reason && !conditions) {
+      setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
 
@@ -631,20 +697,27 @@ export function KycFormEditorPage() {
       if (!saved) return;
       const latestSectionH = saved.sectionH || sectionH;
       await submitDmlroReview(id, {
+        decision,
+        reason,
+        conditions,
         data: {
           reviewerName: latestSectionH.dmlroName || '',
           reviewDate: latestSectionH.dmlroDate || '',
           comments: latestSectionH.dmlroComments || '',
-          conditions: latestSectionH.dmlroComments || ''
+          decision,
+          reason,
+          conditions
         },
-        formalComments: latestSectionH.dmlroComments || ''
+        formalComments: latestSectionH.dmlroComments || reason || conditions
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
+      const normalized = normalizeForm(formData);
       setKycCase(caseData);
-      setForm(normalizeForm(formData));
-      setMessage('DMLRO approval submitted to MLRO');
+      formRef.current = normalized;
+      setForm(normalized);
+      setMessage(dmlroDecisionSuccessMessage(decision));
     } catch (requestError: any) {
-      setError(getApiErrorMessage(requestError, 'Unable to submit DMLRO approval.'));
+      setError(getApiErrorMessage(requestError, dmlroDecisionErrorMessage(decision)));
     } finally {
       setSaving(false);
     }
@@ -698,11 +771,13 @@ export function KycFormEditorPage() {
         formalComments: latestSectionH.mlroComments || ''
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
+      const normalized = normalizeForm(formData);
       setKycCase(caseData);
-      setForm(normalizeForm(formData));
-      setMessage('MLRO final decision submitted');
+      formRef.current = normalized;
+      setForm(normalized);
+      setMessage(mlroDecisionSuccessMessage(decision));
     } catch (requestError: any) {
-      setError(getApiErrorMessage(requestError, 'Unable to submit MLRO final decision.'));
+      setError(getApiErrorMessage(requestError, mlroDecisionErrorMessage(decision)));
     } finally {
       setSaving(false);
     }
@@ -713,6 +788,19 @@ export function KycFormEditorPage() {
   }
 
   const isApproved = approvedStatuses.includes(kycCase.status as (typeof approvedStatuses)[number]);
+  const dmlroDecision = form.sectionH?.dmlroDecision || 'APPROVE';
+  const dmlroSubmitLabel = dmlroDecision === 'APPROVE' || dmlroDecision === 'APPROVE_WITH_CONDITIONS' ? 'Submit to MLRO' : 'Send to AML Supervisor';
+  const mlroDecision = form.sectionH?.mlroDecision || 'APPROVE';
+  const mlroSubmitLabel =
+    mlroDecision === 'RETURN_TO_DMLRO'
+      ? 'Send to DMLRO'
+      : mlroDecision === 'SEND_TO_SEF'
+        ? 'Send to SEF'
+        : mlroDecision === 'REQUEST_ADDITIONAL_INFORMATION'
+          ? 'Request Additional Information'
+          : mlroDecision === 'REJECT'
+            ? 'Submit Rejection'
+            : 'Submit Final Decision';
 
   return (
     <div className="space-y-5">
@@ -734,13 +822,13 @@ export function KycFormEditorPage() {
           {sectionHMode === 'DMLRO' ? (
             <button onClick={submitDmlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
-              Submit to MLRO
+              {dmlroSubmitLabel}
             </button>
           ) : null}
           {sectionHMode === 'MLRO' ? (
             <button onClick={submitMlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
-              Submit Final Decision
+              {mlroSubmitLabel}
             </button>
           ) : null}
           <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
@@ -1140,6 +1228,16 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroName', value)} />
         <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
         <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDate', value)} />
+        <Select label="DMLRO decision" value={data.dmlroDecision || 'APPROVE'} options={dmlroDecisionOptions} optionLabels={dmlroDecisionLabels} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDecision', value)} wide />
+        {data.dmlroDecision === 'APPROVE_WITH_CONDITIONS' ? (
+          <Field label="DMLRO approval conditions" value={data.dmlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroConditions', value)} textarea wide />
+        ) : null}
+        {data.dmlroDecision === 'REQUEST_ADDITIONAL_INFORMATION' ? (
+          <Field label="Additional information requested from AML Supervisor" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
+        ) : null}
+        {data.dmlroDecision === 'RETURN_TO_SUPERVISOR' ? (
+          <Field label="Reason for returning to AML Supervisor" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
+        ) : null}
         <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroComments', value)} textarea wide />
       </>
     ) : null}
@@ -1148,7 +1246,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroName', value)} />
         <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
         <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDate', value)} />
-        <Select label="MLRO final decision" value={data.mlroDecision || 'APPROVE'} options={mlroDecisionOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDecision', value)} />
+        <Select label="MLRO final decision" value={data.mlroDecision || 'APPROVE'} options={mlroDecisionOptions} optionLabels={mlroDecisionLabels} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDecision', value)} />
         <Select label="Final risk classification" value={data.mlroFinalRiskClassification || data.riskClassification} options={riskClassificationOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroFinalRiskClassification', value)} />
         <Select label="Risk reason category" value={data.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT'} options={riskReasonCategoryOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskReasonCategory', value)} />
         <Field label="Risk explanation" value={data.mlroRiskExplanation} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskExplanation', value)} textarea wide />
@@ -1205,7 +1303,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', form.sectionH?.mlroRiskReasonCategory], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -1705,6 +1803,10 @@ function listValue(value: any) {
 
 function displayList(value: any) {
   return listValue(value).join(', ');
+}
+
+function displayCodeLabel(value: any) {
+  return value ? String(value).replace(/_/g, ' ') : '';
 }
 
 function countryFromNationality(nationality: string) {

@@ -69,6 +69,9 @@ async function main() {
   const mlroRole = await prisma.role.findUniqueOrThrow({
     where: { name: 'MLRO' }
   });
+  const sefRole = await prisma.role.findUniqueOrThrow({
+    where: { name: 'SEF' }
+  });
 
   const passwordHash = await bcrypt.hash('Admin@12345', 12);
   const admin = await prisma.user.upsert({
@@ -188,6 +191,26 @@ async function main() {
     }
   });
 
+  const sefUser = await prisma.user.upsert({
+    where: { email: 'sef@newoon.com' },
+    update: {
+      tenantId: tenant.id,
+      status: 'ACTIVE'
+    },
+    create: {
+      tenantId: tenant.id,
+      email: 'sef@newoon.com',
+      passwordHash,
+      firstName: 'SEF',
+      lastName: 'Management',
+      roles: {
+        create: {
+          roleId: sefRole.id
+        }
+      }
+    }
+  });
+
   await prisma.userRole.upsert({
     where: { userId_roleId: { userId: companyAdmin.id, roleId: companyAdminRole.id } },
     update: {},
@@ -216,6 +239,12 @@ async function main() {
     where: { userId_roleId: { userId: mlroUser.id, roleId: mlroRole.id } },
     update: {},
     create: { userId: mlroUser.id, roleId: mlroRole.id }
+  });
+
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: sefUser.id, roleId: sefRole.id } },
+    update: {},
+    create: { userId: sefUser.id, roleId: sefRole.id }
   });
 
   const allModules = await prisma.module.findMany();

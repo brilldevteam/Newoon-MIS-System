@@ -26,13 +26,17 @@ const steps: KycCaseStatus[] = [
   'PROPOSAL_OPTIONAL',
   'LEGAL_DOCUMENTS_PENDING',
   'LEGAL_DOCUMENTS_UPLOADED',
+  'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED',
+  'SUPERVISOR_REVIEW_PENDING',
   'DMLRO_REVIEW_PENDING',
   'DMLRO_REVIEW_COMPLETED',
   'MLRO_REVIEW_PENDING',
-  'MLRO_APPROVED'
+  'MLRO_APPROVED',
+  'SEF_DECISION_PENDING',
+  'SEF_APPROVED'
 ];
 
-const approvedStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
+const approvedStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -150,7 +154,10 @@ export function KycCaseDetailsPage() {
   const currentStep = steps.indexOf(kycCase.status);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
   const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
-  const canSubmitToAml = canPrepareKyc && kycCase.legalDocuments.length > 0 && ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED'].includes(kycCase.status);
+  const canSubmitToAml =
+    canPrepareKyc &&
+    kycCase.legalDocuments.length > 0 &&
+    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];

@@ -31,10 +31,11 @@ export const workflowRoles = {
   kycPreparation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   kycFormBuilder: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
   amlDashboard: [],
-  reviewTasks: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO'],
+  reviewTasks: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO', 'SEF'],
   supervisorReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   dmlroReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO'],
   mlroReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'MLRO'],
+  sefReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'SEF'],
   signedDocuments: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO'],
   admin: ['SUPER_ADMIN'],
   userAdmin: ['SUPER_ADMIN', 'COMPANY_ADMIN']
@@ -60,6 +61,7 @@ export function allowedReviewStages(user: AuthUser | null | undefined) {
   return {
     SUPERVISOR: hasAnyRole(user, workflowRoles.supervisorReview),
     DMLRO: hasAnyRole(user, workflowRoles.dmlroReview),
-    MLRO: hasAnyRole(user, workflowRoles.mlroReview)
+    MLRO: hasAnyRole(user, workflowRoles.mlroReview),
+    SEF: hasAnyRole(user, workflowRoles.sefReview)
   };
 }

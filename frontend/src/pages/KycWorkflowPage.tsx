@@ -21,7 +21,7 @@ function getRequestErrorMessage(error: any, fallback: string) {
   return typeof responseError === 'string' ? responseError : fallback;
 }
 
-const documentReadyStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
+const documentReadyStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
 
 export function KycWorkflowPage() {
   const { user } = useAuth();
