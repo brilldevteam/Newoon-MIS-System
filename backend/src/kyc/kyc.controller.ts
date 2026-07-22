@@ -168,7 +168,7 @@ export class KycController {
     return this.kycService.updateProposalStatus(user, id, dto);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/legal-documents')
   uploadLegalDocument(
     @CurrentUser() user: RequestUser,
@@ -178,7 +178,7 @@ export class KycController {
     return this.kycService.uploadLegalDocument(user, id, dto);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/legal-documents/upload')
   @UseInterceptors(FileInterceptor('file'))
   uploadLegalDocumentFile(
