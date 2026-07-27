@@ -184,7 +184,7 @@ export function KycCaseDetailsPage() {
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
           >
             <FileText className="h-4 w-4" />
-            Open KYC Part 1
+            Open KYC Form
           </Link>
         ) : null}
         {canOpenInternalReview ? (
@@ -204,7 +204,7 @@ export function KycCaseDetailsPage() {
             <div>
               <p className="text-base font-semibold text-brand-900">KYC fully approved and ready for activation</p>
               <p className="mt-1 text-sm text-brand-700">
-                Client details, KYC Part 1 data, approval signatures, uploaded preparation documents, workflow comments, and generated documents are stored against this case.
+                Client details, KYC form data, approval signatures, uploaded preparation documents, workflow comments, and generated documents are stored against this case.
               </p>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
                 <div>

@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
 import { useAuth } from '../hooks/useAuth';
 import {
+  autoSaveKycForm,
   downloadGeneratedKycDocument,
   decideMlroReview,
   generateKycDocument,
@@ -652,13 +653,52 @@ export function KycFormEditorPage() {
     }
   }
 
+  function fullDraftPayload(currentForm: KycFormData): Partial<KycFormData> {
+    if (canEditAllSections || canPrepareKyc) {
+      return {
+        sectionA: currentForm.sectionA,
+        sectionB: { ...currentForm.sectionB, totalOwnershipPercentage: totalOwnership },
+        sectionC: currentForm.sectionC,
+        sectionD: currentForm.sectionD,
+        sectionE: currentForm.sectionE,
+        sectionF: currentForm.sectionF,
+        sectionG: currentForm.sectionG,
+        sectionH: { ...(currentForm.sectionH || {}), reviewPart: sectionHMode }
+      };
+    }
+
+    return {
+      sectionH: { ...(currentForm.sectionH || {}), reviewPart: sectionHMode }
+    };
+  }
+
+  async function saveDraft() {
+    if (!id) return null;
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const updated = await autoSaveKycForm(id, fullDraftPayload(formRef.current));
+      const normalized = normalizeForm(updated);
+      formRef.current = normalized;
+      setForm(normalized);
+      setMessage('Draft saved');
+      return normalized;
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, 'Unable to save this KYC draft.'));
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function generate(type: 'docx' | 'pdf') {
     if (!id) return;
     setSaving(true);
     setMessage('');
     setError('');
     try {
-      const saved = await save(activeSection);
+      const saved = await saveDraft();
       if (!saved) return;
       const document = await generateKycDocument(id, type);
       const updated = await getKycForm(id);
@@ -809,13 +849,13 @@ export function KycFormEditorPage() {
           <Link to={`/kyc/${kycCase.id}`} className="text-sm font-medium text-brand-700 hover:text-brand-900">
             Back to case
           </Link>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-950">KYC Part 1 Form Builder</h1>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-950">KYC Form Builder</h1>
           <p className="text-sm text-slate-500">
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'} | Version {form.version}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => save(activeSection)} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          <button onClick={saveDraft} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
           </button>
@@ -850,7 +890,7 @@ export function KycFormEditorPage() {
             <div>
               <p className="text-base font-semibold text-brand-900">KYC approval completed</p>
               <p className="mt-1 text-sm text-brand-700">
-                The client profile, KYC Part 1 sections, uploaded preparation documents, approval details, and generated downloads are stored against this KYC case.
+                The client profile, KYC form sections, uploaded preparation documents, approval details, and generated downloads are stored against this KYC case.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
