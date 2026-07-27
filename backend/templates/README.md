@@ -1,4 +1,4 @@
-# KYC Part 1 DOCX Template
+# KYC DOCX Template
 
 Place the approved blank KYC DOCX template here:
 
@@ -55,12 +55,21 @@ Supported placeholders:
 {signatureFileName}
 {stampFileName}
 {amlAccuracyChecked}
+{amlAccuracyYes}
+{amlAccuracyNo}
 {amlClarificationFindings}
 {riskClassification}
+{riskHigh}
+{riskMedium}
+{riskLow}
 {dueDiligenceType}
+{dueSimplified}
+{dueRegular}
+{dueEnhanced}
 {amlName}
 {amlSignatureFileName}
 {amlDate}
+{amlComments}
 {dmlroName}
 {dmlroSignatureFileName}
 {dmlroDate}
@@ -77,6 +86,10 @@ Supported placeholders:
 {mlroRiskExplanation}
 {mlroConditions}
 {mlroComments}
+{sefName}
+{sefSignatureFileName}
+{sefDate}
+{sefComments}
 ```
 
 To make the export match the original format, copy the blank KYC format DOCX, keep its layout, and replace the blank answer areas with these placeholders.

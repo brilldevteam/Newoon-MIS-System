@@ -206,7 +206,7 @@ export function InternalReviewWorkspacePage() {
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             <FileText className="h-4 w-4" />
-            Open KYC Part 1
+            Open KYC Form
           </Link>
         ) : null}
       </div>

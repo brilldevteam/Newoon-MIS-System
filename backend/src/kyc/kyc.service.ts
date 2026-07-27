@@ -365,7 +365,7 @@ export class KycService {
           fromStatus: kycCase.status,
           toStatus: KycCaseStatus.DMLRO_REVIEW_PENDING,
           changedById: user.id,
-          note: 'KYC Part 1 prepared and submitted to DMLRO'
+          note: 'KYC form prepared and submitted to DMLRO'
         }
       });
 
@@ -2036,7 +2036,7 @@ export class KycService {
     const sefRequired = mlroSubmission?.data && typeof mlroSubmission.data === 'object' && (mlroSubmission.data as Record<string, unknown>).decision === ReviewDecision.SEND_TO_SEF;
     return [
       { key: 'proposal', label: 'Proposal submitted or not required', completed: ['NOT_REQUIRED', 'SENT', 'ACCEPTED'].includes(kycCase.proposalStatus) },
-      { key: 'kycPart1', label: 'KYC Part 1 prepared', completed: Boolean(kycCase.kycForm) },
+      { key: 'kycPart1', label: 'KYC form prepared', completed: Boolean(kycCase.kycForm) },
       { key: 'legalDocuments', label: 'Mandatory documents accepted', completed: kycCase.legalDocuments.length > 0 && requiredDocumentsAccepted },
       { key: 'dmlroReview', label: 'DMLRO review completed', completed: submittedStages.has(ReviewStage.DMLRO) },
       { key: 'mlroApproval', label: 'MLRO final approval completed', completed: submittedStages.has(ReviewStage.MLRO) },
@@ -2383,14 +2383,14 @@ export class KycService {
       shareholdersText: this.rowsText(sectionB.shareholders, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
       ubosText: this.rowsText(sectionB.ubos, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
       managersText: this.rowsText(sectionC.managers, ['fullName', 'entityName', 'position', 'isAuthorizedSignatory']),
-      pepQuestion: this.yesNoMark(sectionD.pepQuestion, 'Yes'),
-      pepNo: this.yesNoMark(sectionD.pepQuestion, 'No'),
+      pepQuestion: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'Yes'),
+      pepNo: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'No'),
       pepDetails: this.text(sectionD.pepDetails),
-      sanctionQuestion: this.yesNoMark(sectionD.sanctionQuestion, 'Yes'),
-      sanctionNo: this.yesNoMark(sectionD.sanctionQuestion, 'No'),
+      sanctionQuestion: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'Yes'),
+      sanctionNo: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'No'),
       sanctionDetails: this.text(sectionD.sanctionDetails),
-      dualCitizenshipQuestion: this.yesNoMark(sectionD.dualCitizenshipQuestion, 'Yes'),
-      dualCitizenshipNo: this.yesNoMark(sectionD.dualCitizenshipQuestion, 'No'),
+      dualCitizenshipQuestion: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'Yes'),
+      dualCitizenshipNo: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'No'),
       dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
       dualCitizenshipPassportFileName: this.text(sectionD.dualCitizenshipPassportFileName),
       communicationFullName: this.text(sectionE.fullName),
@@ -2402,27 +2402,41 @@ export class KycService {
       requiredDocumentsText: this.rowsText(sectionF.documents, ['documentType', 'isProvided', 'fileName']),
       additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['fileName']) || '-',
       uploadedFilesNote: this.text(sectionF.uploadedFilesNote) || '-',
-      docCommercialRegistration: this.documentMark(sectionF.documents, 'Commercial Registration'),
-      docEntityCard: this.documentMark(sectionF.documents, 'Entity Card'),
-      docCertificateOfIncorporation: this.documentMark(sectionF.documents, 'Certificate of Incorporation'),
-      docArticlesOfAssociation: this.documentMark(sectionF.documents, 'Articles of Association'),
-      docIdentityCopies: this.documentMark(sectionF.documents, 'QID / Passport copies'),
-      docLegalEntityShareholderCr: this.documentMark(sectionF.documents, 'CR of legal entity shareholders'),
-      docNationalAddressCertificates: this.documentMark(sectionF.documents, 'National address certificates'),
-      docAuditedFinancialStatements: this.documentMark(sectionF.documents, 'Latest Audited Financial Statements'),
-      docTaxCard: this.documentMark(sectionF.documents, 'Tax Card'),
+      docCommercialRegistration: this.requiredDocumentMark(sectionF.documents, 'Commercial Registration'),
+      docEntityCard: this.requiredDocumentMark(sectionF.documents, 'Entity Card'),
+      docCertificateOfIncorporation: this.requiredDocumentMark(sectionF.documents, 'Certificate of Incorporation'),
+      docArticlesOfAssociation: this.requiredDocumentMark(sectionF.documents, 'Articles of Association'),
+      docIdentityCopies: this.requiredDocumentMark(sectionF.documents, 'QID / Passport copies'),
+      docLegalEntityShareholderCr: this.requiredDocumentMark(sectionF.documents, 'CR of legal entity shareholders'),
+      docNationalAddressCertificates: this.requiredDocumentMark(sectionF.documents, 'National address certificates'),
+      docAuditedFinancialStatements: this.requiredDocumentMark(sectionF.documents, 'Latest Audited Financial Statements'),
+      docTaxCard: this.requiredDocumentMark(sectionF.documents, 'Tax Card'),
       declarationFullName: this.text(sectionG.fullName),
       declarationPosition: this.optionText(sectionG.position, sectionG.positionOther),
       declarationDate: this.text(sectionG.date),
       signatureFileName: this.signatureDisplay('declarationSignature', sectionG.signatureFileName, sectionG.signatureDataUrl),
       stampFileName: this.signatureDisplay('companyStamp', sectionG.stampFileName, sectionG.stampDataUrl),
       amlAccuracyChecked: this.text(sectionH.amlAccuracyChecked),
+      amlAccuracyYes: sectionH.amlAccuracyChecked ? '☒' : '☐',
+      amlAccuracyNo: sectionH.amlAccuracyChecked ? '☐' : '☒',
       amlClarificationFindings: this.text(sectionH.amlClarificationFindings),
       riskClassification: this.text(sectionH.riskClassification),
+      riskHigh: sectionH.riskClassification === 'HIGH' ? '☒' : '☐',
+      riskMedium: sectionH.riskClassification === 'MEDIUM' ? '☒' : '☐',
+      riskLow: sectionH.riskClassification === 'LOW' ? '☒' : '☐',
       dueDiligenceType: this.text(sectionH.dueDiligenceType),
+      dueSimplified: sectionH.dueDiligenceType === 'SIMPLIFIED' ? '☒' : '☐',
+      dueRegular: sectionH.dueDiligenceType === 'REGULAR' ? '☒' : '☐',
+      dueEnhanced: sectionH.dueDiligenceType === 'ENHANCED' ? '☒' : '☐',
       amlName: this.text(sectionH.amlName),
       amlSignatureFileName: this.signatureDisplay('amlSignature', sectionH.amlSignatureFileName, sectionH.amlSignatureDataUrl),
       amlDate: this.text(sectionH.amlDate),
+      amlComments: this.reviewConclusionText([
+        ['Accuracy checked', sectionH.amlAccuracyChecked ? 'Yes' : 'No'],
+        ['Clarification / findings', this.text(sectionH.amlClarificationFindings)],
+        ['Risk classification', this.text(sectionH.riskClassification)],
+        ['Due diligence type', this.text(sectionH.dueDiligenceType)]
+      ]),
       dmlroName: this.text(sectionH.dmlroName),
       dmlroSignatureFileName: this.signatureDisplay('dmlroSignature', sectionH.dmlroSignatureFileName, sectionH.dmlroSignatureDataUrl),
       dmlroDate: this.text(sectionH.dmlroDate),
@@ -2451,6 +2465,10 @@ export class KycService {
         ['Conditions', this.text(sectionH.mlroConditions)],
         ['Comments', this.text(sectionH.mlroComments)]
       ]),
+      sefName: '',
+      sefSignatureFileName: '',
+      sefDate: '',
+      sefComments: '',
       _docxImages: {
         declarationSignature: this.text(sectionG.signatureDataUrl),
         companyStamp: this.text(sectionG.stampDataUrl),
@@ -2558,6 +2576,15 @@ export class KycService {
   private documentMark(rows: RowPayload[] | undefined, label: string) {
     const row = rows?.find((item) => this.text(item.documentType).toLowerCase().includes(label.toLowerCase()));
     return row?.isProvided ? '☒' : '☐';
+  }
+
+  private checkboxMark(isChecked: boolean) {
+    return isChecked ? '☒' : '☐';
+  }
+
+  private requiredDocumentMark(rows: RowPayload[] | undefined, label: string) {
+    const row = rows?.find((item) => this.text(item.documentType).toLowerCase().includes(label.toLowerCase()));
+    return this.checkboxMark(Boolean(row?.isProvided));
   }
 
   private rowsText(rows: RowPayload[] | undefined, fields: string[]) {
