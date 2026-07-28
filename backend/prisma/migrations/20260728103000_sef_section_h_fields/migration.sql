@@ -1,0 +1,8 @@
+ALTER TABLE "KycInternalReview"
+ADD COLUMN IF NOT EXISTS "sefName" TEXT,
+ADD COLUMN IF NOT EXISTS "sefSignatureFileName" TEXT,
+ADD COLUMN IF NOT EXISTS "sefSignatureDataUrl" TEXT,
+ADD COLUMN IF NOT EXISTS "sefDate" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "sefDecision" "ReviewDecision",
+ADD COLUMN IF NOT EXISTS "sefConditions" TEXT,
+ADD COLUMN IF NOT EXISTS "sefComments" TEXT;

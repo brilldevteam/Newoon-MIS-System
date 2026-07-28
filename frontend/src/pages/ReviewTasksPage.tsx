@@ -27,7 +27,7 @@ function caseSubtitle(taskOrNotification: { kycCase?: ReviewTask['kycCase'] | Am
 
 function reviewLink(caseId?: string, stage?: string) {
   if (!caseId) return '/review-tasks';
-  return stage === 'SEF' ? `/kyc/${caseId}/internal-review` : `/kyc/${caseId}/form`;
+  return `/kyc/${caseId}/form`;
 }
 
 function taskActionText(stage: string) {

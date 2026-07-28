@@ -2076,6 +2076,7 @@ export class KycService {
     if (part === 'ALL') return ['COMPANY_ADMIN', 'SUPER_ADMIN'];
     if (part === 'DMLRO') return ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
     if (part === 'MLRO') return ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+    if (part === 'SEF') return ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
     return ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
   }
 
@@ -2083,6 +2084,7 @@ export class KycService {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
     const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
     const mlroDecision = this.enumValue(dto.mlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO final decision');
+    const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF management decision');
     const mlroFinalRiskClassification = this.enumValue(dto.mlroFinalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification');
     const mlroRiskReasonCategory = this.enumValue(dto.mlroRiskReasonCategory, ['PEP_IDENTIFIED', 'SANCTIONS_FINDING', 'ADVERSE_MEDIA', 'OWNERSHIP_COMPLEXITY', 'COUNTRY_RISK', 'INDUSTRY_RISK', 'SOURCE_OF_FUNDS_CONCERN', 'ENHANCED_MONITORING_REQUIRED', 'PROFESSIONAL_JUDGEMENT', 'OTHER'], 'Risk reason category');
 
@@ -2116,7 +2118,14 @@ export class KycService {
         mlroRiskReasonCategory: mlroRiskReasonCategory as RiskOverrideReason | null,
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
-        mlroComments: this.optionalText(dto.mlroComments)
+        mlroComments: this.optionalText(dto.mlroComments),
+        sefName: this.optionalText(dto.sefName),
+        sefSignatureFileName: this.optionalText(dto.sefSignatureFileName),
+        sefSignatureDataUrl: this.optionalText(dto.sefSignatureDataUrl),
+        sefDate: this.dateValue(dto.sefDate),
+        sefDecision: sefDecision as ReviewDecision | null,
+        sefConditions: this.optionalText(dto.sefConditions),
+        sefComments: this.optionalText(dto.sefComments)
       };
     }
 
@@ -2145,6 +2154,18 @@ export class KycService {
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
         mlroComments: this.optionalText(dto.mlroComments)
+      };
+    }
+
+    if (part === 'SEF') {
+      return {
+        sefName: this.optionalText(dto.sefName),
+        sefSignatureFileName: this.optionalText(dto.sefSignatureFileName),
+        sefSignatureDataUrl: this.optionalText(dto.sefSignatureDataUrl),
+        sefDate: this.dateValue(dto.sefDate),
+        sefDecision: sefDecision as ReviewDecision | null,
+        sefConditions: this.optionalText(dto.sefConditions),
+        sefComments: this.optionalText(dto.sefComments)
       };
     }
 
@@ -2465,16 +2486,23 @@ export class KycService {
         ['Conditions', this.text(sectionH.mlroConditions)],
         ['Comments', this.text(sectionH.mlroComments)]
       ]),
-      sefName: '',
-      sefSignatureFileName: '',
-      sefDate: '',
-      sefComments: '',
+      sefName: this.text(sectionH.sefName),
+      sefSignatureFileName: this.signatureDisplay('sefSignature', sectionH.sefSignatureFileName, sectionH.sefSignatureDataUrl),
+      sefDate: this.text(sectionH.sefDate),
+      sefDecision: this.reviewDecisionText(sectionH.sefDecision),
+      sefConditions: this.text(sectionH.sefConditions),
+      sefComments: this.reviewConclusionText([
+        ['Management decision', this.reviewDecisionText(sectionH.sefDecision)],
+        ['Conditions / reason', this.text(sectionH.sefConditions)],
+        ['Comments', this.text(sectionH.sefComments)]
+      ]),
       _docxImages: {
         declarationSignature: this.text(sectionG.signatureDataUrl),
         companyStamp: this.text(sectionG.stampDataUrl),
         amlSignature: this.text(sectionH.amlSignatureDataUrl),
         dmlroSignature: this.text(sectionH.dmlroSignatureDataUrl),
-        mlroSignature: this.text(sectionH.mlroSignatureDataUrl)
+        mlroSignature: this.text(sectionH.mlroSignatureDataUrl),
+        sefSignature: this.text(sectionH.sefSignatureDataUrl)
       }
     };
   }
@@ -2837,4 +2865,11 @@ type ReviewPatch = {
   mlroRiskExplanation?: string | null;
   mlroConditions?: string | null;
   mlroComments?: string | null;
+  sefName?: string | null;
+  sefSignatureFileName?: string | null;
+  sefSignatureDataUrl?: string | null;
+  sefDate?: Date | null;
+  sefDecision?: ReviewDecision | null;
+  sefConditions?: string | null;
+  sefComments?: string | null;
 };

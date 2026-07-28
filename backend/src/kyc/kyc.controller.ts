@@ -60,19 +60,19 @@ export class KycController {
     return this.kycService.remove(user, id);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form')
   createForm(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.createForm(user, id);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id/form')
   getForm(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.getForm(user, id);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/autosave')
   autoSaveForm(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.autoSaveForm(user, id, dto);
@@ -120,25 +120,25 @@ export class KycController {
     return this.kycService.saveSectionG(user, id, dto);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-h')
   saveSectionH(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.saveInternalReview(user, id, dto);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form/generate-docx')
   generateDocx(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.generateDocument(user, id, KycGeneratedDocumentType.DOCX);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/form/generate-pdf')
   generatePdf(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.kycService.generateDocument(user, id, KycGeneratedDocumentType.PDF);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id/form/generated-documents/:documentId/download')
   async downloadGeneratedDocument(
     @CurrentUser() user: RequestUser,

@@ -1,4 +1,4 @@
-import { FileText, FileUp, MessageSquare, Save, Send } from 'lucide-react';
+import { Download, FileText, FileUp, MessageSquare, Save, Send } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -7,6 +7,8 @@ import {
   addReviewerComment,
   decideMlroReview,
   decideSefReview,
+  downloadGeneratedKycDocument,
+  generateKycDocument,
   getInternalReviewWorkspace,
   InternalReviewWorkspace,
   ReviewStage,
@@ -94,6 +96,7 @@ export function InternalReviewWorkspacePage() {
   const [comment, setComment] = useState('');
   const [confidentialComment, setConfidentialComment] = useState('');
   const [signedFile, setSignedFile] = useState<File | null>(null);
+  const [generatingType, setGeneratingType] = useState<'docx' | 'pdf' | ''>('');
 
   useEffect(() => {
     load();
@@ -190,6 +193,22 @@ export function InternalReviewWorkspacePage() {
     setSignedFile(null);
   }
 
+  async function downloadReviewDocument(type: 'docx' | 'pdf') {
+    if (!id) return;
+    setError('');
+    setMessage('');
+    setGeneratingType(type);
+    try {
+      const document = await generateKycDocument(id, type);
+      await downloadGeneratedKycDocument(id, document.id, document.fileName);
+      setMessage(`${type.toUpperCase()} review document downloaded.`);
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, `Unable to prepare ${type.toUpperCase()} review document.`));
+    } finally {
+      setGeneratingType('');
+    }
+  }
+
   if (!workspace) return <p className="text-sm text-slate-500">Loading internal review workspace...</p>;
 
   return (
@@ -279,6 +298,42 @@ export function InternalReviewWorkspacePage() {
         </section>
 
         <aside className="space-y-6">
+          <section className="rounded-lg border border-slate-200 bg-white p-5">
+            <h2 className="text-base font-semibold text-slate-950">Review Filled KYC Document</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Download the latest saved KYC form before approving, returning, or escalating this file.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => downloadReviewDocument('docx')}
+                disabled={Boolean(generatingType)}
+                className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download className="h-4 w-4" />
+                {generatingType === 'docx' ? 'Preparing DOCX...' : 'Download DOCX'}
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadReviewDocument('pdf')}
+                disabled={Boolean(generatingType)}
+                className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FileText className="h-4 w-4" />
+                {generatingType === 'pdf' ? 'Preparing PDF...' : 'Download PDF'}
+              </button>
+            </div>
+            {canOpenKycPart1 ? (
+              <Link
+                to={`/kyc/${workspace.kycCase.id}/form`}
+                className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <FileText className="h-4 w-4" />
+                Open KYC Form
+              </Link>
+            ) : null}
+          </section>
+
           <section className="rounded-lg border border-slate-200 bg-white p-5">
             <h2 className="text-base font-semibold text-slate-950">Activation Readiness</h2>
             <div className="mt-3 space-y-2">
