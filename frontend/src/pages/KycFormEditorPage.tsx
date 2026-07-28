@@ -1410,7 +1410,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
             <p>contact@newoon.com</p>
           </div>
         </div>
-        <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form - Part 1</h2>
+        <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form</h2>
         <PreviewSection title="A. General Company Information">
           <PreviewGrid rows={[
             ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]

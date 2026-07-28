@@ -92,7 +92,6 @@ export function AppLayout() {
       <div className={useCollapsedSidebar ? 'lg:pl-20' : 'lg:pl-64'}>
         <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-8">
           <div>
-            <p className="text-sm font-medium text-slate-500">SaaS-ready workspace</p>
             <p className="text-base font-semibold text-slate-950">Newoon Operations</p>
           </div>
           <div className="flex items-center gap-3">
