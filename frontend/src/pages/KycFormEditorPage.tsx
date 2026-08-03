@@ -489,6 +489,8 @@ const positionOptions = [
 ];
 
 const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'];
+const standardMlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
+const highRiskMlroDecisionOptions = ['', 'SEND_TO_SEF', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
 const dmlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'];
 const dmlroDecisionLabels: Record<string, string> = {
   APPROVE: 'Send to MLRO',
@@ -806,6 +808,14 @@ export function KycFormEditorPage() {
       setError('Select the final risk classification and add a risk explanation before submitting the final decision.');
       return;
     }
+    if (decision === 'SEND_TO_SEF' && finalRiskClassification !== 'HIGH') {
+      setError('SEF management approval is only available for high-risk KYC files. Select High as the final risk classification first.');
+      return;
+    }
+    if (finalRiskClassification === 'HIGH' && ['APPROVE', 'APPROVE_WITH_CONDITIONS'].includes(decision)) {
+      setError('High-risk KYC files must be sent to SEF for management decision before final approval.');
+      return;
+    }
 
     setSaving(true);
     setMessage('');
@@ -1090,7 +1100,7 @@ function SectionBForm({ data, total, onChange }: FormProps & { total: number }) 
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationalityAndAddress', 'Nationality and address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'select', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'select', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
@@ -1333,6 +1343,19 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   const showDmlro = mode === 'DMLRO' || mode === 'ALL';
   const showMlro = mode === 'MLRO' || mode === 'ALL';
   const showSef = mode === 'SEF' || mode === 'ALL';
+  const mlroFinalRisk = data.mlroFinalRiskClassification || data.riskClassification || '';
+  const mlroDecisionValues = mlroFinalRisk === 'HIGH' ? highRiskMlroDecisionOptions : mlroFinalRisk ? standardMlroDecisionOptions : [''];
+  const mlroDecisionValue = mlroDecisionValues.includes(data.mlroDecision || '') ? data.mlroDecision || '' : '';
+
+  function updateMlroFinalRisk(value: string) {
+    const nextDecisionOptions = value === 'HIGH' ? highRiskMlroDecisionOptions : value ? standardMlroDecisionOptions : [''];
+    onChange({
+      ...data,
+      reviewPart: mode,
+      mlroFinalRiskClassification: value,
+      mlroDecision: nextDecisionOptions.includes(data.mlroDecision || '') ? data.mlroDecision : ''
+    });
+  }
 
   return <FormGrid>
     {showAml ? (
@@ -1369,8 +1392,8 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroName', value)} />
         <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
         <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDate', value)} />
-        <Select label="MLRO final decision" value={data.mlroDecision || 'APPROVE'} options={mlroDecisionOptions} optionLabels={mlroDecisionLabels} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDecision', value)} />
-        <Select label="Final risk classification" value={data.mlroFinalRiskClassification || data.riskClassification} options={riskClassificationOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroFinalRiskClassification', value)} />
+        <Select label="Final risk classification" value={mlroFinalRisk} options={riskClassificationOptions} onChange={updateMlroFinalRisk} />
+        <Select label="MLRO final decision" value={mlroDecisionValue} options={mlroDecisionValues} optionLabels={mlroDecisionLabels} placeholder={mlroFinalRisk ? 'Select decision' : 'Select final risk first'} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDecision', value)} />
         <Select label="Risk reason category" value={data.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT'} options={riskReasonCategoryOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskReasonCategory', value)} />
         <Field label="Risk explanation" value={data.mlroRiskExplanation} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskExplanation', value)} textarea wide />
         <Field label="Conditions" value={data.mlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroConditions', value)} textarea wide />
@@ -1424,7 +1447,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Entity', 'Nationality and address', 'DOB', 'ID No.', 'Position', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, row.entityName, row.nationalityAndAddress, displayDate(row.dateOfBirth), row.identityNumber, resolveOtherValue(row.position, row.positionOther), row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, resolveOtherValue(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
           <PreviewGrid rows={[['Any PEP exposure?', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Any sanction exposure?', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />

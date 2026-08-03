@@ -557,6 +557,17 @@ export class KycService {
       throw new BadRequestException('Risk classification changes require an explanation');
     }
 
+    const finalRiskClassification = this.optionalText(dto.finalRiskClassification);
+    if (decision === ReviewDecision.SEND_TO_SEF && finalRiskClassification !== RiskClassification.HIGH) {
+      throw new BadRequestException('SEF management approval is required only for high-risk KYC files. Select High as the final risk classification before sending to SEF.');
+    }
+    if (
+      finalRiskClassification === RiskClassification.HIGH &&
+      (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)
+    ) {
+      throw new BadRequestException('High-risk KYC files must be sent to SEF for management decision before final approval.');
+    }
+
     try {
       return await this.prisma.$transaction(async (tx) => {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, dto);
@@ -1005,6 +1016,8 @@ export class KycService {
             fullName: this.requiredText(row.fullName, 'Manager full name'),
             entityName: this.optionalText(row.entityName),
             nationalityAndAddress: this.optionalText(row.nationalityAndAddress),
+            nationality: this.optionalText(row.nationality),
+            address: this.optionalText(row.address),
             dateOfBirth: this.dateValue(row.dateOfBirth),
             identityNumber: this.optionalText(row.identityNumber),
             position: this.optionalText(row.position),
@@ -2101,12 +2114,16 @@ export class KycService {
       return [
         NotificationType.DMLRO_TASK_ASSIGNED,
         NotificationType.MLRO_TASK_ASSIGNED,
-        NotificationType.SEF_TASK_ASSIGNED
+        NotificationType.SEF_TASK_ASSIGNED,
+        NotificationType.MLRO_APPROVAL_COMPLETED,
+        NotificationType.MLRO_APPROVAL_WITH_CONDITIONS
       ];
     }
     if (this.hasAnyRole(user, ['DMLRO'])) types.push(NotificationType.DMLRO_TASK_ASSIGNED);
     if (this.hasAnyRole(user, ['MLRO'])) types.push(NotificationType.MLRO_TASK_ASSIGNED);
-    if (this.hasAnyRole(user, ['SEF'])) types.push(NotificationType.SEF_TASK_ASSIGNED);
+    if (this.hasAnyRole(user, ['SEF'])) {
+      types.push(NotificationType.SEF_TASK_ASSIGNED, NotificationType.MLRO_APPROVAL_COMPLETED, NotificationType.MLRO_APPROVAL_WITH_CONDITIONS);
+    }
     return types;
   }
 
@@ -2494,6 +2511,8 @@ export class KycService {
       managerNo: String(index + 1),
       managerFullName: this.text(row.fullName),
       managerEntityName: this.text(row.entityName),
+      managerNationality: this.text(row.nationality) || this.managerNationalityFallback(row),
+      managerAddress: this.text(row.address) || this.managerAddressFallback(row),
       managerNationalityAndAddress: this.text(row.nationalityAndAddress),
       managerDateOfBirth: this.text(row.dateOfBirth),
       managerIdentityNumber: this.text(row.identityNumber),
@@ -2802,6 +2821,18 @@ export class KycService {
     }
 
     return this.optionText(value, otherValue);
+  }
+
+  private managerNationalityFallback(row: RowPayload) {
+    const combined = this.text(row.nationalityAndAddress);
+    if (!combined.includes('|')) return combined;
+    return combined.split('|')[0]?.trim() || '';
+  }
+
+  private managerAddressFallback(row: RowPayload) {
+    const combined = this.text(row.nationalityAndAddress);
+    if (!combined.includes('|')) return '';
+    return combined.split('|').slice(1).join('|').trim();
   }
 
   private documentCompanyName(payload: SerializedKycForm) {
