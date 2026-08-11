@@ -100,6 +100,9 @@ function getRequestErrorMessage(error: any, fallback: string) {
   if (Array.isArray(message)) return message.join(' ');
   if (typeof message === 'string') return message;
   const responseError = error.response?.data?.error;
+  const nestedMessage = responseError?.message;
+  if (Array.isArray(nestedMessage)) return nestedMessage.join(' ');
+  if (typeof nestedMessage === 'string') return nestedMessage;
   return typeof responseError === 'string' ? responseError : fallback;
 }
 

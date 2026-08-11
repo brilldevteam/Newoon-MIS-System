@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EnquiryStatus, EnquiryType, Prisma } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
@@ -9,62 +9,78 @@ import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from '
 
 @Injectable()
 export class EnquiriesService {
+  private readonly logger = new Logger(EnquiriesService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(user: RequestUser, dto: CreateEnquiryDto) {
-    const tenantId = this.getTenantId(user);
-    await this.assertClientTenant(user, dto.clientId);
-    const enquiryCode = await this.nextEnquiryCode(tenantId);
+    try {
+      const tenantId = this.getTenantId(user);
+      await this.assertClientTenant(user, dto.clientId);
+      const enquiryCode = await this.nextEnquiryCode(tenantId);
 
-    const enquiryId = await this.prisma.$transaction(async (prisma) => {
-      const enquiry = await prisma.enquiry.create({
-        data: {
-          tenantId,
-          enquiryCode,
-          enquiryType: dto.enquiryType,
-          clientId: dto.enquiryType === EnquiryType.CURRENT_CLIENT_NEW_SERVICES ? dto.clientId : undefined,
-          companyName: dto.companyName,
-          proposedCompanyName: dto.proposedCompanyName,
-          requestedServices: dto.requestedServices || [],
-          keyContactName: dto.keyContactName,
-          keyContactEmail: dto.keyContactEmail,
-          keyContactPhone: dto.keyContactPhone,
-          keyContactPosition: dto.keyContactPosition,
-          headOfficeCountry: dto.headOfficeCountry,
-          branchCountry: dto.branchCountry,
-          areaOfOperation: dto.areaOfOperation,
-          details: this.jsonValue(dto.details),
-          notes: dto.notes,
-          createdById: user.id,
-          attachments: {
-            create:
-              dto.attachments?.map((attachment) => ({
-                tenantId,
-                documentType: attachment.documentType,
-                fileName: attachment.fileName,
-                storagePath: attachment.storagePath,
-                mimeType: attachment.mimeType,
-                size: attachment.size,
-                createdBy: user.id
-              })) || []
+      const enquiryId = await this.prisma.$transaction(async (prisma) => {
+        const enquiry = await prisma.enquiry.create({
+          data: {
+            tenantId,
+            enquiryCode,
+            enquiryType: dto.enquiryType,
+            clientId: dto.enquiryType === EnquiryType.CURRENT_CLIENT_NEW_SERVICES ? dto.clientId : undefined,
+            companyName: dto.companyName,
+            proposedCompanyName: dto.proposedCompanyName,
+            requestedServices: dto.requestedServices || [],
+            keyContactName: dto.keyContactName,
+            keyContactEmail: dto.keyContactEmail,
+            keyContactPhone: dto.keyContactPhone,
+            keyContactPosition: dto.keyContactPosition,
+            headOfficeCountry: dto.headOfficeCountry,
+            branchCountry: dto.branchCountry,
+            areaOfOperation: dto.areaOfOperation,
+            details: this.jsonValue(dto.details),
+            notes: dto.notes,
+            createdById: user.id,
+            attachments: {
+              create:
+                dto.attachments?.map((attachment) => ({
+                  tenantId,
+                  documentType: attachment.documentType,
+                  fileName: attachment.fileName,
+                  storagePath: attachment.storagePath,
+                  mimeType: attachment.mimeType,
+                  size: attachment.size,
+                  createdBy: user.id
+                })) || []
+            }
           }
-        }
+        });
+
+        await prisma.enquiryStatusHistory.create({
+          data: {
+            tenantId,
+            enquiryId: enquiry.id,
+            toStatus: EnquiryStatus.DRAFT,
+            note: 'Enquiry created',
+            changedById: user.id
+          }
+        });
+
+        return enquiry.id;
       });
 
-      await prisma.enquiryStatusHistory.create({
-        data: {
-          tenantId,
-          enquiryId: enquiry.id,
-          toStatus: EnquiryStatus.DRAFT,
-          note: 'Enquiry created',
-          changedById: user.id
-        }
-      });
-
-      return enquiry.id;
-    });
-
-    return this.findOne(user, enquiryId);
+      return this.findOne(user, enquiryId);
+    } catch (error) {
+      this.logCreateFailure(user, dto, error);
+      if (error instanceof HttpException) throw error;
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError ||
+        error instanceof Prisma.PrismaClientValidationError
+      ) {
+        throw new BadRequestException(
+          'Unable to create enquiry. Confirm this Operating Team user is assigned to a tenant and the latest enquiry database migrations are applied.'
+        );
+      }
+      throw error;
+    }
   }
 
   findAll(user: RequestUser) {
@@ -316,6 +332,14 @@ export class EnquiriesService {
 
   private enquiryAttachmentUploadRoot() {
     return normalize(process.env.ENQUIRY_UPLOAD_DIR || join(process.cwd(), 'uploads', 'enquiry-attachments'));
+  }
+
+  private logCreateFailure(user: RequestUser, dto: CreateEnquiryDto, error: unknown) {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    this.logger.error(
+      `Unable to create enquiry for user=${user.email} roles=${user.roles.join(',')} tenantId=${user.tenantId || 'none'} enquiryType=${dto.enquiryType}: ${errorName}: ${errorMessage}`
+    );
   }
 
   private resolveEnquiryAttachmentPath(storagePath: string) {
