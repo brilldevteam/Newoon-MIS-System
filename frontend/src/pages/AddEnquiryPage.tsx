@@ -1,9 +1,9 @@
 import { Save, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
+import { resolveOtherValue, SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
 import { createEnquiry, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFile, Client } from '../services/kyc-workflow.service';
-import { countryDialOptions } from '../utils/country-phone';
+import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 
 const enquiryTypes: EnquiryType[] = ['EXISTING_LEGAL_ENTITY', 'PROPOSED_COMPANY', 'CURRENT_CLIENT_NEW_SERVICES'];
@@ -17,6 +17,23 @@ const enquiryTypeLabels: Record<EnquiryType, string> = {
 const legalForms = ['', 'QFC LLC', 'Branch', 'Partnership'];
 const jurisdictions = ['', 'QFC', 'MOCI', 'Free Zone'];
 const countryOptions = countryDialOptions.map((country) => country.name);
+const countryDialLabels = Object.fromEntries(countryDialOptions.map((country) => [country.name, country.name ? `${country.name} (${country.dialCode})` : 'Select code']));
+const positionOptions = [
+  '',
+  'CEO',
+  'CFO',
+  'COO',
+  'Director',
+  'Managing Director',
+  'General Manager',
+  'Manager',
+  'Partner',
+  'Shareholder',
+  'Authorized Signatory',
+  'Company Secretary',
+  'Compliance Officer',
+  'Finance Manager'
+];
 
 type AttachmentDraft = {
   id?: string;
@@ -29,6 +46,27 @@ type AttachmentDraft = {
 };
 
 type EnquiryStep = 'type' | 'details' | 'contact' | 'exposure' | 'attachments' | 'notes';
+
+type EnquiryValidationForm = {
+  enquiryType: EnquiryType;
+  clientId: string;
+  companyName: string;
+  proposedCompanyName: string;
+  requestedServices: string[];
+  keyContactName: string;
+  keyContactEmail: string;
+  keyContactPhone: string;
+  keyContactPhoneCountry: string;
+  keyContactPosition: string;
+  keyContactPositionOther: string;
+  headOfficeCountry: string;
+  areaOfOperation: string;
+  proposedLegalForm: string;
+  jurisdictionOfRegistration: string;
+  proposedBusinessActivity: string;
+  sourceOfInitialCapital: string;
+  proposedRegisteredOfficeAddress: string;
+};
 
 const existingLegalEntityAttachments = [
   'Corporate Documents - Company',
@@ -65,6 +103,80 @@ function getRequestErrorMessage(error: any, fallback: string) {
   return typeof responseError === 'string' ? responseError : fallback;
 }
 
+function splitOtherValue(value: string | null | undefined, options: string[]) {
+  if (!value) return { value: '', otherValue: '' };
+  return options.includes(value) ? { value, otherValue: '' } : { value: 'Other', otherValue: value };
+}
+
+function RequiredMark() {
+  return <span className="text-red-600">*</span>;
+}
+
+function inferPhoneCountry(phone: string) {
+  const normalizedPhone = phone.trim();
+  if (!normalizedPhone) return '';
+
+  const match = countryDialOptions
+    .filter((country) => country.dialCode && normalizedPhone.startsWith(country.dialCode))
+    .sort((first, second) => second.dialCode.length - first.dialCode.length)[0];
+
+  return match?.name || '';
+}
+
+function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): string | null {
+  if (step === 'type' && !form.enquiryType) {
+    return 'Select the enquiry type before continuing.';
+  }
+
+  if (step === 'details') {
+    if (form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' && !form.clientId) {
+      return 'Select the current client before continuing.';
+    }
+
+    if (form.enquiryType === 'EXISTING_LEGAL_ENTITY' && !form.companyName.trim()) {
+      return 'Company name is required for an existing legal entity enquiry.';
+    }
+
+    if (form.enquiryType === 'PROPOSED_COMPANY') {
+      if (!form.proposedCompanyName.trim()) return 'Proposed company name is required.';
+      if (!form.proposedLegalForm) return 'Proposed legal form is required.';
+      if (!form.jurisdictionOfRegistration) return 'Jurisdiction of registration is required.';
+      if (!form.proposedBusinessActivity.trim()) return 'Proposed business activity is required.';
+      if (!form.sourceOfInitialCapital.trim()) return 'Source of initial capital is required.';
+      if (!form.proposedRegisteredOfficeAddress.trim()) return 'Proposed registered office address is required.';
+    }
+
+    if (!form.requestedServices.length) {
+      return 'Select at least one requested service.';
+    }
+  }
+
+  if (step === 'contact' && form.enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES') {
+    if (!form.keyContactName.trim()) return 'Key contact full name is required.';
+    if (!form.keyContactEmail.trim()) return 'Key contact email is required.';
+    if (!form.keyContactPhoneCountry) return 'Key contact country code is required.';
+    if (!form.keyContactPhone.trim()) return 'Key contact phone number is required.';
+    if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
+      return 'Key contact position is required.';
+    }
+  }
+
+  if (step === 'exposure' && form.enquiryType === 'EXISTING_LEGAL_ENTITY') {
+    if (!form.headOfficeCountry) return 'Head office country is required.';
+    if (!form.areaOfOperation.trim()) return 'Area of operation is required.';
+  }
+
+  return null;
+}
+
+function validateEnquiryForm(form: EnquiryValidationForm): { step: EnquiryStep; message: string } | null {
+  for (const step of enquirySteps(form.enquiryType)) {
+    const message = validateEnquiryStep(form, step.id);
+    if (message) return { step: step.id, message };
+  }
+  return null;
+}
+
 export function AddEnquiryPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -84,7 +196,9 @@ export function AddEnquiryPage() {
     keyContactName: '',
     keyContactEmail: '',
     keyContactPhone: '',
+    keyContactPhoneCountry: '',
     keyContactPosition: '',
+    keyContactPositionOther: '',
     headOfficeCountry: '',
     branchCountry: '',
     areaOfOperation: '',
@@ -102,6 +216,7 @@ export function AddEnquiryPage() {
         setClients(clientItems);
         if (!enquiry) return;
         const details = enquiry.details || {};
+        const keyContactPosition = splitOtherValue(enquiry.keyContactPosition, positionOptions);
         setForm({
           enquiryType: enquiry.enquiryType,
           clientId: enquiry.clientId || enquiry.client?.id || '',
@@ -111,7 +226,9 @@ export function AddEnquiryPage() {
           keyContactName: enquiry.keyContactName || '',
           keyContactEmail: enquiry.keyContactEmail || '',
           keyContactPhone: enquiry.keyContactPhone || '',
-          keyContactPosition: enquiry.keyContactPosition || '',
+          keyContactPhoneCountry: inferPhoneCountry(enquiry.keyContactPhone || ''),
+          keyContactPosition: keyContactPosition.value,
+          keyContactPositionOther: keyContactPosition.otherValue,
           headOfficeCountry: enquiry.headOfficeCountry || '',
           branchCountry: enquiry.branchCountry || '',
           areaOfOperation: enquiry.areaOfOperation || '',
@@ -155,6 +272,13 @@ export function AddEnquiryPage() {
             proposedRegisteredOfficeAddress: form.proposedRegisteredOfficeAddress
           }
         : {};
+    const validationError = validateEnquiryForm(form);
+    if (validationError) {
+      setError(validationError.message);
+      setActiveStep(validationError.step);
+      setSaving(false);
+      return;
+    }
 
     const payload = {
       enquiryType: form.enquiryType,
@@ -165,7 +289,7 @@ export function AddEnquiryPage() {
       keyContactName: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactName || undefined,
       keyContactEmail: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactEmail || undefined,
       keyContactPhone: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactPhone || undefined,
-      keyContactPosition: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactPosition || undefined,
+      keyContactPosition: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther) || undefined,
       headOfficeCountry: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.headOfficeCountry || undefined : undefined,
       branchCountry: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.branchCountry || undefined : undefined,
       areaOfOperation: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.areaOfOperation || undefined : undefined,
@@ -217,13 +341,40 @@ export function AddEnquiryPage() {
   const steps = enquirySteps(form.enquiryType);
   const activeStepIndex = Math.max(0, steps.findIndex((step) => step.id === activeStep));
   const currentStep = steps[activeStepIndex] || steps[0];
+  const currentStepError = validateEnquiryStep(form, currentStep.id);
+
+  function getStepAccessError(targetStep: EnquiryStep): { step: EnquiryStep; message: string } | null {
+    const targetIndex = steps.findIndex((step) => step.id === targetStep);
+    if (targetIndex <= activeStepIndex) return null;
+
+    for (let index = 0; index < targetIndex; index += 1) {
+      const step = steps[index];
+      const message = validateEnquiryStep(form, step.id);
+      if (message) return { step: step.id, message };
+    }
+
+    return null;
+  }
 
   function goToStep(step: EnquiryStep) {
+    const accessError = getStepAccessError(step);
+    if (accessError) {
+      setError(accessError.message);
+      setActiveStep(accessError.step);
+      return;
+    }
+
+    setError('');
     setActiveStep(step);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function goNext() {
+    if (currentStepError) {
+      setError(currentStepError);
+      return;
+    }
+
     const next = steps[activeStepIndex + 1];
     if (next) goToStep(next.id);
   }
@@ -231,6 +382,30 @@ export function AddEnquiryPage() {
   function goBack() {
     const previous = steps[activeStepIndex - 1];
     if (previous) goToStep(previous.id);
+  }
+
+  function setHeadOfficeCountry(country: string) {
+    setForm((current) => ({
+      ...current,
+      headOfficeCountry: country,
+      keyContactPhoneCountry: current.keyContactPhoneCountry || country,
+      keyContactPhone: applyCountryDialCode(current.keyContactPhone, current.keyContactPhoneCountry || country)
+    }));
+  }
+
+  function setPhoneCountry(country: string) {
+    setForm((current) => ({
+      ...current,
+      keyContactPhoneCountry: country,
+      keyContactPhone: applyCountryDialCode(current.keyContactPhone, country)
+    }));
+  }
+
+  function setPhone(phone: string) {
+    setForm((current) => ({
+      ...current,
+      keyContactPhone: applyCountryDialCode(phone, current.keyContactPhoneCountry || current.headOfficeCountry || current.branchCountry || '')
+    }));
   }
 
   return (
@@ -245,21 +420,26 @@ export function AddEnquiryPage() {
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <div className="flex flex-wrap gap-2">
-            {steps.map((step, index) => (
-              <button
-                key={step.id}
-                type="button"
-                onClick={() => goToStep(step.id)}
-                className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold ${
-                  currentStep.id === step.id
-                    ? 'border-brand-200 bg-brand-50 text-brand-800'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs">{index + 1}</span>
-                {step.label}
-              </button>
-            ))}
+            {steps.map((step, index) => {
+              const accessError = getStepAccessError(step.id);
+              return (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={() => goToStep(step.id)}
+                  disabled={Boolean(accessError)}
+                  title={accessError?.message || step.label}
+                  className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
+                    currentStep.id === step.id
+                      ? 'border-brand-200 bg-brand-50 text-brand-800'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50 disabled:hover:bg-white'
+                  }`}
+                >
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs">{index + 1}</span>
+                  {step.label}
+                </button>
+              );
+            })}
           </div>
           <p className="mt-3 text-sm text-slate-500">{currentStep.description}</p>
         </div>
@@ -287,7 +467,7 @@ export function AddEnquiryPage() {
             <div className="grid gap-4 md:grid-cols-2">
               {form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? (
                 <label className="text-sm font-medium text-slate-700">
-                  Current client
+                  Current client <RequiredMark />
                   <select required value={form.clientId} onChange={(event) => setForm({ ...form, clientId: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
                     <option value="">Select client</option>
                     {clients.map((client) => (
@@ -299,7 +479,7 @@ export function AddEnquiryPage() {
 
               {form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? (
                 <label className="text-sm font-medium text-slate-700">
-                  Company name
+                  Company name <RequiredMark />
                   <input required value={form.companyName} onChange={(event) => setForm({ ...form, companyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
               ) : null}
@@ -307,57 +487,71 @@ export function AddEnquiryPage() {
               {form.enquiryType === 'PROPOSED_COMPANY' ? (
                 <>
                   <label className="text-sm font-medium text-slate-700">
-                    Proposed company name
+                    Proposed company name <RequiredMark />
                     <input required value={form.proposedCompanyName} onChange={(event) => setForm({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
-                  <SearchableSelect label="Proposed legal form" value={form.proposedLegalForm} options={legalForms} onChange={(value) => setForm({ ...form, proposedLegalForm: value })} />
-                  <SearchableSelect label="Jurisdiction of registration" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => setForm({ ...form, jurisdictionOfRegistration: value })} />
+                  <SearchableSelect label="Proposed legal form *" value={form.proposedLegalForm} options={legalForms} onChange={(value) => setForm({ ...form, proposedLegalForm: value })} />
+                  <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => setForm({ ...form, jurisdictionOfRegistration: value })} />
                   <label className="text-sm font-medium text-slate-700">
-                    Proposed business activity
+                    Proposed business activity <RequiredMark />
                     <input value={form.proposedBusinessActivity} onChange={(event) => setForm({ ...form, proposedBusinessActivity: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                   <label className="text-sm font-medium text-slate-700">
-                    Source of initial capital
+                    Source of initial capital <RequiredMark />
                     <input value={form.sourceOfInitialCapital} onChange={(event) => setForm({ ...form, sourceOfInitialCapital: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                   <label className="text-sm font-medium text-slate-700 md:col-span-2">
-                    Proposed registered office address
+                    Proposed registered office address <RequiredMark />
                     <textarea value={form.proposedRegisteredOfficeAddress} onChange={(event) => setForm({ ...form, proposedRegisteredOfficeAddress: event.target.value })} className="mt-1 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                 </>
               ) : null}
 
-              <SearchableMultiSelect label="Requested services" value={form.requestedServices} options={newoonServiceOptions} onChange={(services) => setForm({ ...form, requestedServices: services })} wide />
+              <SearchableMultiSelect label="Requested services *" value={form.requestedServices} options={newoonServiceOptions} onChange={(services) => setForm({ ...form, requestedServices: services })} wide />
             </div>
           ) : null}
 
           {currentStep.id === 'contact' ? (
             <div className="grid gap-4 md:grid-cols-2">
               <label className="text-sm font-medium text-slate-700">
-                Full name
-                <input value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                Full name <RequiredMark />
+                <input required value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
+              <SearchableSelect
+                label="Position *"
+                value={form.keyContactPosition}
+                otherValue={form.keyContactPositionOther}
+                options={positionOptions}
+                onChange={(value) => setForm({ ...form, keyContactPosition: value, ...(value === 'Other' ? {} : { keyContactPositionOther: '' }) })}
+                onOtherChange={(value) => setForm({ ...form, keyContactPositionOther: value })}
+                allowOther
+              />
               <label className="text-sm font-medium text-slate-700">
-                Position
-                <input value={form.keyContactPosition} onChange={(event) => setForm({ ...form, keyContactPosition: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                Email <RequiredMark />
+                <input required type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
-              <label className="text-sm font-medium text-slate-700">
-                Email
-                <input type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-              </label>
-              <label className="text-sm font-medium text-slate-700">
-                Phone
-                <input value={form.keyContactPhone} onChange={(event) => setForm({ ...form, keyContactPhone: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-              </label>
+              <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]">
+                <SearchableSelect
+                  label="Code *"
+                  value={form.keyContactPhoneCountry}
+                  options={countryOptions}
+                  optionLabels={countryDialLabels}
+                  onChange={setPhoneCountry}
+                />
+                <label className="text-sm font-medium text-slate-700">
+                  Phone <RequiredMark />
+                  <input required value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                </label>
+              </div>
             </div>
           ) : null}
 
           {currentStep.id === 'exposure' ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <SearchableSelect label="Head office" value={form.headOfficeCountry} options={countryOptions} onChange={(value) => setForm({ ...form, headOfficeCountry: value })} />
+              <SearchableSelect label="Head office *" value={form.headOfficeCountry} options={countryOptions} onChange={setHeadOfficeCountry} />
               <SearchableSelect label="Branch" value={form.branchCountry} options={countryOptions} onChange={(value) => setForm({ ...form, branchCountry: value })} />
               <label className="text-sm font-medium text-slate-700 md:col-span-2">
-                Area of operation
+                Area of operation <RequiredMark />
                 <textarea value={form.areaOfOperation} onChange={(event) => setForm({ ...form, areaOfOperation: event.target.value })} className="mt-1 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
             </div>
@@ -380,7 +574,13 @@ export function AddEnquiryPage() {
                 Back
               </button>
               {activeStepIndex < steps.length - 1 ? (
-                <button type="button" onClick={goNext} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                <button
+                  type="button"
+                  onClick={goNext}
+                  disabled={Boolean(currentStepError)}
+                  title={currentStepError || 'Next'}
+                  className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-brand-600"
+                >
                   Next
                 </button>
               ) : null}
