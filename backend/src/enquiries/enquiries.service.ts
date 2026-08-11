@@ -1,5 +1,7 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EnquiryStatus, EnquiryType, Prisma } from '@prisma/client';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
@@ -192,12 +194,78 @@ export class EnquiriesService {
     return this.findOne(user, id);
   }
 
+  async uploadAttachmentFile(
+    user: RequestUser,
+    id: string,
+    documentType: string,
+    file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    if (!documentType?.trim()) {
+      throw new BadRequestException('Document type is required');
+    }
+
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Upload an enquiry attachment file');
+    }
+
+    const enquiry = await this.findOne(user, id);
+    const uploadRoot = this.enquiryAttachmentUploadRoot();
+    const enquiryDirectory = join(uploadRoot, enquiry.tenantId, enquiry.id);
+    mkdirSync(enquiryDirectory, { recursive: true });
+
+    const fileName = this.safeFileName(file.originalname);
+    const storedFileName = `${Date.now()}-${fileName}`;
+    writeFileSync(join(enquiryDirectory, storedFileName), file.buffer);
+
+    await this.prisma.enquiryAttachment.create({
+      data: {
+        tenantId: enquiry.tenantId,
+        enquiryId: enquiry.id,
+        documentType: documentType.trim(),
+        fileName,
+        storagePath: join(enquiry.tenantId, enquiry.id, storedFileName),
+        mimeType: file.mimetype,
+        size: file.size,
+        createdBy: user.id
+      }
+    });
+
+    return this.findOne(user, id);
+  }
+
+  async getAttachmentFile(user: RequestUser, id: string, attachmentId: string) {
+    const enquiry = await this.findOne(user, id);
+    const attachment = enquiry.attachments.find((item) => item.id === attachmentId);
+
+    if (!attachment) {
+      throw new NotFoundException('Enquiry attachment not found');
+    }
+
+    if (!attachment.storagePath) {
+      throw new NotFoundException('Uploaded file is not available for this attachment');
+    }
+
+    const absolutePath = this.resolveEnquiryAttachmentPath(attachment.storagePath);
+
+    if (!absolutePath || !existsSync(absolutePath)) {
+      throw new NotFoundException('Uploaded file is not available for this attachment');
+    }
+
+    return {
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      content: readFileSync(absolutePath)
+    };
+  }
+
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
 
     await this.prisma.enquiry.delete({
       where: { id: existing.id }
     });
+
+    this.removeEnquiryAttachmentDirectory(existing.tenantId, existing.id);
 
     return { id: existing.id };
   }
@@ -244,5 +312,47 @@ export class EnquiriesService {
     }
 
     return user.tenantId;
+  }
+
+  private enquiryAttachmentUploadRoot() {
+    return normalize(process.env.ENQUIRY_UPLOAD_DIR || join(process.cwd(), 'uploads', 'enquiry-attachments'));
+  }
+
+  private resolveEnquiryAttachmentPath(storagePath: string) {
+    const uploadRoot = this.enquiryAttachmentUploadRoot();
+    const normalizedRoot = normalize(uploadRoot);
+    const normalizedStoragePath = normalize(storagePath);
+    const legacyUploadPrefix = normalize(join(process.cwd(), 'uploads'));
+    const candidates = [
+      isAbsolute(normalizedStoragePath) ? normalizedStoragePath : join(uploadRoot, normalizedStoragePath),
+      join(process.cwd(), normalizedStoragePath)
+    ];
+
+    if (normalizedStoragePath.startsWith(legacyUploadPrefix)) {
+      candidates.push(join(uploadRoot, relative(legacyUploadPrefix, normalizedStoragePath)));
+    }
+
+    return candidates
+      .map((candidate) => normalize(candidate))
+      .find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
+  }
+
+  private safeFileName(fileName: string) {
+    const name = basename(fileName || 'document')
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return name || 'document';
+  }
+
+  private removeEnquiryAttachmentDirectory(tenantId: string, enquiryId: string) {
+    const uploadRoot = this.enquiryAttachmentUploadRoot();
+    const normalizedRoot = normalize(uploadRoot);
+    const enquiryDirectory = normalize(join(uploadRoot, tenantId, enquiryId));
+
+    if (!enquiryDirectory.startsWith(normalizedRoot)) return;
+
+    rmSync(enquiryDirectory, { recursive: true, force: true });
   }
 }

@@ -1,7 +1,16 @@
-import { ClipboardCheck, Edit3, MessageSquare, Send } from 'lucide-react';
+import { ClipboardCheck, Download, Edit3, Eye, MessageSquare, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { addEnquiryComment, Enquiry, EnquiryStatus, getEnquiry, updateEnquiryStatus } from '../services/kyc-workflow.service';
+import {
+  addEnquiryComment,
+  downloadEnquiryAttachment,
+  Enquiry,
+  EnquiryAttachment,
+  EnquiryStatus,
+  getEnquiry,
+  updateEnquiryStatus,
+  viewEnquiryAttachment
+} from '../services/kyc-workflow.service';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -74,6 +83,34 @@ export function EnquiryDetailsPage() {
     }
   }
 
+  async function openAttachment(attachment: EnquiryAttachment) {
+    if (!enquiry) return;
+    if (!attachment.storagePath) {
+      setError('Uploaded file is not available for this attachment.');
+      return;
+    }
+    setError('');
+    try {
+      await viewEnquiryAttachment(enquiry.id, attachment);
+    } catch (requestError: any) {
+      setError(requestError.response?.data?.message || 'Unable to open enquiry attachment.');
+    }
+  }
+
+  async function saveAttachment(attachment: EnquiryAttachment) {
+    if (!enquiry) return;
+    if (!attachment.storagePath) {
+      setError('Uploaded file is not available for this attachment.');
+      return;
+    }
+    setError('');
+    try {
+      await downloadEnquiryAttachment(enquiry.id, attachment);
+    } catch (requestError: any) {
+      setError(requestError.response?.data?.message || 'Unable to download enquiry attachment.');
+    }
+  }
+
   if (!enquiry) {
     return (
       <div className="space-y-3">
@@ -143,9 +180,33 @@ export function EnquiryDetailsPage() {
         <div className="divide-y divide-slate-100">
           {enquiry.attachments?.length ? (
             enquiry.attachments.map((attachment) => (
-              <div key={attachment.id} className="px-5 py-4">
-                <p className="font-medium text-slate-950">{attachment.documentType}</p>
-                <p className="text-sm text-slate-500">{attachment.fileName}</p>
+              <div key={attachment.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-medium text-slate-950">{attachment.documentType}</p>
+                  <p className="text-sm text-slate-500">{attachment.fileName}</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openAttachment(attachment)}
+                    disabled={!attachment.storagePath}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={attachment.storagePath ? 'View' : 'File unavailable'}
+                    aria-label={`View ${attachment.fileName}`}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => saveAttachment(attachment)}
+                    disabled={!attachment.storagePath}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={attachment.storagePath ? 'Download' : 'File unavailable'}
+                    aria-label={`Download ${attachment.fileName}`}
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             ))
           ) : (

@@ -1,5 +1,7 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
+import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -44,6 +46,31 @@ export class EnquiriesController {
   @Post(':id/comments')
   addComment(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AddEnquiryCommentDto) {
     return this.enquiriesService.addComment(user, id, dto);
+  }
+
+  @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/attachments/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadAttachmentFile(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('documentType') documentType: string,
+    @UploadedFile() file: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
+  ) {
+    return this.enquiriesService.uploadAttachmentFile(user, id, documentType, file);
+  }
+
+  @Get(':id/attachments/:attachmentId/view')
+  async viewAttachment(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+    @Res() response: Response
+  ) {
+    const document = await this.enquiriesService.getAttachmentFile(user, id, attachmentId);
+    response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Disposition', `inline; filename="${document.fileName}"`);
+    response.send(document.content);
   }
 
   @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')

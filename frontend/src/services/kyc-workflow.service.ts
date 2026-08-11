@@ -321,6 +321,44 @@ export function addEnquiryComment(id: string, payload: { body: string }) {
   return api.post<Enquiry>(`/enquiries/${id}/comments`, payload).then((response) => response.data);
 }
 
+export function uploadEnquiryAttachmentFile(id: string, payload: { documentType: string; file: File }) {
+  const data = new FormData();
+  data.append('documentType', payload.documentType);
+  data.append('file', payload.file);
+
+  return api.post<Enquiry>(`/enquiries/${id}/attachments/upload`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((response) => response.data);
+}
+
+export async function viewEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
+  const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: attachment.mimeType || response.data.type || 'application/octet-stream' });
+  const url = window.URL.createObjectURL(blob);
+  const mimeType = blob.type.toLowerCase();
+  const canPreview = mimeType.startsWith('image/') || mimeType === 'application/pdf' || mimeType.startsWith('text/');
+
+  if (canPreview) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+
+  downloadBlob(url, attachment.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
+  const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
+    responseType: 'blob'
+  });
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, attachment.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
 export function deleteEnquiry(id: string) {
   return api.delete<{ id: string }>(`/enquiries/${id}`).then((response) => response.data);
 }
@@ -489,4 +527,13 @@ export async function downloadGeneratedKycDocument(caseId: string, documentId: s
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+function downloadBlob(url: string, fileName: string) {
+  const link = window.document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

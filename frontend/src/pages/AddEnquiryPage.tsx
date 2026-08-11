@@ -2,7 +2,7 @@ import { Save, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
-import { createEnquiry, EnquiryType, getEnquiry, listClients, updateEnquiry, Client } from '../services/kyc-workflow.service';
+import { createEnquiry, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFile, Client } from '../services/kyc-workflow.service';
 import { countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 
@@ -19,10 +19,13 @@ const jurisdictions = ['', 'QFC', 'MOCI', 'Free Zone'];
 const countryOptions = countryDialOptions.map((country) => country.name);
 
 type AttachmentDraft = {
+  id?: string;
   documentType: string;
   fileName: string;
+  storagePath?: string | null;
   mimeType?: string;
   size?: number;
+  file?: File;
 };
 
 type EnquiryStep = 'type' | 'details' | 'contact' | 'exposure' | 'attachments' | 'notes';
@@ -123,8 +126,10 @@ export function AddEnquiryPage() {
           mergeAttachmentTemplates(
             enquiry.enquiryType,
             (enquiry.attachments || []).map((attachment) => ({
+              id: attachment.id,
               documentType: attachment.documentType,
               fileName: attachment.fileName,
+              storagePath: attachment.storagePath,
               mimeType: attachment.mimeType || undefined,
               size: attachment.size || undefined
             }))
@@ -167,16 +172,38 @@ export function AddEnquiryPage() {
       details,
       notes: form.notes || undefined,
       attachments: attachments
-        .filter((attachment) => attachment.fileName.trim())
+        .filter((attachment) => attachment.fileName.trim() && !attachment.file)
         .map((attachment, index) =>
           form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
-            ? { ...attachment, documentType: `Additional document upload ${index + 1}` }
-            : attachment
+            ? {
+                documentType: `Additional document upload ${index + 1}`,
+                fileName: attachment.fileName,
+                storagePath: attachment.storagePath || undefined,
+                mimeType: attachment.mimeType,
+                size: attachment.size
+              }
+            : {
+                documentType: attachment.documentType,
+                fileName: attachment.fileName,
+                storagePath: attachment.storagePath || undefined,
+                mimeType: attachment.mimeType,
+                size: attachment.size
+              }
         )
     };
 
     try {
       const enquiry = id ? await updateEnquiry(id, payload) : await createEnquiry(payload);
+      for (const [index, attachment] of attachments.entries()) {
+        if (!attachment.file) continue;
+        await uploadEnquiryAttachmentFile(enquiry.id, {
+          documentType:
+            form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
+              ? `Additional document upload ${index + 1}`
+              : attachment.documentType,
+          file: attachment.file
+        });
+      }
       navigate(`/enquiries/${enquiry.id}`);
     } catch (requestError: any) {
       setError(getRequestErrorMessage(requestError, `Unable to ${isEditMode ? 'update' : 'create'} enquiry.`));
@@ -426,8 +453,10 @@ function AttachmentRows({
           ? {
               ...attachment,
               fileName: file?.name || '',
+              storagePath: file ? undefined : null,
               mimeType: file?.type || undefined,
-              size: file?.size
+              size: file?.size,
+              file: file || undefined
             }
           : attachment
       )
