@@ -47,7 +47,9 @@ const proposedCompanyAttachments = [
 ];
 
 function attachmentTemplates(enquiryType: EnquiryType): AttachmentDraft[] {
-  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') return [];
+  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
+    return [{ documentType: 'Additional document upload 1', fileName: '' }];
+  }
   const documentTypes = enquiryType === 'PROPOSED_COMPANY' ? proposedCompanyAttachments : existingLegalEntityAttachments;
   return documentTypes.map((documentType) => ({ documentType, fileName: '' }));
 }
@@ -164,7 +166,13 @@ export function AddEnquiryPage() {
       areaOfOperation: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.areaOfOperation || undefined : undefined,
       details,
       notes: form.notes || undefined,
-      attachments: attachments.filter((attachment) => attachment.fileName.trim())
+      attachments: attachments
+        .filter((attachment) => attachment.fileName.trim())
+        .map((attachment, index) =>
+          form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
+            ? { ...attachment, documentType: `Additional document upload ${index + 1}` }
+            : attachment
+        )
     };
 
     try {
@@ -377,9 +385,14 @@ function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label:
     steps.push({ id: 'exposure', label: 'Exposure', description: 'Record the countries and operating areas connected to this entity.' });
   }
 
-  if (enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES') {
-    steps.push({ id: 'attachments', label: 'Attachments', description: 'Capture the relevant document names for AML review.' });
-  }
+  steps.push({
+    id: 'attachments',
+    label: 'Attachments',
+    description:
+      enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
+        ? 'Upload additional documents for the requested new services.'
+        : 'Capture the relevant document names for AML review.'
+  });
 
   steps.push({ id: 'notes', label: 'Notes', description: 'Add any supporting context before saving the enquiry.' });
   return steps;
@@ -387,6 +400,12 @@ function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label:
 
 function mergeAttachmentTemplates(enquiryType: EnquiryType, currentAttachments: AttachmentDraft[]) {
   const templates = attachmentTemplates(enquiryType);
+  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
+    const additionalUploads = currentAttachments.filter((attachment) =>
+      attachment.documentType.toLowerCase().startsWith('additional document upload')
+    );
+    return additionalUploads.length ? additionalUploads : templates;
+  }
   const currentByType = new Map(currentAttachments.map((attachment) => [attachment.documentType, attachment]));
   return templates.map((template) => currentByType.get(template.documentType) || template);
 }
@@ -415,18 +434,54 @@ function AttachmentRows({
     );
   }
 
+  function addAdditionalUpload() {
+    onChange([
+      ...attachments,
+      {
+        documentType: `Additional document upload ${attachments.length + 1}`,
+        fileName: ''
+      }
+    ]);
+  }
+
+  function removeAttachment(index: number) {
+    const nextAttachments = attachments.filter((_, itemIndex) => itemIndex !== index);
+    onChange(nextAttachments.length ? nextAttachments : attachmentTemplates(enquiryType));
+  }
+
+  const isAdditionalUpload = enquiryType === 'CURRENT_CLIENT_NEW_SERVICES';
+
   return (
     <div>
-      <h2 className="text-base font-semibold text-slate-950">Required Attachment Options</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        {enquiryType === 'PROPOSED_COMPANY'
-          ? 'Capture the preliminary incorporation support files required for review.'
-          : 'Capture company, ownership, and identity documents required for review.'}
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-slate-950">
+            {isAdditionalUpload ? 'Additional Document Upload' : 'Required Attachment Options'}
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {isAdditionalUpload
+              ? 'Add one or more supporting documents for the new service request.'
+              : enquiryType === 'PROPOSED_COMPANY'
+                ? 'Capture the preliminary incorporation support files required for review.'
+                : 'Capture company, ownership, and identity documents required for review.'}
+          </p>
+        </div>
+        {isAdditionalUpload ? (
+          <button
+            type="button"
+            onClick={addAdditionalUpload}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Add Document
+          </button>
+        ) : null}
+      </div>
       <div className="mt-4 divide-y divide-slate-100 rounded-md border border-slate-200">
         {attachments.map((attachment, index) => (
-          <div key={attachment.documentType} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_220px_minmax(0,1.2fr)_44px] md:items-center">
-            <p className="text-sm font-medium text-slate-950">{attachment.documentType}</p>
+          <div key={`${attachment.documentType}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_220px_minmax(0,1.2fr)_44px] md:items-center">
+            <p className="text-sm font-medium text-slate-950">
+              {isAdditionalUpload ? `Additional document upload ${index + 1}` : attachment.documentType}
+            </p>
             <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
               <Upload className="h-4 w-4" />
               Upload
@@ -437,10 +492,10 @@ function AttachmentRows({
             </div>
             <button
               type="button"
-              onClick={() => setFile(index, null)}
+              onClick={() => (isAdditionalUpload ? removeAttachment(index) : setFile(index, null))}
               className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-              aria-label={`Clear ${attachment.documentType}`}
-              title="Clear"
+              aria-label={`${isAdditionalUpload ? 'Remove' : 'Clear'} ${attachment.documentType}`}
+              title={isAdditionalUpload ? 'Remove' : 'Clear'}
             >
               <Trash2 className="h-4 w-4" />
             </button>
