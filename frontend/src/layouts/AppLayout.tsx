@@ -1,6 +1,7 @@
 import {
   Building2,
   ClipboardCheck,
+  Inbox,
   LayoutDashboard,
   Layers,
   ListChecks,
@@ -18,6 +19,7 @@ import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
+  { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries },
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake },
   { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks] },
   { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks },

@@ -1,0 +1,248 @@
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { EnquiryStatus, EnquiryType, Prisma } from '@prisma/client';
+import { RequestUser } from '../common/types/request-user.type';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateEnquiryDto } from './dto/create-enquiry.dto';
+import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
+
+@Injectable()
+export class EnquiriesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async create(user: RequestUser, dto: CreateEnquiryDto) {
+    const tenantId = this.getTenantId(user);
+    await this.assertClientTenant(user, dto.clientId);
+    const enquiryCode = await this.nextEnquiryCode(tenantId);
+
+    const enquiryId = await this.prisma.$transaction(async (prisma) => {
+      const enquiry = await prisma.enquiry.create({
+        data: {
+          tenantId,
+          enquiryCode,
+          enquiryType: dto.enquiryType,
+          clientId: dto.enquiryType === EnquiryType.CURRENT_CLIENT_NEW_SERVICES ? dto.clientId : undefined,
+          companyName: dto.companyName,
+          proposedCompanyName: dto.proposedCompanyName,
+          requestedServices: dto.requestedServices || [],
+          keyContactName: dto.keyContactName,
+          keyContactEmail: dto.keyContactEmail,
+          keyContactPhone: dto.keyContactPhone,
+          keyContactPosition: dto.keyContactPosition,
+          headOfficeCountry: dto.headOfficeCountry,
+          branchCountry: dto.branchCountry,
+          areaOfOperation: dto.areaOfOperation,
+          details: this.jsonValue(dto.details),
+          notes: dto.notes,
+          createdById: user.id,
+          attachments: {
+            create:
+              dto.attachments?.map((attachment) => ({
+                tenantId,
+                documentType: attachment.documentType,
+                fileName: attachment.fileName,
+                storagePath: attachment.storagePath,
+                mimeType: attachment.mimeType,
+                size: attachment.size,
+                createdBy: user.id
+              })) || []
+          }
+        }
+      });
+
+      await prisma.enquiryStatusHistory.create({
+        data: {
+          tenantId,
+          enquiryId: enquiry.id,
+          toStatus: EnquiryStatus.DRAFT,
+          note: 'Enquiry created',
+          changedById: user.id
+        }
+      });
+
+      return enquiry.id;
+    });
+
+    return this.findOne(user, enquiryId);
+  }
+
+  findAll(user: RequestUser) {
+    return this.prisma.enquiry.findMany({
+      where: this.tenantWhere(user),
+      orderBy: { createdAt: 'desc' },
+      include: {
+        client: true,
+        attachments: true,
+        comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
+        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } }
+      }
+    });
+  }
+
+  async findOne(user: RequestUser, id: string) {
+    const enquiry = await this.prisma.enquiry.findFirst({
+      where: { id, ...this.tenantWhere(user) },
+      include: {
+        client: { include: { contacts: true, kycCases: true } },
+        attachments: { orderBy: { createdAt: 'desc' } },
+        comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
+        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } },
+        createdBy: true
+      }
+    });
+
+    if (!enquiry) {
+      throw new NotFoundException('Enquiry not found');
+    }
+
+    return enquiry;
+  }
+
+  async update(user: RequestUser, id: string, dto: UpdateEnquiryDto) {
+    const existing = await this.findOne(user, id);
+    await this.assertClientTenant(user, dto.clientId || undefined);
+    const nextClientId =
+      dto.enquiryType && dto.enquiryType !== EnquiryType.CURRENT_CLIENT_NEW_SERVICES
+        ? null
+        : dto.clientId === undefined
+          ? undefined
+          : dto.clientId || null;
+
+    await this.prisma.$transaction(async (prisma) => {
+      if (dto.attachments) {
+        await prisma.enquiryAttachment.deleteMany({
+          where: { enquiryId: existing.id, tenantId: existing.tenantId }
+        });
+      }
+
+      await prisma.enquiry.update({
+        where: { id: existing.id },
+        data: {
+          enquiryType: dto.enquiryType,
+          clientId: nextClientId,
+          companyName: dto.companyName,
+          proposedCompanyName: dto.proposedCompanyName,
+          requestedServices: dto.requestedServices,
+          keyContactName: dto.keyContactName,
+          keyContactEmail: dto.keyContactEmail,
+          keyContactPhone: dto.keyContactPhone,
+          keyContactPosition: dto.keyContactPosition,
+          headOfficeCountry: dto.headOfficeCountry,
+          branchCountry: dto.branchCountry,
+          areaOfOperation: dto.areaOfOperation,
+          details: this.jsonValue(dto.details),
+          notes: dto.notes,
+          ...(dto.attachments
+            ? {
+                attachments: {
+                  create: dto.attachments.map((attachment) => ({
+                    tenantId: existing.tenantId,
+                    documentType: attachment.documentType,
+                    fileName: attachment.fileName,
+                    storagePath: attachment.storagePath,
+                    mimeType: attachment.mimeType,
+                    size: attachment.size,
+                    createdBy: user.id
+                  }))
+                }
+              }
+            : {})
+        }
+      });
+    });
+
+    return this.findOne(user, id);
+  }
+
+  async updateStatus(user: RequestUser, id: string, dto: UpdateEnquiryStatusDto) {
+    const existing = await this.findOne(user, id);
+
+    await this.prisma.$transaction(async (prisma) => {
+      await prisma.enquiry.update({
+        where: { id: existing.id },
+        data: { status: dto.status }
+      });
+
+      await prisma.enquiryStatusHistory.create({
+        data: {
+          tenantId: existing.tenantId,
+          enquiryId: existing.id,
+          fromStatus: existing.status,
+          toStatus: dto.status,
+          note: dto.note,
+          changedById: user.id
+        }
+      });
+    });
+
+    return this.findOne(user, id);
+  }
+
+  async addComment(user: RequestUser, id: string, dto: AddEnquiryCommentDto) {
+    const existing = await this.findOne(user, id);
+
+    await this.prisma.enquiryComment.create({
+      data: {
+        tenantId: existing.tenantId,
+        enquiryId: existing.id,
+        body: dto.body,
+        authorId: user.id
+      }
+    });
+
+    return this.findOne(user, id);
+  }
+
+  async remove(user: RequestUser, id: string) {
+    const existing = await this.findOne(user, id);
+
+    await this.prisma.enquiry.delete({
+      where: { id: existing.id }
+    });
+
+    return { id: existing.id };
+  }
+
+  private async nextEnquiryCode(tenantId: string) {
+    const year = new Date().getFullYear();
+    const prefix = `ENQ-${year}-`;
+    const count = await this.prisma.enquiry.count({
+      where: {
+        tenantId,
+        enquiryCode: { startsWith: prefix }
+      }
+    });
+
+    return `${prefix}${String(count + 1).padStart(4, '0')}`;
+  }
+
+  private async assertClientTenant(user: RequestUser, clientId?: string) {
+    if (!clientId) return;
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, ...this.tenantWhere(user) }
+    });
+
+    if (!client) {
+      throw new NotFoundException('Client not found for this enquiry');
+    }
+  }
+
+  private jsonValue(data?: Record<string, unknown>) {
+    return data === undefined ? undefined : (JSON.parse(JSON.stringify(data)) as Prisma.InputJsonValue);
+  }
+
+  private tenantWhere(user: RequestUser) {
+    return user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
+  }
+
+  private getTenantId(user: RequestUser) {
+    if (user.roles.includes('SUPER_ADMIN') && !user.tenantId) {
+      throw new ForbiddenException('Super admin must act within a tenant for this operation');
+    }
+
+    if (!user.tenantId) {
+      throw new ForbiddenException('User is not assigned to a tenant');
+    }
+
+    return user.tenantId;
+  }
+}

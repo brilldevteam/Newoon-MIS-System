@@ -37,6 +37,10 @@ export type ReviewStage = 'SUPERVISOR' | 'DMLRO' | 'MLRO' | 'SEF';
 
 export type ProposalStatus = 'NOT_REQUIRED' | 'REQUIRED' | 'SENT' | 'ACCEPTED' | 'REJECTED';
 
+export type EnquiryType = 'EXISTING_LEGAL_ENTITY' | 'PROPOSED_COMPANY' | 'CURRENT_CLIENT_NEW_SERVICES';
+
+export type EnquiryStatus = 'DRAFT' | 'SUBMITTED_TO_AML_SUPERVISOR' | 'RETURNED_TO_BD' | 'READY_FOR_KYC' | 'CONVERTED_TO_KYC' | 'CLOSED';
+
 export type ClientContact = {
   id: string;
   name: string;
@@ -105,6 +109,84 @@ export type KycCase = {
   comments: WorkflowComment[];
   statusHistory: StatusHistory[];
   createdAt: string;
+};
+
+export type EnquiryAttachment = {
+  id: string;
+  documentType: string;
+  fileName: string;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  createdAt: string;
+};
+
+export type EnquiryComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  author?: {
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+};
+
+export type EnquiryStatusHistory = {
+  id: string;
+  fromStatus?: EnquiryStatus | null;
+  toStatus: EnquiryStatus;
+  note?: string | null;
+  createdAt: string;
+  changedBy?: {
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+};
+
+export type Enquiry = {
+  id: string;
+  enquiryCode: string;
+  enquiryType: EnquiryType;
+  status: EnquiryStatus;
+  client?: Client | null;
+  clientId?: string | null;
+  companyName?: string | null;
+  proposedCompanyName?: string | null;
+  requestedServices: string[];
+  keyContactName?: string | null;
+  keyContactEmail?: string | null;
+  keyContactPhone?: string | null;
+  keyContactPosition?: string | null;
+  headOfficeCountry?: string | null;
+  branchCountry?: string | null;
+  areaOfOperation?: string | null;
+  details?: Record<string, any> | null;
+  notes?: string | null;
+  attachments: EnquiryAttachment[];
+  comments: EnquiryComment[];
+  statusHistory: EnquiryStatusHistory[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EnquiryPayload = {
+  enquiryType?: EnquiryType;
+  clientId?: string;
+  companyName?: string;
+  proposedCompanyName?: string;
+  requestedServices?: string[];
+  keyContactName?: string;
+  keyContactEmail?: string;
+  keyContactPhone?: string;
+  keyContactPosition?: string;
+  headOfficeCountry?: string;
+  branchCountry?: string;
+  areaOfOperation?: string;
+  details?: Record<string, any>;
+  notes?: string;
+  attachments?: Array<{ documentType: string; fileName: string; storagePath?: string; mimeType?: string; size?: number }>;
 };
 
 export type AmlNotification = {
@@ -213,6 +295,34 @@ export function updateClient(
 
 export function deleteClient(id: string) {
   return api.delete<{ id: string }>(`/clients/${id}`).then((response) => response.data);
+}
+
+export function listEnquiries() {
+  return api.get<Enquiry[]>('/enquiries').then((response) => response.data);
+}
+
+export function createEnquiry(payload: EnquiryPayload) {
+  return api.post<Enquiry>('/enquiries', payload).then((response) => response.data);
+}
+
+export function getEnquiry(id: string) {
+  return api.get<Enquiry>(`/enquiries/${id}`).then((response) => response.data);
+}
+
+export function updateEnquiry(id: string, payload: EnquiryPayload) {
+  return api.patch<Enquiry>(`/enquiries/${id}`, payload).then((response) => response.data);
+}
+
+export function updateEnquiryStatus(id: string, payload: { status: EnquiryStatus; note?: string }) {
+  return api.patch<Enquiry>(`/enquiries/${id}/status`, payload).then((response) => response.data);
+}
+
+export function addEnquiryComment(id: string, payload: { body: string }) {
+  return api.post<Enquiry>(`/enquiries/${id}/comments`, payload).then((response) => response.data);
+}
+
+export function deleteEnquiry(id: string) {
+  return api.delete<{ id: string }>(`/enquiries/${id}`).then((response) => response.data);
 }
 
 export function listKycCases() {

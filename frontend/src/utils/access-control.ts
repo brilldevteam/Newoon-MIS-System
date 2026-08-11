@@ -26,6 +26,7 @@ export const roleLabels: Record<string, string> = {
 };
 
 export const workflowRoles = {
+  enquiries: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
   clientIntake: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   caseCreation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   documentUpload: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR'],

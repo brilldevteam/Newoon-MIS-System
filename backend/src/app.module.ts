@@ -10,6 +10,7 @@ import { PermissionsModule } from './permissions/permissions.module';
 import { ModulesModule } from './modules/modules.module';
 import { TenantModulesModule } from './tenant-modules/tenant-modules.module';
 import { ClientsModule } from './clients/clients.module';
+import { EnquiriesModule } from './enquiries/enquiries.module';
 import { KycModule } from './kyc/kyc.module';
 import { DocumentsModule } from './documents/documents.module';
 import { ApprovalsModule } from './approvals/approvals.module';
@@ -29,6 +30,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ModulesModule,
     TenantModulesModule,
     ClientsModule,
+    EnquiriesModule,
     KycModule,
     DocumentsModule,
     ApprovalsModule,
