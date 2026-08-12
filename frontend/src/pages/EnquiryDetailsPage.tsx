@@ -1,8 +1,9 @@
-import { ClipboardCheck, Download, Edit3, Eye, MessageSquare, Send } from 'lucide-react';
+import { ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   addEnquiryComment,
+  convertEnquiryToKyc,
   downloadEnquiryAttachment,
   Enquiry,
   EnquiryAttachment,
@@ -11,6 +12,7 @@ import {
   updateEnquiryStatus,
   viewEnquiryAttachment
 } from '../services/kyc-workflow.service';
+import { getApiErrorMessage } from '../services/api';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -34,6 +36,7 @@ function actorName(actor?: { firstName: string; lastName: string; email: string 
 
 export function EnquiryDetailsPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [enquiry, setEnquiry] = useState<Enquiry | null>(null);
   const [statusNote, setStatusNote] = useState('');
   const [comment, setComment] = useState('');
@@ -62,6 +65,20 @@ export function EnquiryDetailsPage() {
       setStatusNote('');
     } catch (requestError: any) {
       setError(requestError.response?.data?.message || 'Unable to update enquiry status.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createKycFromEnquiry() {
+    if (!id) return;
+    setSaving(true);
+    setError('');
+    try {
+      const kycCase = await convertEnquiryToKyc(id);
+      navigate(`/kyc/${kycCase.id}`);
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, 'Unable to create KYC case from this enquiry.'));
     } finally {
       setSaving(false);
     }
@@ -230,6 +247,12 @@ export function EnquiryDetailsPage() {
             <ClipboardCheck className="h-4 w-4" />
             Mark Ready for KYC
           </button>
+          {enquiry.status === 'READY_FOR_KYC' ? (
+            <button type="button" disabled={saving} onClick={createKycFromEnquiry} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
+              <FilePlus2 className="h-4 w-4" />
+              Create KYC Case
+            </button>
+          ) : null}
         </div>
       </section>
 

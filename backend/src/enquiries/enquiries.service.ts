@@ -1,11 +1,23 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { EnquiryStatus, EnquiryType, Prisma } from '@prisma/client';
+import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, NotificationType, Prisma } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
+
+const REQUIRED_DOCUMENT_TYPES = [
+  'Commercial Registration / CR Extract',
+  'Entity Card / Computer Card',
+  'Certificate of Incorporation',
+  'Articles of Association',
+  'QID / Passport copies',
+  'CR of legal entity shareholders',
+  'National address certificates',
+  'Latest Audited Financial Statements',
+  'Tax Card'
+];
 
 @Injectable()
 export class EnquiriesService {
@@ -190,6 +202,30 @@ export class EnquiriesService {
           changedById: user.id
         }
       });
+
+      if (dto.status === EnquiryStatus.SUBMITTED_TO_AML_SUPERVISOR) {
+        const recipients = await prisma.user.findMany({
+          where: {
+            tenantId: existing.tenantId,
+            roles: {
+              some: {
+                role: { name: { in: ['AML_SUPERVISOR', 'AML_TEAM'] } }
+              }
+            }
+          },
+          select: { id: true }
+        });
+
+        await prisma.notification.createMany({
+          data: (recipients.length ? recipients : [{ id: null }]).map((recipient) => ({
+            tenantId: existing.tenantId,
+            recipientId: recipient.id,
+            type: NotificationType.AML_CASE_SUBMITTED,
+            title: 'Enquiry submitted to AML Supervisor',
+            message: `${this.enquiryDisplayName(existing)} is ready for AML Supervisor review.`
+          }))
+        });
+      }
     });
 
     return this.findOne(user, id);
@@ -208,6 +244,211 @@ export class EnquiriesService {
     });
 
     return this.findOne(user, id);
+  }
+
+  async convertToKyc(user: RequestUser, id: string) {
+    try {
+      return await this.convertToKycUnsafe(user, id);
+    } catch (error) {
+      this.logConvertFailure(user, id, error);
+      if (error instanceof HttpException) throw error;
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError ||
+        error instanceof Prisma.PrismaClientValidationError
+      ) {
+        throw new BadRequestException('Unable to create KYC case from this enquiry. Confirm the latest database migrations are applied and try again.');
+      }
+      throw new BadRequestException('Unable to create KYC case from this enquiry. Check the server log for the exact conversion error.');
+    }
+  }
+
+  private async convertToKycUnsafe(user: RequestUser, id: string) {
+    const enquiry = await this.findOne(user, id);
+
+    if (enquiry.status === EnquiryStatus.CONVERTED_TO_KYC) {
+      throw new BadRequestException('This enquiry has already been converted to a KYC case.');
+    }
+
+    if (enquiry.status !== EnquiryStatus.READY_FOR_KYC) {
+      throw new BadRequestException('Mark the enquiry as ready for KYC before creating the KYC case.');
+    }
+
+    const tenantId = this.getTenantId(user);
+    const displayName = this.enquiryDisplayName(enquiry);
+    const details = this.objectValue(enquiry.details);
+
+    return this.prisma.$transaction(async (prisma) => {
+      let clientId = enquiry.clientId;
+
+      if (!clientId) {
+        const client = await prisma.client.create({
+          data: {
+            tenantId,
+            name: displayName,
+            industry: this.optionalText(details.proposedBusinessActivity),
+            country: enquiry.headOfficeCountry || enquiry.branchCountry,
+            contacts: enquiry.keyContactName
+              ? {
+                  create: {
+                    tenantId,
+                    name: enquiry.keyContactName,
+                    email: enquiry.keyContactEmail,
+                    phone: enquiry.keyContactPhone,
+                    position: enquiry.keyContactPosition,
+                    isPrimary: true
+                  }
+                }
+              : undefined
+          }
+        });
+        clientId = client.id;
+      }
+
+      const serviceName = this.serviceDisplayName(enquiry.requestedServices);
+      const service = serviceName
+        ? await prisma.clientService.upsert({
+            where: { tenantId_name: { tenantId, name: serviceName } },
+            update: {},
+            create: { tenantId, name: serviceName }
+          })
+        : null;
+
+      const createdCase = await prisma.kycCase.create({
+        data: {
+          tenantId,
+          clientId,
+          serviceId: service?.id,
+          title: `${displayName} KYC`,
+          status: enquiry.attachments.length ? KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED : KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
+          createdById: user.id
+        }
+      });
+
+      const legalDocuments = enquiry.attachments.map((attachment) => ({
+        tenantId,
+        kycCaseId: createdCase.id,
+        documentType: attachment.documentType,
+        fileName: attachment.fileName,
+        storagePath: this.copyEnquiryAttachmentToLegalDocuments(enquiry.tenantId, createdCase.id, attachment),
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        uploadedById: user.id
+      }));
+
+      if (legalDocuments.length) {
+        await prisma.legalDocument.createMany({ data: legalDocuments });
+      }
+
+      const form = await prisma.kycForm.create({
+        data: {
+          tenantId,
+          kycCaseId: createdCase.id,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+
+      const sectionA = this.enquirySectionA(enquiry, details);
+      const sectionE = this.enquirySectionE(enquiry);
+      const requiredRows = this.requiredDocumentRows(legalDocuments);
+
+      await prisma.kycSectionData.createMany({
+        data: [
+          {
+            tenantId,
+            kycCaseId: createdCase.id,
+            kycFormId: form.id,
+            sectionKey: KycFormSectionKey.GENERAL_COMPANY,
+            data: this.requiredJsonValue(sectionA),
+            createdBy: user.id,
+            updatedBy: user.id
+          },
+          {
+            tenantId,
+            kycCaseId: createdCase.id,
+            kycFormId: form.id,
+            sectionKey: KycFormSectionKey.COMMUNICATION_PERSON,
+            data: this.requiredJsonValue(sectionE),
+            createdBy: user.id,
+            updatedBy: user.id
+          },
+          {
+            tenantId,
+            kycCaseId: createdCase.id,
+            kycFormId: form.id,
+            sectionKey: KycFormSectionKey.REQUIRED_DOCUMENTS,
+            data: this.requiredJsonValue({ documents: requiredRows }),
+            createdBy: user.id,
+            updatedBy: user.id
+          }
+        ]
+      });
+
+      await prisma.kycRequiredDocument.createMany({
+        data: requiredRows.map((row, index) => ({
+          tenantId,
+          kycCaseId: createdCase.id,
+          kycFormId: form.id,
+          documentType: row.documentType,
+          isRequired: true,
+          isProvided: Boolean(row.isProvided),
+          fileName: row.fileName || null,
+          storagePath: row.storagePath || null,
+          mimeType: row.mimeType || null,
+          size: row.size || null,
+          sortOrder: index,
+          createdBy: user.id,
+          updatedBy: user.id
+        }))
+      });
+
+      await prisma.kycCaseStatusHistory.create({
+        data: {
+          tenantId,
+          kycCaseId: createdCase.id,
+          toStatus: createdCase.status,
+          changedById: user.id,
+          note: `KYC case created from enquiry ${enquiry.enquiryCode}`
+        }
+      });
+
+      await prisma.workflowComment.create({
+        data: {
+          tenantId,
+          kycCaseId: createdCase.id,
+          authorId: user.id,
+          body: `Created from enquiry ${enquiry.enquiryCode}.`
+        }
+      });
+
+      await prisma.enquiry.update({
+        where: { id: enquiry.id },
+        data: { status: EnquiryStatus.CONVERTED_TO_KYC, clientId }
+      });
+
+      await prisma.enquiryStatusHistory.create({
+        data: {
+          tenantId,
+          enquiryId: enquiry.id,
+          fromStatus: enquiry.status,
+          toStatus: EnquiryStatus.CONVERTED_TO_KYC,
+          note: `Converted to KYC case ${createdCase.title}`,
+          changedById: user.id
+        }
+      });
+
+      return prisma.kycCase.findUniqueOrThrow({
+        where: { id: createdCase.id },
+        include: {
+          client: { include: { contacts: true } },
+          service: true,
+          legalDocuments: { orderBy: { createdAt: 'desc' } },
+          comments: { include: { author: true }, orderBy: { createdAt: 'desc' } },
+          statusHistory: { orderBy: { createdAt: 'asc' } },
+          notifications: { orderBy: { createdAt: 'desc' } }
+        }
+      });
+    });
   }
 
   async uploadAttachmentFile(
@@ -314,6 +555,10 @@ export class EnquiriesService {
     return data === undefined ? undefined : (JSON.parse(JSON.stringify(data)) as Prisma.InputJsonValue);
   }
 
+  private requiredJsonValue(data: unknown) {
+    return JSON.parse(JSON.stringify(data)) as Prisma.InputJsonValue;
+  }
+
   private tenantWhere(user: RequestUser) {
     return user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
   }
@@ -334,12 +579,97 @@ export class EnquiriesService {
     return normalize(process.env.ENQUIRY_UPLOAD_DIR || join(process.cwd(), 'uploads', 'enquiry-attachments'));
   }
 
+  private legalDocumentUploadRoot() {
+    return normalize(process.env.UPLOAD_DIR || join(process.cwd(), 'uploads', 'legal-documents'));
+  }
+
   private logCreateFailure(user: RequestUser, dto: CreateEnquiryDto, error: unknown) {
     const errorName = error instanceof Error ? error.name : 'UnknownError';
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.logger.error(
       `Unable to create enquiry for user=${user.email} roles=${user.roles.join(',')} tenantId=${user.tenantId || 'none'} enquiryType=${dto.enquiryType}: ${errorName}: ${errorMessage}`
     );
+  }
+
+  private logConvertFailure(user: RequestUser, enquiryId: string, error: unknown) {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    this.logger.error(
+      `Unable to convert enquiry=${enquiryId} for user=${user.email} roles=${user.roles.join(',')} tenantId=${user.tenantId || 'none'}: ${errorName}: ${errorMessage}`,
+      errorStack
+    );
+  }
+
+  private enquiryDisplayName(enquiry: { companyName: string | null; proposedCompanyName: string | null; enquiryCode: string }) {
+    return enquiry.companyName || enquiry.proposedCompanyName || enquiry.enquiryCode;
+  }
+
+  private serviceDisplayName(services: string[]) {
+    return services.filter(Boolean).join(', ');
+  }
+
+  private objectValue(value: unknown) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  }
+
+  private optionalText(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private enquirySectionA(
+    enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>,
+    details: Record<string, unknown>
+  ) {
+    return {
+      legalName: enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
+      countryOfIncorporation: enquiry.headOfficeCountry || enquiry.branchCountry || '',
+      registeredOfficeAddress: this.optionalText(details.proposedRegisteredOfficeAddress) || '',
+      telephone: enquiry.keyContactPhone || '',
+      email: enquiry.keyContactEmail || '',
+      businessNature: this.optionalText(details.proposedBusinessActivity) || '',
+      licenseActivities: this.optionalText(details.proposedBusinessActivity) || '',
+      relatedIndustry: this.optionalText(details.relatedIndustry) || '',
+      prospectiveService: enquiry.requestedServices || []
+    };
+  }
+
+  private enquirySectionE(enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>) {
+    return {
+      fullName: enquiry.keyContactName || '',
+      position: enquiry.keyContactPosition || '',
+      mobileNumber: enquiry.keyContactPhone || '',
+      email: enquiry.keyContactEmail || ''
+    };
+  }
+
+  private requiredDocumentRows(
+    legalDocuments: Array<{ documentType: string; fileName: string; storagePath: string | null; mimeType: string | null; size: number | null }>
+  ) {
+    const matched = new Set<number>();
+    const rows = REQUIRED_DOCUMENT_TYPES.map((documentType) => {
+      const matchIndex = legalDocuments.findIndex((document, index) => !matched.has(index) && this.isSameDocumentType(document.documentType, documentType));
+      const match = matchIndex >= 0 ? legalDocuments[matchIndex] : null;
+      if (matchIndex >= 0) matched.add(matchIndex);
+      return {
+        documentType,
+        isRequired: true,
+        isProvided: Boolean(match),
+        fileName: match?.fileName || '',
+        storagePath: match?.storagePath || '',
+        mimeType: match?.mimeType || '',
+        size: match?.size || null
+      };
+    });
+
+    return rows;
+  }
+
+  private isSameDocumentType(source: string, required: string) {
+    const normalizeLabel = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const sourceText = normalizeLabel(source);
+    const requiredText = normalizeLabel(required);
+    return sourceText.includes(requiredText) || requiredText.includes(sourceText);
   }
 
   private resolveEnquiryAttachmentPath(storagePath: string) {
@@ -359,6 +689,24 @@ export class EnquiriesService {
     return candidates
       .map((candidate) => normalize(candidate))
       .find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
+  }
+
+  private copyEnquiryAttachmentToLegalDocuments(
+    tenantId: string,
+    kycCaseId: string,
+    attachment: { id: string; fileName: string; storagePath: string | null }
+  ) {
+    if (!attachment.storagePath) return null;
+    const source = this.resolveEnquiryAttachmentPath(attachment.storagePath);
+    if (!source) return null;
+
+    const uploadRoot = this.legalDocumentUploadRoot();
+    const caseDirectory = join(uploadRoot, tenantId, kycCaseId);
+    mkdirSync(caseDirectory, { recursive: true });
+
+    const storedFileName = `${Date.now()}-${attachment.id}-${this.safeFileName(attachment.fileName)}`;
+    writeFileSync(join(caseDirectory, storedFileName), readFileSync(source));
+    return join(tenantId, kycCaseId, storedFileName);
   }
 
   private safeFileName(fileName: string) {

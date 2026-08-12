@@ -199,6 +199,16 @@ export type AmlNotification = {
   kycCase?: KycCase | null;
 };
 
+export type AppNotification = {
+  id: string;
+  title: string;
+  message: string;
+  type: string;
+  isRead: boolean;
+  createdAt: string;
+  kycCase?: KycCase | null;
+};
+
 export type ReviewTask = {
   id: string;
   stage: ReviewStage;
@@ -315,6 +325,10 @@ export function updateEnquiry(id: string, payload: EnquiryPayload) {
 
 export function updateEnquiryStatus(id: string, payload: { status: EnquiryStatus; note?: string }) {
   return api.patch<Enquiry>(`/enquiries/${id}/status`, payload).then((response) => response.data);
+}
+
+export function convertEnquiryToKyc(id: string) {
+  return api.post<KycCase>(`/enquiries/${id}/convert-to-kyc`).then((response) => response.data);
 }
 
 export function addEnquiryComment(id: string, payload: { body: string }) {
@@ -444,6 +458,18 @@ export function addWorkflowComment(id: string, body: string) {
 
 export function getAmlNotifications() {
   return api.get<AmlNotification[]>('/kyc/aml/notifications').then((response) => response.data);
+}
+
+export function getNotifications() {
+  return api.get<AppNotification[]>('/notifications').then((response) => response.data);
+}
+
+export function markNotificationRead(id: string) {
+  return api.patch<AppNotification>(`/notifications/${id}/read`).then((response) => response.data);
+}
+
+export function markAllNotificationsRead() {
+  return api.patch<AppNotification[]>('/notifications/read-all').then((response) => response.data);
 }
 
 export function getMyReviewTasks() {

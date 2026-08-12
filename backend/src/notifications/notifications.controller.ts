@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequestUser } from '../common/types/request-user.type';
@@ -12,5 +12,15 @@ export class NotificationsController {
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.notificationsService.findAll(user);
+  }
+
+  @Patch('read-all')
+  markAllRead(@CurrentUser() user: RequestUser) {
+    return this.notificationsService.markAllRead(user);
+  }
+
+  @Patch(':id/read')
+  markRead(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.notificationsService.markRead(user, id);
   }
 }

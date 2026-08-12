@@ -26,6 +26,12 @@ export class EnquiriesController {
     return this.enquiriesService.findAll(user);
   }
 
+  @Roles('AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/convert-to-kyc')
+  convertToKyc(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.enquiriesService.convertToKyc(user, id);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.enquiriesService.findOne(user, id);
