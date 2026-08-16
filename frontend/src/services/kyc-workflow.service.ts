@@ -345,6 +345,14 @@ export function uploadEnquiryAttachmentFile(id: string, payload: { documentType:
   }).then((response) => response.data);
 }
 
+export async function uploadEnquiryAttachmentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  let enquiry: Enquiry | null = null;
+  for (const file of payload.files) {
+    enquiry = await uploadEnquiryAttachmentFile(id, { documentType: payload.documentType, file });
+  }
+  return enquiry;
+}
+
 export async function viewEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
   const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
     responseType: 'blob'
@@ -418,6 +426,14 @@ export function uploadLegalDocumentFile(id: string, payload: { documentType: str
   data.append('file', payload.file);
 
   return api.post<KycCase>(`/kyc/${id}/legal-documents/upload`, data).then((response) => response.data);
+}
+
+export async function uploadLegalDocumentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  let kycCase: KycCase | null = null;
+  for (const file of payload.files) {
+    kycCase = await uploadLegalDocumentFile(id, { documentType: payload.documentType, file });
+  }
+  return kycCase;
 }
 
 export async function viewLegalDocument(caseId: string, document: LegalDocument) {

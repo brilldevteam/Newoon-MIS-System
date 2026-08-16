@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
+import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { useAuth } from '../hooks/useAuth';
 import {
   autoSaveKycForm,
@@ -16,7 +17,7 @@ import {
   KycFormData,
   saveKycFormSection,
   submitDmlroReview,
-  uploadLegalDocumentFile
+  uploadLegalDocumentFiles
 } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
@@ -53,6 +54,10 @@ function createAdditionalDocumentRow(): Row {
     mimeType: '',
     size: undefined
   };
+}
+
+function fileNameList(value: unknown) {
+  return typeof value === 'string' ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
 }
 
 const countryOptions = [
@@ -1170,15 +1175,15 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
   const [uploadingKey, setUploadingKey] = useState('');
   const [uploadError, setUploadError] = useState('');
 
-  async function uploadDocument(index: number, file: File | null) {
-    if (!file || !caseId) return;
+  async function uploadDocument(index: number, files: File[]) {
+    if (!files.length || !caseId) return;
     const row = documents[index];
     const documentType = row?.documentType || `Document ${index + 1}`;
     setUploadingKey(`required-${index}`);
     setUploadError('');
     try {
-      const updatedCase = await uploadLegalDocumentFile(caseId, { documentType, file });
-      const uploaded = [...updatedCase.legalDocuments].find((document) => document.documentType === documentType && document.fileName === file.name);
+      const updatedCase = await uploadLegalDocumentFiles(caseId, { documentType, files });
+      const uploaded = updatedCase?.legalDocuments.filter((document) => document.documentType === documentType && files.some((file) => file.name === document.fileName)) || [];
       onChange({
         ...data,
         documents: documents.map((documentRow: Row, rowIndex: number) =>
@@ -1186,10 +1191,10 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
             ? {
                 ...documentRow,
                 isProvided: true,
-                fileName: uploaded?.fileName || file.name,
-                storagePath: uploaded?.storagePath,
-                mimeType: uploaded?.mimeType || file.type || undefined,
-                size: uploaded?.size || file.size
+                fileName: uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', '),
+                storagePath: uploaded[0]?.storagePath,
+                mimeType: files.length === 1 ? uploaded[0]?.mimeType || files[0].type || undefined : undefined,
+                size: files.length === 1 ? uploaded[0]?.size || files[0].size : undefined
               }
             : documentRow
         )
@@ -1208,19 +1213,19 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
     });
   }
 
-  async function uploadAdditionalDocument(index: number, file: File | null) {
-    if (!file || !caseId) return;
+  async function uploadAdditionalDocument(index: number, files: File[]) {
+    if (!files.length || !caseId) return;
     const documentType = `Additional document ${index + 1}`;
     setUploadingKey(`additional-${index}`);
     setUploadError('');
     try {
-      const updatedCase = await uploadLegalDocumentFile(caseId, { documentType, file });
-      const uploaded = [...updatedCase.legalDocuments].find((document) => document.documentType === documentType && document.fileName === file.name);
+      const updatedCase = await uploadLegalDocumentFiles(caseId, { documentType, files });
+      const uploaded = updatedCase?.legalDocuments.filter((document) => document.documentType === documentType && files.some((file) => file.name === document.fileName)) || [];
       updateAdditionalDocument(index, {
-        fileName: uploaded?.fileName || file.name,
-        storagePath: uploaded?.storagePath,
-        mimeType: uploaded?.mimeType || file.type || undefined,
-        size: uploaded?.size || file.size
+        fileName: uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', '),
+        storagePath: uploaded[0]?.storagePath,
+        mimeType: files.length === 1 ? uploaded[0]?.mimeType || files[0].type || undefined : undefined,
+        size: files.length === 1 ? uploaded[0]?.size || files[0].size : undefined
       });
     } catch (requestError: any) {
       setUploadError(getApiErrorMessage(requestError, 'Unable to upload this document.'));
@@ -1240,29 +1245,12 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
             <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
             Provided
           </label>
-          <label
-            className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-            title={document.fileName || 'Upload'}
-          >
-            {uploadingKey === `required-${index}` ? (
-              <span className="truncate">Uploading...</span>
-            ) : document.fileName ? (
-              <span className="truncate">{document.fileName}</span>
-            ) : (
-              <>
-                <Upload className="h-4 w-4" />
-                Upload
-              </>
-            )}
-            <input
-              type="file"
-              className="hidden"
-              onChange={(event) => {
-                uploadDocument(index, event.target.files?.[0] || null);
-                event.currentTarget.value = '';
-              }}
-            />
-          </label>
+          <MultiFileUploadControl
+            names={fileNameList(document.fileName)}
+            disabled={uploadingKey === `required-${index}`}
+            buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload'}
+            onSelect={(files) => uploadDocument(index, files)}
+          />
         </div>
       ))}
       </div>
@@ -1284,30 +1272,13 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         {additionalDocuments.length ? (
           additionalDocuments.map((document: Row, index: number) => (
             <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(220px,1fr)_auto]">
-              <label
-                className="inline-flex h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                title={document.fileName || 'Upload file or ZIP'}
-              >
-                {uploadingKey === `additional-${index}` ? (
-                  <span className="truncate">Uploading...</span>
-                ) : document.fileName ? (
-                  <span className="truncate">{document.fileName}</span>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4" />
-                    Upload file / ZIP
-                  </>
-                )}
-                <input
-                  type="file"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
-                  className="hidden"
-                  onChange={(event) => {
-                    uploadAdditionalDocument(index, event.target.files?.[0] || null);
-                    event.currentTarget.value = '';
-                  }}
-                />
-              </label>
+              <MultiFileUploadControl
+                names={fileNameList(document.fileName)}
+                disabled={uploadingKey === `additional-${index}`}
+                buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload file / ZIP'}
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
+                onSelect={(files) => uploadAdditionalDocument(index, files)}
+              />
               <button
                 type="button"
                 onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}

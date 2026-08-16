@@ -1508,16 +1508,17 @@ export class KycService {
         }));
 
     const documents = baseRequiredDocuments.map((row) => {
-      const uploaded = legalDocuments.find((document) => !matchedLegalDocumentIds.has(document.id) && this.isRequiredDocumentMatch(document.documentType, row.documentType));
-      if (uploaded) matchedLegalDocumentIds.add(uploaded.id);
+      const uploaded = legalDocuments.filter((document) => !matchedLegalDocumentIds.has(document.id) && this.isRequiredDocumentMatch(document.documentType, row.documentType));
+      uploaded.forEach((document) => matchedLegalDocumentIds.add(document.id));
+      const primaryUpload = uploaded[0];
 
       return {
         ...row,
-        isProvided: Boolean(row.isProvided) || Boolean(uploaded),
-        fileName: row.fileName || uploaded?.fileName || null,
-        storagePath: row.storagePath || uploaded?.storagePath || null,
-        mimeType: row.mimeType || uploaded?.mimeType || null,
-        size: row.size ?? uploaded?.size ?? null
+        isProvided: Boolean(row.isProvided) || Boolean(uploaded.length),
+        fileName: uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : row.fileName || null,
+        storagePath: row.storagePath || primaryUpload?.storagePath || null,
+        mimeType: row.mimeType || primaryUpload?.mimeType || null,
+        size: row.size ?? primaryUpload?.size ?? null
       };
     });
 

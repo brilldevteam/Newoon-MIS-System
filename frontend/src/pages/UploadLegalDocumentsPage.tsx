@@ -1,19 +1,20 @@
 import { Plus, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getKycCase, KycCase, uploadLegalDocumentFile } from '../services/kyc-workflow.service';
+import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
+import { getKycCase, KycCase, uploadLegalDocumentFiles } from '../services/kyc-workflow.service';
 
 type UploadRow = {
   id: string;
   documentType: string;
-  file: File | null;
+  files: File[];
 };
 
 function createUploadRow(): UploadRow {
   return {
     id: crypto.randomUUID(),
     documentType: '',
-    file: null
+    files: []
   };
 }
 
@@ -37,17 +38,17 @@ export function UploadLegalDocumentsPage() {
     setSaving(true);
     setError('');
     try {
-      const incompleteRow = documents.find((document) => !document.documentType.trim() || !document.file);
+      const incompleteRow = documents.find((document) => !document.documentType.trim() || !document.files.length);
 
       if (incompleteRow) {
-        setError('Add a document type and file for every row before saving.');
+        setError('Add a document type and at least one file for every row before saving.');
         return;
       }
 
       for (const document of documents) {
-        await uploadLegalDocumentFile(id, {
+        await uploadLegalDocumentFiles(id, {
           documentType: document.documentType.trim(),
-          file: document.file as File
+          files: document.files
         });
       }
 
@@ -93,28 +94,9 @@ export function UploadLegalDocumentsPage() {
                   className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                 />
               </label>
-              <div className="text-sm font-medium text-slate-700">
-                <span className="block">Upload file</span>
-                <label className="mt-1 inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
-                  <Upload className="h-4 w-4" />
-                  Upload
-                  <input
-                    required
-                    type="file"
-                    className="hidden"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      updateDocument(document.id, { file });
-                    }}
-                  />
-                </label>
-              </div>
-              <div className="text-sm font-medium text-slate-700">
-                <span className="block">Uploaded document</span>
-                <div className="mt-1 flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm text-slate-600">
-                  <span className="truncate">{document.file?.name || 'No file selected'}</span>
-                </div>
+              <div className="text-sm font-medium text-slate-700 lg:col-span-2">
+                <span className="mb-1 block">Upload documents</span>
+                <MultiFileUploadControl names={document.files.map((file) => file.name)} onSelect={(files) => updateDocument(document.id, { files })} />
               </div>
               <button
                 type="button"
@@ -145,7 +127,7 @@ export function UploadLegalDocumentsPage() {
           className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
         >
           <Upload className="h-4 w-4" />
-          {saving ? 'Saving...' : documents.length === 1 ? 'Save Document' : `Save ${documents.length} Documents`}
+          {saving ? 'Saving...' : 'Save Documents'}
         </button>
         <Link
           to={`/kyc/${kycCase.id}`}

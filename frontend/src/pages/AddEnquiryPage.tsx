@@ -1,8 +1,9 @@
-import { Save, Trash2, Upload } from 'lucide-react';
+import { Save, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
-import { createEnquiry, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFile, Client } from '../services/kyc-workflow.service';
+import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
+import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 
@@ -14,9 +15,10 @@ const enquiryTypeLabels: Record<EnquiryType, string> = {
   CURRENT_CLIENT_NEW_SERVICES: 'Current Client - New Services Requested'
 };
 
-const legalForms = ['', 'QFC LLC', 'Branch', 'Partnership'];
+const legalForms = ['', 'QFC Holding', 'QFC SPC', 'QFZ LLC', 'MOCI LLC'];
 const jurisdictions = ['', 'QFC', 'MOCI', 'Free Zone'];
 const countryOptions = countryDialOptions.map((country) => country.name);
+const nationalityOptions = countryOptions;
 const countryDialLabels = Object.fromEntries(countryDialOptions.map((country) => [country.name, country.name ? `${country.name} (${country.dialCode})` : 'Select code']));
 const positionOptions = [
   '',
@@ -42,7 +44,7 @@ type AttachmentDraft = {
   storagePath?: string | null;
   mimeType?: string;
   size?: number;
-  file?: File;
+  files?: File[];
 };
 
 type EnquiryStep = 'type' | 'details' | 'contact' | 'exposure' | 'attachments' | 'notes';
@@ -59,9 +61,13 @@ type EnquiryValidationForm = {
   keyContactPhoneCountry: string;
   keyContactPosition: string;
   keyContactPositionOther: string;
+  keyContactNationality: string;
+  keyContactNationalityOther: string;
+  keyContactIdentityNumber: string;
   headOfficeCountry: string;
   areaOfOperation: string;
   proposedLegalForm: string;
+  proposedLegalFormOther: string;
   jurisdictionOfRegistration: string;
   proposedBusinessActivity: string;
   sourceOfInitialCapital: string;
@@ -69,6 +75,7 @@ type EnquiryValidationForm = {
 };
 
 const existingLegalEntityAttachments = [
+  'Key Contact QID / Passport attachment',
   'Corporate Documents - Company',
   'Identity Proof - UBO',
   'Identity Proof - Director',
@@ -79,6 +86,7 @@ const existingLegalEntityAttachments = [
 ];
 
 const proposedCompanyAttachments = [
+  'Key Contact QID / Passport attachment',
   'Identity Proof - Proposed UBO',
   'Identity Proof - Director UBO',
   'Identity Proof - Proposed SEF',
@@ -87,11 +95,25 @@ const proposedCompanyAttachments = [
   'Identity Proof - Authorized Secretary'
 ];
 
-function attachmentTemplates(enquiryType: EnquiryType): AttachmentDraft[] {
+const qfzMociProposedCompanyAttachments = [
+  'Key Contact QID / Passport attachment',
+  'Identity Proof - Manager',
+  'Identity Proof - Authorized Signatory',
+  'Identity Proof - Partners',
+  'Identity Proof - UBO',
+  'Corporate shareholder documents'
+];
+
+function attachmentTemplates(enquiryType: EnquiryType, proposedLegalForm = ''): AttachmentDraft[] {
   if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
     return [{ documentType: 'Additional document upload 1', fileName: '' }];
   }
-  const documentTypes = enquiryType === 'PROPOSED_COMPANY' ? proposedCompanyAttachments : existingLegalEntityAttachments;
+  const documentTypes =
+    enquiryType === 'PROPOSED_COMPANY'
+      ? isQfzOrMociLegalForm(proposedLegalForm)
+        ? qfzMociProposedCompanyAttachments
+        : proposedCompanyAttachments
+      : existingLegalEntityAttachments;
   return documentTypes.map((documentType) => ({ documentType, fileName: '' }));
 }
 
@@ -112,7 +134,16 @@ function splitOtherValue(value: string | null | undefined, options: string[]) {
 }
 
 function RequiredMark() {
-  return <span className="text-red-600">*</span>;
+  return <span className="text-red-600"> *</span>;
+}
+
+function normalizeOption(value: string) {
+  return value.trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+function isQfzOrMociLegalForm(value: string) {
+  const legalForm = normalizeOption(value);
+  return legalForm === 'QFZ LLC' || legalForm === 'MOCI LLC' || legalForm.includes('QFZ') || legalForm.includes('MOCI');
 }
 
 function inferPhoneCountry(phone: string) {
@@ -142,11 +173,11 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
 
     if (form.enquiryType === 'PROPOSED_COMPANY') {
       if (!form.proposedCompanyName.trim()) return 'Proposed company name is required.';
-      if (!form.proposedLegalForm) return 'Proposed legal form is required.';
+      if (!resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther)) return 'Proposed legal form is required.';
       if (!form.jurisdictionOfRegistration) return 'Jurisdiction of registration is required.';
       if (!form.proposedBusinessActivity.trim()) return 'Proposed business activity is required.';
       if (!form.sourceOfInitialCapital.trim()) return 'Source of initial capital is required.';
-      if (!form.proposedRegisteredOfficeAddress.trim()) return 'Proposed registered office address is required.';
+      if (!isProposedAddressOptional(form) && !form.proposedRegisteredOfficeAddress.trim()) return 'Proposed registered office address is required.';
     }
 
     if (!form.requestedServices.length) {
@@ -162,6 +193,12 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
       return 'Key contact position is required.';
     }
+    if (!resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther)) {
+      return 'Key contact nationality is required.';
+    }
+    if (!form.keyContactIdentityNumber.trim()) {
+      return 'Key contact QID or passport number is required.';
+    }
   }
 
   if (step === 'exposure' && form.enquiryType === 'EXISTING_LEGAL_ENTITY') {
@@ -170,6 +207,11 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
   }
 
   return null;
+}
+
+function isProposedAddressOptional(form: Pick<EnquiryValidationForm, 'proposedLegalForm' | 'proposedLegalFormOther'>) {
+  const legalForm = normalizeOption(resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther));
+  return isQfzOrMociLegalForm(legalForm);
 }
 
 function validateEnquiryForm(form: EnquiryValidationForm): { step: EnquiryStep; message: string } | null {
@@ -202,10 +244,14 @@ export function AddEnquiryPage() {
     keyContactPhoneCountry: '',
     keyContactPosition: '',
     keyContactPositionOther: '',
+    keyContactNationality: '',
+    keyContactNationalityOther: '',
+    keyContactIdentityNumber: '',
     headOfficeCountry: '',
     branchCountry: '',
     areaOfOperation: '',
     proposedLegalForm: '',
+    proposedLegalFormOther: '',
     jurisdictionOfRegistration: '',
     proposedBusinessActivity: '',
     sourceOfInitialCapital: '',
@@ -220,6 +266,8 @@ export function AddEnquiryPage() {
         if (!enquiry) return;
         const details = enquiry.details || {};
         const keyContactPosition = splitOtherValue(enquiry.keyContactPosition, positionOptions);
+        const keyContactNationality = splitOtherValue(String(details.keyContactNationality || ''), nationalityOptions);
+        const proposedLegalForm = splitOtherValue(String(details.proposedLegalForm || ''), legalForms);
         setForm({
           enquiryType: enquiry.enquiryType,
           clientId: enquiry.clientId || enquiry.client?.id || '',
@@ -232,10 +280,14 @@ export function AddEnquiryPage() {
           keyContactPhoneCountry: inferPhoneCountry(enquiry.keyContactPhone || ''),
           keyContactPosition: keyContactPosition.value,
           keyContactPositionOther: keyContactPosition.otherValue,
+          keyContactNationality: keyContactNationality.value,
+          keyContactNationalityOther: keyContactNationality.otherValue,
+          keyContactIdentityNumber: String(details.keyContactIdentityNumber || ''),
           headOfficeCountry: enquiry.headOfficeCountry || '',
           branchCountry: enquiry.branchCountry || '',
           areaOfOperation: enquiry.areaOfOperation || '',
-          proposedLegalForm: String(details.proposedLegalForm || ''),
+          proposedLegalForm: proposedLegalForm.value,
+          proposedLegalFormOther: proposedLegalForm.otherValue,
           jurisdictionOfRegistration: String(details.jurisdictionOfRegistration || ''),
           proposedBusinessActivity: String(details.proposedBusinessActivity || ''),
           sourceOfInitialCapital: String(details.sourceOfInitialCapital || ''),
@@ -245,6 +297,7 @@ export function AddEnquiryPage() {
         setAttachments(
           mergeAttachmentTemplates(
             enquiry.enquiryType,
+            proposedLegalForm.value === 'Other' ? proposedLegalForm.otherValue : proposedLegalForm.value,
             (enquiry.attachments || []).map((attachment) => ({
               id: attachment.id,
               documentType: attachment.documentType,
@@ -265,16 +318,24 @@ export function AddEnquiryPage() {
     setSaving(true);
     setError('');
 
+    const keyContactDetails =
+      form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
+        ? {}
+        : {
+            keyContactNationality: resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther),
+            keyContactIdentityNumber: form.keyContactIdentityNumber
+          };
     const details =
       form.enquiryType === 'PROPOSED_COMPANY'
         ? {
-            proposedLegalForm: form.proposedLegalForm,
+            ...keyContactDetails,
+            proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
             jurisdictionOfRegistration: form.jurisdictionOfRegistration,
             proposedBusinessActivity: form.proposedBusinessActivity,
             sourceOfInitialCapital: form.sourceOfInitialCapital,
             proposedRegisteredOfficeAddress: form.proposedRegisteredOfficeAddress
           }
-        : {};
+        : keyContactDetails;
     const validationError = validateEnquiryForm(form);
     if (validationError) {
       setError(validationError.message);
@@ -298,37 +359,16 @@ export function AddEnquiryPage() {
       areaOfOperation: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.areaOfOperation || undefined : undefined,
       details,
       notes: form.notes || undefined,
-      attachments: attachments
-        .filter((attachment) => attachment.fileName.trim() && !attachment.file)
-        .map((attachment, index) =>
-          form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
-            ? {
-                documentType: `Additional document upload ${index + 1}`,
-                fileName: attachment.fileName,
-                storagePath: attachment.storagePath || undefined,
-                mimeType: attachment.mimeType,
-                size: attachment.size
-              }
-            : {
-                documentType: attachment.documentType,
-                fileName: attachment.fileName,
-                storagePath: attachment.storagePath || undefined,
-                mimeType: attachment.mimeType,
-                size: attachment.size
-              }
-        )
+      attachments: flattenAttachmentMetadata(form.enquiryType, attachments)
     };
 
     try {
       const enquiry = id ? await updateEnquiry(id, payload) : await createEnquiry(payload);
       for (const [index, attachment] of attachments.entries()) {
-        if (!attachment.file) continue;
-        await uploadEnquiryAttachmentFile(enquiry.id, {
-          documentType:
-            form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
-              ? `Additional document upload ${index + 1}`
-              : attachment.documentType,
-          file: attachment.file
+        if (!attachment.files?.length) continue;
+        await uploadEnquiryAttachmentFiles(enquiry.id, {
+          documentType: attachmentDocumentType(form.enquiryType, attachment, index),
+          files: attachment.files
         });
       }
       navigate(`/enquiries/${enquiry.id}`);
@@ -345,6 +385,7 @@ export function AddEnquiryPage() {
   const activeStepIndex = Math.max(0, steps.findIndex((step) => step.id === activeStep));
   const currentStep = steps[activeStepIndex] || steps[0];
   const currentStepError = validateEnquiryStep(form, currentStep.id);
+  const proposedAddressRequired = form.enquiryType === 'PROPOSED_COMPANY' && !isProposedAddressOptional(form);
 
   function getStepAccessError(targetStep: EnquiryStep): { step: EnquiryStep; message: string } | null {
     const targetIndex = steps.findIndex((step) => step.id === targetStep);
@@ -458,7 +499,7 @@ export function AddEnquiryPage() {
                 onChange={(value) => {
                   const enquiryType = value as EnquiryType;
                   setForm({ ...form, enquiryType });
-                  setAttachments(mergeAttachmentTemplates(enquiryType, attachments));
+                  setAttachments(mergeAttachmentTemplates(enquiryType, resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther), attachments));
                   setActiveStep('details');
                 }}
                 wide
@@ -493,7 +534,21 @@ export function AddEnquiryPage() {
                     Proposed company name <RequiredMark />
                     <input required value={form.proposedCompanyName} onChange={(event) => setForm({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
-                  <SearchableSelect label="Proposed legal form *" value={form.proposedLegalForm} options={legalForms} onChange={(value) => setForm({ ...form, proposedLegalForm: value })} />
+                  <SearchableSelect
+                    label="Proposed legal form *"
+                    value={form.proposedLegalForm}
+                    otherValue={form.proposedLegalFormOther}
+                    options={legalForms}
+                    onChange={(value) => {
+                      setForm({ ...form, proposedLegalForm: value, ...(value === 'Other' ? {} : { proposedLegalFormOther: '' }) });
+                      setAttachments(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
+                    }}
+                    onOtherChange={(value) => {
+                      setForm({ ...form, proposedLegalFormOther: value });
+                      if (form.proposedLegalForm === 'Other') setAttachments(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
+                    }}
+                    allowOther
+                  />
                   <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => setForm({ ...form, jurisdictionOfRegistration: value })} />
                   <label className="text-sm font-medium text-slate-700">
                     Proposed business activity <RequiredMark />
@@ -504,7 +559,7 @@ export function AddEnquiryPage() {
                     <input value={form.sourceOfInitialCapital} onChange={(event) => setForm({ ...form, sourceOfInitialCapital: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                   <label className="text-sm font-medium text-slate-700 md:col-span-2">
-                    Proposed registered office address <RequiredMark />
+                    Proposed registered office address {proposedAddressRequired ? <RequiredMark /> : null}
                     <textarea value={form.proposedRegisteredOfficeAddress} onChange={(event) => setForm({ ...form, proposedRegisteredOfficeAddress: event.target.value })} className="mt-1 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                 </>
@@ -546,6 +601,19 @@ export function AddEnquiryPage() {
                   <input required value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
               </div>
+              <SearchableSelect
+                label="Nationality *"
+                value={form.keyContactNationality}
+                otherValue={form.keyContactNationalityOther}
+                options={nationalityOptions}
+                onChange={(value) => setForm({ ...form, keyContactNationality: value, ...(value === 'Other' ? {} : { keyContactNationalityOther: '' }) })}
+                onOtherChange={(value) => setForm({ ...form, keyContactNationalityOther: value })}
+                allowOther
+              />
+              <label className="text-sm font-medium text-slate-700">
+                QID / Passport number <RequiredMark />
+                <input required value={form.keyContactIdentityNumber} onChange={(event) => setForm({ ...form, keyContactIdentityNumber: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+              </label>
             </div>
           ) : null}
 
@@ -561,7 +629,12 @@ export function AddEnquiryPage() {
           ) : null}
 
           {currentStep.id === 'attachments' ? (
-            <AttachmentRows enquiryType={form.enquiryType} attachments={attachments} onChange={setAttachments} />
+            <AttachmentRows
+              enquiryType={form.enquiryType}
+              proposedLegalForm={resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther)}
+              attachments={attachments}
+              onChange={setAttachments}
+            />
           ) : null}
 
           {currentStep.id === 'notes' ? (
@@ -628,38 +701,81 @@ function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label:
   return steps;
 }
 
-function mergeAttachmentTemplates(enquiryType: EnquiryType, currentAttachments: AttachmentDraft[]) {
-  const templates = attachmentTemplates(enquiryType);
-  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
-    const additionalUploads = currentAttachments.filter((attachment) =>
-      attachment.documentType.toLowerCase().startsWith('additional document upload')
-    );
-    return additionalUploads.length ? additionalUploads : templates;
-  }
+function mergeAttachmentTemplates(enquiryType: EnquiryType, proposedLegalForm: string, currentAttachments: AttachmentDraft[]) {
+  const templates = attachmentTemplates(enquiryType, proposedLegalForm);
+  const additionalUploads = currentAttachments.filter(isAdditionalAttachment);
+  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') return additionalUploads.length ? additionalUploads : templates;
   const currentByType = new Map(currentAttachments.map((attachment) => [attachment.documentType, attachment]));
-  return templates.map((template) => currentByType.get(template.documentType) || template);
+  const templateTypes = new Set(templates.map((template) => template.documentType));
+  const mappedTemplates = templates.map((template) => currentByType.get(template.documentType) || template);
+  const preservedUploads = currentAttachments.filter(
+    (attachment) => !templateTypes.has(attachment.documentType) && !isAdditionalAttachment(attachment) && hasAttachmentContent(attachment)
+  );
+  return [...mappedTemplates, ...preservedUploads, ...additionalUploads];
+}
+
+function isAdditionalAttachment(attachment: AttachmentDraft) {
+  return attachment.documentType.toLowerCase().startsWith('additional document upload');
+}
+
+function hasAttachmentContent(attachment: AttachmentDraft) {
+  return Boolean(attachment.fileName.trim() || attachment.storagePath || attachment.files?.length);
+}
+
+function attachmentDocumentType(enquiryType: EnquiryType, attachment: AttachmentDraft, index: number) {
+  if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' && !attachment.documentType) {
+    return `Additional document upload ${index + 1}`;
+  }
+  return attachment.documentType;
+}
+
+function attachmentDisplayNames(attachment: AttachmentDraft) {
+  if (attachment.files?.length) return attachment.files.map((file) => file.name);
+  return attachment.fileName ? attachment.fileName.split(',').map((name) => name.trim()).filter(Boolean) : [];
+}
+
+function flattenAttachmentMetadata(enquiryType: EnquiryType, attachments: AttachmentDraft[]): NonNullable<EnquiryPayload['attachments']> {
+  const items: NonNullable<EnquiryPayload['attachments']> = [];
+
+  attachments.forEach((attachment, index) => {
+    if (attachment.files?.length) return;
+
+    const documentType = attachmentDocumentType(enquiryType, attachment, index);
+    const names = attachmentDisplayNames(attachment);
+    names.forEach((fileName) => items.push({
+      documentType,
+      fileName,
+      storagePath: attachment.storagePath || undefined,
+      mimeType: attachment.mimeType,
+      size: attachment.size
+    }));
+  });
+
+  return items;
 }
 
 function AttachmentRows({
   enquiryType,
+  proposedLegalForm,
   attachments,
   onChange
 }: {
   enquiryType: EnquiryType;
+  proposedLegalForm: string;
   attachments: AttachmentDraft[];
   onChange: (attachments: AttachmentDraft[]) => void;
 }) {
-  function setFile(index: number, file: File | null) {
+  function setFiles(index: number, files: File[]) {
     onChange(
       attachments.map((attachment, itemIndex) =>
         itemIndex === index
           ? {
               ...attachment,
-              fileName: file?.name || '',
-              storagePath: file ? undefined : null,
-              mimeType: file?.type || undefined,
-              size: file?.size,
-              file: file || undefined
+              fileName: files.map((file) => file.name).join(', '),
+              storagePath: files.length ? undefined : null,
+              mimeType: files.length === 1 ? files[0].type || undefined : undefined,
+              size: files.length === 1 ? files[0].size : undefined,
+              files: files.length ? files : undefined
             }
           : attachment
       )
@@ -667,10 +783,11 @@ function AttachmentRows({
   }
 
   function addAdditionalUpload() {
+    const additionalCount = attachments.filter(isAdditionalAttachment).length;
     onChange([
       ...attachments,
       {
-        documentType: `Additional document upload ${attachments.length + 1}`,
+        documentType: `Additional document upload ${additionalCount + 1}`,
         fileName: ''
       }
     ]);
@@ -678,61 +795,55 @@ function AttachmentRows({
 
   function removeAttachment(index: number) {
     const nextAttachments = attachments.filter((_, itemIndex) => itemIndex !== index);
-    onChange(nextAttachments.length ? nextAttachments : attachmentTemplates(enquiryType));
+    onChange(nextAttachments.length ? nextAttachments : attachmentTemplates(enquiryType, proposedLegalForm));
   }
 
-  const isAdditionalUpload = enquiryType === 'CURRENT_CLIENT_NEW_SERVICES';
+  const isAdditionalUploadOnly = enquiryType === 'CURRENT_CLIENT_NEW_SERVICES';
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-950">
-            {isAdditionalUpload ? 'Additional Document Upload' : 'Required Attachment Options'}
+            {isAdditionalUploadOnly ? 'Additional Document Upload' : 'Required Attachment Options'}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            {isAdditionalUpload
+            {isAdditionalUploadOnly
               ? 'Add one or more supporting documents for the new service request.'
               : enquiryType === 'PROPOSED_COMPANY'
                 ? 'Capture the preliminary incorporation support files required for review.'
                 : 'Capture company, ownership, and identity documents required for review.'}
           </p>
         </div>
-        {isAdditionalUpload ? (
-          <button
-            type="button"
-            onClick={addAdditionalUpload}
-            className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Add Document
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={addAdditionalUpload}
+          className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          Add Document
+        </button>
       </div>
       <div className="mt-4 divide-y divide-slate-100 rounded-md border border-slate-200">
-        {attachments.map((attachment, index) => (
-          <div key={`${attachment.documentType}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_220px_minmax(0,1.2fr)_44px] md:items-center">
+        {attachments.map((attachment, index) => {
+          const additional = isAdditionalAttachment(attachment);
+          return (
+          <div key={`${attachment.documentType}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(360px,1.7fr)_44px] md:items-center">
             <p className="text-sm font-medium text-slate-950">
-              {isAdditionalUpload ? `Additional document upload ${index + 1}` : attachment.documentType}
+              {attachment.documentType}
             </p>
-            <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-              <Upload className="h-4 w-4" />
-              Upload
-              <input type="file" className="hidden" onChange={(event) => setFile(index, event.target.files?.[0] || null)} />
-            </label>
-            <div className="rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              {attachment.fileName || 'No file selected'}
-            </div>
+            <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} />
             <button
               type="button"
-              onClick={() => (isAdditionalUpload ? removeAttachment(index) : setFile(index, null))}
+              onClick={() => (additional ? removeAttachment(index) : setFiles(index, []))}
               className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-              aria-label={`${isAdditionalUpload ? 'Remove' : 'Clear'} ${attachment.documentType}`}
-              title={isAdditionalUpload ? 'Remove' : 'Clear'}
+              aria-label={`${additional ? 'Remove' : 'Clear'} ${attachment.documentType}`}
+              title={additional ? 'Remove' : 'Clear'}
             >
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

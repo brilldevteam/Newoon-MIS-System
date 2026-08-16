@@ -226,6 +226,30 @@ export class EnquiriesService {
           }))
         });
       }
+
+      if (dto.status === EnquiryStatus.RETURNED_TO_BD) {
+        const recipients = await prisma.user.findMany({
+          where: {
+            tenantId: existing.tenantId,
+            roles: {
+              some: {
+                role: { name: 'OPERATING_TEAM' }
+              }
+            }
+          },
+          select: { id: true }
+        });
+
+        await prisma.notification.createMany({
+          data: (recipients.length ? recipients : [{ id: null }]).map((recipient) => ({
+            tenantId: existing.tenantId,
+            recipientId: recipient.id,
+            type: NotificationType.ADDITIONAL_INFORMATION_REQUESTED,
+            title: 'Enquiry returned to Operations',
+            message: `${this.enquiryDisplayName(existing)} was returned by AML for additional documents or information.`
+          }))
+        });
+      }
     });
 
     return this.findOne(user, id);
@@ -349,7 +373,7 @@ export class EnquiriesService {
       });
 
       const sectionA = this.enquirySectionA(enquiry, details);
-      const sectionE = this.enquirySectionE(enquiry);
+      const sectionE = this.enquirySectionE(enquiry, details);
       const requiredRows = this.requiredDocumentRows(legalDocuments);
 
       await prisma.kycSectionData.createMany({
@@ -634,10 +658,12 @@ export class EnquiriesService {
     };
   }
 
-  private enquirySectionE(enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>) {
+  private enquirySectionE(enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>, details: Record<string, unknown>) {
     return {
       fullName: enquiry.keyContactName || '',
       position: enquiry.keyContactPosition || '',
+      nationality: this.optionalText(details.keyContactNationality) || '',
+      identityNumber: this.optionalText(details.keyContactIdentityNumber) || '',
       mobileNumber: enquiry.keyContactPhone || '',
       email: enquiry.keyContactEmail || ''
     };

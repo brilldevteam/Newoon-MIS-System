@@ -178,6 +178,8 @@ export function EnquiryDetailsPage() {
           <Info label="Contact email" value={enquiry.keyContactEmail} />
           <Info label="Contact phone" value={enquiry.keyContactPhone} />
           <Info label="Contact position" value={enquiry.keyContactPosition} />
+          <Info label="Contact nationality" value={String(details.keyContactNationality || '')} />
+          <Info label="QID / Passport number" value={String(details.keyContactIdentityNumber || '')} />
           <Info label="Head office" value={enquiry.headOfficeCountry} />
           <Info label="Branch" value={enquiry.branchCountry} />
           <Info label="Area of operation" value={enquiry.areaOfOperation} wide />

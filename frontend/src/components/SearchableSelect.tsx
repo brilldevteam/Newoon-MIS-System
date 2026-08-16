@@ -54,6 +54,16 @@ export function displayList(value: unknown, otherValue?: string) {
     .join(', ');
 }
 
+function FieldLabel({ label }: { label: string }) {
+  if (!label.trim().endsWith('*')) return <span>{label}</span>;
+  return (
+    <span>
+      {label.replace(/\s*\*$/, '')}
+      <span className="text-red-600"> *</span>
+    </span>
+  );
+}
+
 type SearchableSelectProps = {
   label: string;
   value: string;
@@ -123,7 +133,7 @@ export function SearchableSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <FieldLabel label={label} />
       <button
         ref={triggerRef}
         type="button"
@@ -270,7 +280,7 @@ export function SearchableMultiSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <FieldLabel label={label} />
       <button
         ref={triggerRef}
         type="button"
