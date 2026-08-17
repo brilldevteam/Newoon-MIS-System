@@ -586,6 +586,13 @@ model KycInternalReview {
   mlroRiskExplanation      String?
   mlroConditions           String?
   mlroComments             String?
+  sefName                  String?
+  sefSignatureFileName     String?
+  sefSignatureDataUrl      String?
+  sefDate                  DateTime?
+  sefDecision              ReviewDecision?
+  sefConditions            String?
+  sefComments              String?
   createdBy                String
   updatedBy                String
   createdAt                DateTime            @default(now())

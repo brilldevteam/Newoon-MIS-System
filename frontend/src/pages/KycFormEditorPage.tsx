@@ -8,6 +8,7 @@ import {
   autoSaveKycForm,
   downloadGeneratedKycDocument,
   decideMlroReview,
+  decideSefReview,
   generateKycDocument,
   getKycCase,
   getKycForm,
@@ -503,6 +504,12 @@ const mlroDecisionLabels: Record<string, string> = {
   RETURN_TO_DMLRO: 'Return to DMLRO',
   SEND_TO_SEF: 'Send to SEF for management decision'
 };
+const sefDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'];
+const sefDecisionLabels: Record<string, string> = {
+  APPROVE: 'Approve',
+  APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+  REJECT: 'Reject'
+};
 
 function dmlroDecisionSuccessMessage(decision: string) {
   if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'DMLRO requested additional information from AML Supervisor.';
@@ -534,6 +541,18 @@ function mlroDecisionErrorMessage(decision: string) {
   if (decision === 'REJECT') return 'Unable to submit MLRO rejection.';
   if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit MLRO approval with conditions.';
   return 'Unable to submit MLRO final approval.';
+}
+
+function sefDecisionSuccessMessage(decision: string) {
+  if (decision === 'REJECT') return 'SEF management rejection submitted.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'SEF management approval with conditions submitted.';
+  return 'SEF management approval submitted.';
+}
+
+function sefDecisionErrorMessage(decision: string) {
+  if (decision === 'REJECT') return 'Unable to submit SEF management rejection.';
+  if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit SEF management approval with conditions.';
+  return 'Unable to submit SEF management decision.';
 }
 const riskClassificationOptions = ['', 'LOW', 'MEDIUM', 'HIGH'];
 const riskReasonCategoryOptions = [
@@ -574,7 +593,7 @@ const emptyForm: KycFormData = {
 type SectionKey = (typeof sections)[number]['key'];
 type SectionDefinition = (typeof sections)[number];
 type Row = Record<string, any>;
-type SectionHMode = 'AML' | 'DMLRO' | 'MLRO' | 'ALL';
+type SectionHMode = 'AML' | 'DMLRO' | 'MLRO' | 'SEF' | 'ALL';
 
 export function KycFormEditorPage() {
   const { id } = useParams();
@@ -589,12 +608,17 @@ export function KycFormEditorPage() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([getKycCase(id), getKycForm(id)]).then(([caseData, formData]) => {
-      const normalized = normalizeForm(formData);
-      setKycCase(caseData);
-      formRef.current = normalized;
-      setForm(normalized);
-    });
+    setError('');
+    Promise.all([getKycCase(id), getKycForm(id)])
+      .then(([caseData, formData]) => {
+        const normalized = normalizeForm(formData);
+        setKycCase(caseData);
+        formRef.current = normalized;
+        setForm(normalized);
+      })
+      .catch((requestError: any) => {
+        setError(getApiErrorMessage(requestError, 'Unable to load KYC form builder.'));
+      });
   }, [id]);
 
   const totalOwnership = useMemo(
@@ -603,7 +627,7 @@ export function KycFormEditorPage() {
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
-  const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : 'AML';
+  const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';
   const visibleSections = useMemo(
     () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
     [canEditAllSections, canPrepareKyc]
@@ -823,8 +847,60 @@ export function KycFormEditorPage() {
     }
   }
 
+  async function submitSefFromKycForm() {
+    if (!id) return;
+    const sectionH = form.sectionH || {};
+    const decision = sectionH.sefDecision || 'APPROVE';
+
+    if (!sectionH.sefName || !sectionH.sefDate || (!sectionH.sefSignatureDataUrl && !sectionH.sefSignatureFileName)) {
+      setError('Complete the SEF name, date, and signature before submitting the management decision.');
+      return;
+    }
+    if (['APPROVE_WITH_CONDITIONS', 'REJECT'].includes(decision) && !sectionH.sefConditions && !sectionH.sefComments) {
+      setError('Add SEF conditions or comments before submitting this decision.');
+      return;
+    }
+
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const saved = await save('sectionH');
+      if (!saved) return;
+      const latestSectionH = saved.sectionH || sectionH;
+      await decideSefReview(id, {
+        decision,
+        reason: latestSectionH.sefComments || latestSectionH.sefConditions || '',
+        conditions: latestSectionH.sefConditions || '',
+        data: {
+          reviewerName: latestSectionH.sefName || '',
+          reviewDate: latestSectionH.sefDate || '',
+          comments: latestSectionH.sefComments || '',
+          conditions: latestSectionH.sefConditions || '',
+          decision
+        },
+        formalComments: latestSectionH.sefComments || ''
+      });
+      const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
+      const normalized = normalizeForm(formData);
+      setKycCase(caseData);
+      formRef.current = normalized;
+      setForm(normalized);
+      setMessage(sefDecisionSuccessMessage(decision));
+    } catch (requestError: any) {
+      setError(getApiErrorMessage(requestError, sefDecisionErrorMessage(decision)));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!kycCase) {
-    return <p className="text-sm text-slate-500">Loading KYC form builder...</p>;
+    return (
+      <div className="space-y-3">
+        {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+        <p className="text-sm text-slate-500">Loading KYC form builder...</p>
+      </div>
+    );
   }
 
   const isApproved = approvedStatuses.includes(kycCase.status as (typeof approvedStatuses)[number]);
@@ -869,6 +945,12 @@ export function KycFormEditorPage() {
             <button onClick={submitMlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
               {mlroSubmitLabel}
+            </button>
+          ) : null}
+          {sectionHMode === 'SEF' ? (
+            <button onClick={submitSefFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+              <Send className="h-4 w-4" />
+              Submit SEF Decision
             </button>
           ) : null}
           <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
@@ -1250,6 +1332,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   const showAml = mode === 'AML' || mode === 'ALL';
   const showDmlro = mode === 'DMLRO' || mode === 'ALL';
   const showMlro = mode === 'MLRO' || mode === 'ALL';
+  const showSef = mode === 'SEF' || mode === 'ALL';
 
   return <FormGrid>
     {showAml ? (
@@ -1294,6 +1377,21 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroComments', value)} textarea wide />
       </>
     ) : null}
+    {showSef ? (
+      <>
+        <Field label="SEF name" value={data.sefName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefName', value)} />
+        <UploadField label="SEF signature" fileName={data.sefSignatureFileName} imageDataUrl={data.sefSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, sefSignatureFileName: file.name, sefSignatureDataUrl: dataUrl })} />
+        <Field label="SEF date" type="date" value={data.sefDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefDate', value)} />
+        <Select label="SEF management decision" value={data.sefDecision || 'APPROVE'} options={sefDecisionOptions} optionLabels={sefDecisionLabels} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefDecision', value)} />
+        {data.sefDecision === 'APPROVE_WITH_CONDITIONS' ? (
+          <Field label="SEF approval conditions" value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
+        ) : null}
+        {data.sefDecision === 'REJECT' ? (
+          <Field label="SEF rejection reason" value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
+        ) : null}
+        <Field label="SEF comments" value={data.sefComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefComments', value)} textarea wide />
+      </>
+    ) : null}
   </FormGrid>;
 }
 
@@ -1312,7 +1410,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
             <p>contact@newoon.com</p>
           </div>
         </div>
-        <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form - Part 1</h2>
+        <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form</h2>
         <PreviewSection title="A. General Company Information">
           <PreviewGrid rows={[
             ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]
@@ -1343,7 +1441,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments]]} />
+          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>

@@ -35,6 +35,18 @@ import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
 
 const execFileAsync = promisify(execFile);
 
+const REQUIRED_DOCUMENT_TYPES = [
+  'Commercial Registration / CR Extract',
+  'Entity Card / Computer Card',
+  'Certificate of Incorporation',
+  'Articles of Association',
+  'QID / Passport copies',
+  'CR of legal entity shareholders',
+  'National address certificates',
+  'Latest Audited Financial Statements',
+  'Tax Card'
+];
+
 @Injectable()
 export class KycService {
   constructor(private readonly prisma: PrismaService) {}
@@ -1404,10 +1416,7 @@ export class KycService {
       },
       sectionD: section(KycFormSectionKey.COMPLIANCE_RISK),
       sectionE: section(KycFormSectionKey.COMMUNICATION_PERSON),
-      sectionF: {
-        ...section(KycFormSectionKey.REQUIRED_DOCUMENTS),
-        documents: form.requiredDocuments
-      },
+      sectionF: this.sectionFWithCaseDocuments(section(KycFormSectionKey.REQUIRED_DOCUMENTS), form.requiredDocuments, form.kycCase.legalDocuments),
       sectionG: section(KycFormSectionKey.CLIENT_DECLARATION),
       sectionH: form.internalReview,
       generatedDocuments: form.generatedDocuments.map((document) => ({
@@ -1429,6 +1438,11 @@ export class KycService {
       ubos: { orderBy: { sortOrder: 'asc' as const } },
       managers: { orderBy: { sortOrder: 'asc' as const } },
       requiredDocuments: { orderBy: { sortOrder: 'asc' as const } },
+      kycCase: {
+        include: {
+          legalDocuments: { orderBy: { createdAt: 'desc' as const } }
+        }
+      },
       internalReview: true,
       generatedDocuments: {
         select: {
@@ -1442,6 +1456,119 @@ export class KycService {
         orderBy: [{ documentType: 'asc' as const }, { version: 'desc' as const }]
       }
     };
+  }
+
+  private sectionFWithCaseDocuments(
+    sectionData: Record<string, unknown>,
+    savedRequiredDocuments: Array<{
+      id?: string;
+      documentType: string;
+      isRequired: boolean;
+      isProvided: boolean;
+      fileName: string | null;
+      storagePath: string | null;
+      mimeType: string | null;
+      size: number | null;
+      sortOrder?: number;
+    }>,
+    legalDocuments: Array<{
+      id: string;
+      documentType: string;
+      fileName: string;
+      storagePath: string | null;
+      mimeType: string | null;
+      size: number | null;
+    }>
+  ) {
+    const matchedLegalDocumentIds = new Set<string>();
+    const baseRequiredDocuments = savedRequiredDocuments.length
+      ? savedRequiredDocuments
+      : REQUIRED_DOCUMENT_TYPES.map((documentType, index) => ({
+          documentType,
+          isRequired: true,
+          isProvided: false,
+          fileName: null,
+          storagePath: null,
+          mimeType: null,
+          size: null,
+          sortOrder: index
+        }));
+
+    const documents = baseRequiredDocuments.map((row) => {
+      const uploaded = legalDocuments.find((document) => !matchedLegalDocumentIds.has(document.id) && this.isRequiredDocumentMatch(document.documentType, row.documentType));
+      if (uploaded) matchedLegalDocumentIds.add(uploaded.id);
+
+      return {
+        ...row,
+        isProvided: Boolean(row.isProvided) || Boolean(uploaded),
+        fileName: row.fileName || uploaded?.fileName || null,
+        storagePath: row.storagePath || uploaded?.storagePath || null,
+        mimeType: row.mimeType || uploaded?.mimeType || null,
+        size: row.size ?? uploaded?.size ?? null
+      };
+    });
+
+    const savedAdditionalDocuments = this.asArray<RowPayload>(sectionData.additionalDocuments);
+    const additionalKeys = new Set(
+      savedAdditionalDocuments
+        .filter((row) => Boolean(this.optionalText(row.fileName)))
+        .map((row) => this.legalDocumentSyncKey(this.optionalText(row.documentType) || 'Additional document', this.requiredText(row.fileName, 'File name')))
+    );
+    const additionalDocuments = [
+      ...savedAdditionalDocuments,
+      ...legalDocuments
+        .filter((document) => !matchedLegalDocumentIds.has(document.id))
+        .filter((document) => {
+          const key = this.legalDocumentSyncKey(document.documentType || 'Additional document', document.fileName);
+          if (additionalKeys.has(key)) return false;
+          additionalKeys.add(key);
+          return true;
+        })
+        .map((document, index) => ({
+          id: document.id,
+          documentType: document.documentType || `Additional document ${savedAdditionalDocuments.length + index + 1}`,
+          fileName: document.fileName,
+          storagePath: document.storagePath,
+          mimeType: document.mimeType,
+          size: document.size
+        }))
+    ];
+
+    return {
+      ...sectionData,
+      documents,
+      additionalDocuments
+    };
+  }
+
+  private isRequiredDocumentMatch(documentType: string, requiredDocumentType: string) {
+    const document = this.documentMatchText(documentType);
+    const required = this.documentMatchText(requiredDocumentType);
+    if (!document || !required) return false;
+    if (document === required || document.includes(required) || required.includes(document)) return true;
+
+    const aliases: Record<string, string[]> = {
+      [this.documentMatchText('Commercial Registration / CR Extract')]: ['commercial registration', 'cr extract', 'trade license', 'trade licence'],
+      [this.documentMatchText('Entity Card / Computer Card')]: ['entity card', 'computer card'],
+      [this.documentMatchText('Certificate of Incorporation')]: ['certificate of incorporation', 'coi'],
+      [this.documentMatchText('Articles of Association')]: ['articles of association', 'aoa'],
+      [this.documentMatchText('QID / Passport copies')]: ['qid', 'passport', 'passport copy', 'passport copies'],
+      [this.documentMatchText('CR of legal entity shareholders')]: ['cr of legal entity shareholders', 'shareholder cr', 'shareholders cr'],
+      [this.documentMatchText('National address certificates')]: ['national address', 'national address certificate', 'national address certificates'],
+      [this.documentMatchText('Latest Audited Financial Statements')]: ['latest audited financial statements', 'audited financial statement', 'financial statements'],
+      [this.documentMatchText('Tax Card')]: ['tax card']
+    };
+
+    return (aliases[required] || []).some((alias) => document.includes(this.documentMatchText(alias)));
+  }
+
+  private documentMatchText(value: string) {
+    return (value || '')
+      .toLowerCase()
+      .replace(/&/g, 'and')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private async requireWritableCase(user: RequestUser, id: string) {
@@ -2076,6 +2203,7 @@ export class KycService {
     if (part === 'ALL') return ['COMPANY_ADMIN', 'SUPER_ADMIN'];
     if (part === 'DMLRO') return ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
     if (part === 'MLRO') return ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+    if (part === 'SEF') return ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
     return ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
   }
 
@@ -2083,6 +2211,7 @@ export class KycService {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
     const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
     const mlroDecision = this.enumValue(dto.mlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO final decision');
+    const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF management decision');
     const mlroFinalRiskClassification = this.enumValue(dto.mlroFinalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification');
     const mlroRiskReasonCategory = this.enumValue(dto.mlroRiskReasonCategory, ['PEP_IDENTIFIED', 'SANCTIONS_FINDING', 'ADVERSE_MEDIA', 'OWNERSHIP_COMPLEXITY', 'COUNTRY_RISK', 'INDUSTRY_RISK', 'SOURCE_OF_FUNDS_CONCERN', 'ENHANCED_MONITORING_REQUIRED', 'PROFESSIONAL_JUDGEMENT', 'OTHER'], 'Risk reason category');
 
@@ -2116,7 +2245,14 @@ export class KycService {
         mlroRiskReasonCategory: mlroRiskReasonCategory as RiskOverrideReason | null,
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
-        mlroComments: this.optionalText(dto.mlroComments)
+        mlroComments: this.optionalText(dto.mlroComments),
+        sefName: this.optionalText(dto.sefName),
+        sefSignatureFileName: this.optionalText(dto.sefSignatureFileName),
+        sefSignatureDataUrl: this.optionalText(dto.sefSignatureDataUrl),
+        sefDate: this.dateValue(dto.sefDate),
+        sefDecision: sefDecision as ReviewDecision | null,
+        sefConditions: this.optionalText(dto.sefConditions),
+        sefComments: this.optionalText(dto.sefComments)
       };
     }
 
@@ -2145,6 +2281,18 @@ export class KycService {
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
         mlroComments: this.optionalText(dto.mlroComments)
+      };
+    }
+
+    if (part === 'SEF') {
+      return {
+        sefName: this.optionalText(dto.sefName),
+        sefSignatureFileName: this.optionalText(dto.sefSignatureFileName),
+        sefSignatureDataUrl: this.optionalText(dto.sefSignatureDataUrl),
+        sefDate: this.dateValue(dto.sefDate),
+        sefDecision: sefDecision as ReviewDecision | null,
+        sefConditions: this.optionalText(dto.sefConditions),
+        sefComments: this.optionalText(dto.sefComments)
       };
     }
 
@@ -2465,16 +2613,23 @@ export class KycService {
         ['Conditions', this.text(sectionH.mlroConditions)],
         ['Comments', this.text(sectionH.mlroComments)]
       ]),
-      sefName: '',
-      sefSignatureFileName: '',
-      sefDate: '',
-      sefComments: '',
+      sefName: this.text(sectionH.sefName),
+      sefSignatureFileName: this.signatureDisplay('sefSignature', sectionH.sefSignatureFileName, sectionH.sefSignatureDataUrl),
+      sefDate: this.text(sectionH.sefDate),
+      sefDecision: this.reviewDecisionText(sectionH.sefDecision),
+      sefConditions: this.text(sectionH.sefConditions),
+      sefComments: this.reviewConclusionText([
+        ['Management decision', this.reviewDecisionText(sectionH.sefDecision)],
+        ['Conditions / reason', this.text(sectionH.sefConditions)],
+        ['Comments', this.text(sectionH.sefComments)]
+      ]),
       _docxImages: {
         declarationSignature: this.text(sectionG.signatureDataUrl),
         companyStamp: this.text(sectionG.stampDataUrl),
         amlSignature: this.text(sectionH.amlSignatureDataUrl),
         dmlroSignature: this.text(sectionH.dmlroSignatureDataUrl),
-        mlroSignature: this.text(sectionH.mlroSignatureDataUrl)
+        mlroSignature: this.text(sectionH.mlroSignatureDataUrl),
+        sefSignature: this.text(sectionH.sefSignatureDataUrl)
       }
     };
   }
@@ -2662,7 +2817,7 @@ export class KycService {
   private createDocxTemplate() {
     const content = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-${this.docxParagraph('NEWOON KYC PART 1')}
+${this.docxParagraph('NEWOON KYC FORM')}
 ${this.docxParagraph('A. General Company Information')}
 ${this.docxParagraph('Date: {date} | Reference: {reference}')}
 ${this.docxParagraph('Legal Name of Company: {legalName}')}
@@ -2837,4 +2992,11 @@ type ReviewPatch = {
   mlroRiskExplanation?: string | null;
   mlroConditions?: string | null;
   mlroComments?: string | null;
+  sefName?: string | null;
+  sefSignatureFileName?: string | null;
+  sefSignatureDataUrl?: string | null;
+  sefDate?: Date | null;
+  sefDecision?: ReviewDecision | null;
+  sefConditions?: string | null;
+  sefComments?: string | null;
 };
