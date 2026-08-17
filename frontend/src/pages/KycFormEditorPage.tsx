@@ -64,6 +64,27 @@ function removeFileName(value: unknown, indexToRemove: number) {
   return fileNameList(value).filter((_, index) => index !== indexToRemove).join(', ');
 }
 
+function uniqueFileNameText(value: unknown) {
+  const seen = new Set<string>();
+  return fileNameList(value)
+    .filter((name) => {
+      const key = name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(', ');
+}
+
+function documentKey(value: unknown) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const countryOptions = [
   '',
   'Afghanistan',
@@ -1095,13 +1116,13 @@ function SectionBForm({ data, total, onChange }: FormProps & { total: number }) 
   return (
     <div className="space-y-5">
       <DynamicRows title="Shareholders" rows={data.shareholders || []} onChange={(rows) => onChange({ ...data, shareholders: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
       <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">Total ownership percentage: {total.toFixed(2)}%</div>
       <Choice label="UBO different from shareholders" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="UBO group structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="UBO rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -1109,12 +1130,38 @@ function SectionBForm({ data, total, onChange }: FormProps & { total: number }) 
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'select', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
 function SectionDComplianceForm({ data, onChange }: FormProps) {
+  const hasPepExposure = (data.pepQuestion || 'No') === 'Yes';
+  const hasSanctionExposure = (data.sanctionQuestion || 'No') === 'Yes';
   const hasDualCitizenship = (data.dualCitizenshipQuestion || 'No') === 'Yes';
+
+  function setPepQuestion(value: string) {
+    onChange({
+      ...data,
+      pepQuestion: value,
+      ...(value === 'No'
+        ? {
+            pepDocumentFileNames: []
+          }
+        : {})
+    });
+  }
+
+  function setSanctionQuestion(value: string) {
+    onChange({
+      ...data,
+      sanctionQuestion: value,
+      ...(value === 'No'
+        ? {
+            sanctionDocumentFileNames: []
+          }
+        : {})
+    });
+  }
 
   function setDualCitizenshipQuestion(value: string) {
     onChange({
@@ -1123,7 +1170,8 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
       ...(value === 'No'
         ? {
             dualCitizenshipDetails: '',
-            dualCitizenshipPassportFileName: ''
+            dualCitizenshipPassportFileName: '',
+            dualCitizenshipPassportFileNames: []
           }
         : {})
     });
@@ -1131,17 +1179,63 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
 
   return (
     <div className="space-y-5">
-      <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={(value) => onChange({ ...data, pepQuestion: value })} />
+      <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={setPepQuestion} />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
-      <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={(value) => onChange({ ...data, sanctionQuestion: value })} />
+      {hasPepExposure ? (
+        <SectionDSupportingDocuments label="PEP supporting documents" data={data} fieldKey="pepDocumentFileNames" onChange={onChange} />
+      ) : null}
+      <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={setSanctionQuestion} />
       <Field label="Sanction details" value={data.sanctionDetails} onChange={(value) => update(data, onChange, 'sanctionDetails', value)} textarea wide />
+      {hasSanctionExposure ? (
+        <SectionDSupportingDocuments label="Sanction supporting documents" data={data} fieldKey="sanctionDocumentFileNames" onChange={onChange} />
+      ) : null}
       <Choice label="Any dual citizenship?" value={data.dualCitizenshipQuestion || 'No'} onChange={setDualCitizenshipQuestion} />
       {hasDualCitizenship ? (
         <FormGrid>
           <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
-          <UploadField label="Passport copy" fileName={data.dualCitizenshipPassportFileName} onChange={(file) => update(data, onChange, 'dualCitizenshipPassportFileName', file.name)} />
+          <SectionDSupportingDocuments label="Passport copies" data={data} fieldKey="dualCitizenshipPassportFileNames" legacyFieldKey="dualCitizenshipPassportFileName" onChange={onChange} wide />
         </FormGrid>
       ) : null}
+    </div>
+  );
+}
+
+function SectionDSupportingDocuments({
+  label,
+  data,
+  fieldKey,
+  legacyFieldKey,
+  onChange,
+  wide = false
+}: {
+  label: string;
+  data: Record<string, any>;
+  fieldKey: string;
+  legacyFieldKey?: string;
+  onChange: (value: Record<string, any>) => void;
+  wide?: boolean;
+}) {
+  const names = sectionDFileNames(data, fieldKey, legacyFieldKey);
+
+  function setNames(nextNames: string[]) {
+    onChange({
+      ...data,
+      [fieldKey]: nextNames,
+      ...(legacyFieldKey ? { [legacyFieldKey]: nextNames[0] || '' } : {})
+    });
+  }
+
+  return (
+    <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
+      <span>{label}</span>
+      <div className="mt-1">
+        <MultiFileUploadControl
+          names={names}
+          onSelect={(files) => setNames([...names, ...files.map((file) => file.name)])}
+          onRemoveName={(index) => setNames(names.filter((_, itemIndex) => itemIndex !== index))}
+          placeholder="No file selected"
+        />
+      </div>
     </div>
   );
 }
@@ -1165,7 +1259,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
 
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <Select label="Nationality" value={data.nationality} otherValue={data.nationalityOther} options={nationalityOptions} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
     <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
@@ -1242,22 +1336,37 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
     <div className="space-y-5">
       {uploadError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p> : null}
       <div className="space-y-3">
-      {documents.map((document: Row, index: number) => (
-        <div key={`${document.documentType}-${index}`} className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_110px_minmax(180px,1fr)]">
-          <p className="text-sm font-medium text-slate-800">{document.documentType}</p>
-          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
-            Provided
-          </label>
-          <MultiFileUploadControl
-            names={fileNameList(document.fileName)}
-            disabled={uploadingKey === `required-${index}`}
-            buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload'}
-            onSelect={(files) => uploadDocument(index, files)}
-            onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
-          />
-        </div>
-      ))}
+        {documents.map((document: Row, index: number) => {
+          const names = fileNameList(document.fileName);
+          return (
+            <div key={`${document.documentType}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="grid gap-4 lg:grid-cols-[minmax(180px,1fr)_auto_minmax(280px,1.2fr)] lg:items-center">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">{document.documentType}</p>
+                  <p className="mt-1 text-xs text-slate-500">{names.length ? `${names.length} file${names.length === 1 ? '' : 's'} uploaded` : 'No files uploaded yet'}</p>
+                </div>
+                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
+                  Provided
+                </label>
+                <MultiFileUploadControl
+                  names={names}
+                  disabled={uploadingKey === `required-${index}`}
+                  buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload files'}
+                  placeholder="Select one or more files"
+                  showFileList={false}
+                  onSelect={(files) => uploadDocument(index, files)}
+                  onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
+                />
+              </div>
+              <UploadedFilePills
+                names={names}
+                emptyText="Upload supporting files for this document type."
+                onRemove={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
+              />
+            </div>
+          );
+        })}
       </div>
       <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1276,24 +1385,33 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         </div>
         {additionalDocuments.length ? (
           additionalDocuments.map((document: Row, index: number) => (
-            <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(220px,1fr)_auto]">
-              <MultiFileUploadControl
+            <div key={document.id || index} className="rounded-lg border border-slate-200 bg-white p-4">
+              <div className="grid items-center gap-3 md:grid-cols-[1fr_auto]">
+                <MultiFileUploadControl
+                  names={fileNameList(document.fileName)}
+                  disabled={uploadingKey === `additional-${index}`}
+                  buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload files / ZIP'}
+                  placeholder="Select one or more files"
+                  showFileList={false}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
+                  onSelect={(files) => uploadAdditionalDocument(index, files)}
+                  onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
+                  title="Remove additional document"
+                  aria-label={`Remove additional document ${index + 1}`}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+              <UploadedFilePills
                 names={fileNameList(document.fileName)}
-                disabled={uploadingKey === `additional-${index}`}
-                buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload file / ZIP'}
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
-                onSelect={(files) => uploadAdditionalDocument(index, files)}
-                onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                emptyText="No additional files uploaded yet."
+                onRemove={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
               />
-              <button
-                type="button"
-                onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
-                title="Remove additional document"
-                aria-label={`Remove additional document ${index + 1}`}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
             </div>
           ))
         ) : (
@@ -1301,6 +1419,35 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         )}
       </div>
       <Field label="Additional notes for KYC preparation documents" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
+    </div>
+  );
+}
+
+function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; emptyText: string; onRemove: (index: number) => void }) {
+  if (!names.length) {
+    return <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{emptyText}</p>;
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Uploaded files</p>
+      <div className="flex flex-wrap gap-2">
+        {names.map((name, index) => (
+          <span key={`${name}-${index}`} title={name} className="inline-flex max-w-full items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+            <span className="max-w-64 truncate">{name}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(index)}
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600"
+              aria-label={`Remove ${name}`}
+              title={`Remove ${name}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1417,20 +1564,30 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Ownership / Shareholders">
-          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
           <p className="mt-2 font-semibold">Total ownership percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
           <p>UBO different from shareholders: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>UBO group structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
-          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, resolveOtherValue(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
-          <PreviewGrid rows={[['Any PEP exposure?', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Any sanction exposure?', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />
+          <PreviewGrid rows={[
+            ['Any PEP exposure?', form.sectionD.pepQuestion],
+            ['PEP details', form.sectionD.pepDetails],
+            ['PEP supporting documents', displayList(form.sectionD.pepDocumentFileNames)],
+            ['Any sanction exposure?', form.sectionD.sanctionQuestion],
+            ['Sanction details', form.sectionD.sanctionDetails],
+            ['Sanction supporting documents', displayList(form.sectionD.sanctionDocumentFileNames)],
+            ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion],
+            ['Dual citizenship details', form.sectionD.dualCitizenshipDetails],
+            ['Dual citizenship passport copies', displayList(sectionDFileNames(form.sectionD, 'dualCitizenshipPassportFileNames', 'dualCitizenshipPassportFileName'))]
+          ]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
-          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', resolveOtherValue(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
+          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Provided', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
@@ -1879,6 +2036,19 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
                 );
               }
 
+              if (type === 'multiselect') {
+                return (
+                  <MultiSelect
+                    key={key}
+                    label={label}
+                    value={row[key]}
+                    options={(options || ['']).filter(Boolean)}
+                    onChange={(value) => updateRow(rows, index, key, value, onChange)}
+                    placeholder={key === 'nationality' ? 'Select nationalities' : `Select ${label.toLowerCase()}`}
+                  />
+                );
+              }
+
               return <Field key={key} label={label} type={type || 'text'} value={row[key]} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
             })}
           </div>
@@ -1943,6 +2113,12 @@ function displayList(value: any) {
   return listValue(value).join(', ');
 }
 
+function sectionDFileNames(data: Record<string, any>, fieldKey: string, legacyFieldKey?: string) {
+  const names = listValue(data[fieldKey]);
+  const legacyName = legacyFieldKey ? String(data[legacyFieldKey] || '').trim() : '';
+  return legacyName && !names.includes(legacyName) ? [legacyName, ...names] : names;
+}
+
 function displayCodeLabel(value: any) {
   return value ? String(value).replace(/_/g, ' ') : '';
 }
@@ -1966,6 +2142,94 @@ function countryFromNationality(nationality: string) {
   return nationalityCountryMap[nationality] || '';
 }
 
+function normalizeSectionBNationality(value: any) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  return values.map((item) => countryFromNationality(item) || item).filter(Boolean);
+}
+
+function normalizeSectionBRows(rows: Row[] | undefined) {
+  return (rows || []).map((row) => ({
+    ...row,
+    nationality: normalizeSectionBNationality(row.nationality)
+  }));
+}
+
+function normalizeSectionCRows(rows: Row[] | undefined) {
+  return (rows || []).map((row) => ({
+    ...row,
+    position: listValue(row.position)
+  }));
+}
+
+function normalizeSectionD(sectionD: Record<string, any> | undefined) {
+  const data = {
+    ...emptyForm.sectionD,
+    ...(sectionD || {})
+  };
+
+  return {
+    ...data,
+    pepDocumentFileNames: listValue(data.pepDocumentFileNames),
+    sanctionDocumentFileNames: listValue(data.sanctionDocumentFileNames),
+    dualCitizenshipPassportFileNames: sectionDFileNames(data, 'dualCitizenshipPassportFileNames', 'dualCitizenshipPassportFileName')
+  };
+}
+
+function normalizeRequiredDocumentRows(rows: Row[] | undefined): Row[] {
+  const merged = new Map<string, Row>();
+
+  (rows || []).forEach((row) => {
+    const documentType = String(row.documentType || '').trim();
+    const key = documentKey(documentType);
+    if (!key) return;
+
+    const existing = merged.get(key);
+    const fileName = uniqueFileNameText([existing?.fileName, row.fileName].filter(Boolean).join(', '));
+
+    merged.set(key, {
+      ...(existing || {}),
+      ...row,
+      documentType: existing?.documentType || documentType,
+      isRequired: row.isRequired === undefined ? existing?.isRequired ?? true : row.isRequired,
+      isProvided: Boolean(existing?.isProvided) || Boolean(row.isProvided) || Boolean(fileName),
+      fileName,
+      storagePath: existing?.storagePath || row.storagePath,
+      mimeType: existing?.mimeType || row.mimeType,
+      size: existing?.size || row.size
+    });
+  });
+
+  return requiredDocuments.map((documentType) => {
+    const row = merged.get(documentKey(documentType));
+    return row || { documentType, isRequired: true, isProvided: false, fileName: '' };
+  });
+}
+
+function normalizeAdditionalDocumentRows(rows: Row[] | undefined): Row[] {
+  const seen = new Set<string>();
+
+  return (rows || [])
+    .map((row, index) => ({
+      ...row,
+      id: row.id || `${index + 1}`,
+      fileName: uniqueFileNameText(row.fileName)
+    }))
+    .filter((row) => {
+      const fileName = String(row.fileName || '').trim();
+      if (!fileName) return false;
+      const key = fileName.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function normalizeForm(form: KycFormData): KycFormData {
   const sectionA = {
     ...emptyForm.sectionA,
@@ -1976,16 +2240,28 @@ function normalizeForm(form: KycFormData): KycFormData {
     ...emptyForm.sectionE,
     ...(form.sectionE || {})
   };
+  sectionE.position = listValue(sectionE.position);
   sectionE.mobileNumber = applyCountryDialCode(sectionE.mobileNumber || '', countryFromNationality(sectionE.nationality || ''));
 
   return {
     ...emptyForm,
     ...form,
     sectionA,
-    sectionB: { ...emptyForm.sectionB, ...(form.sectionB || {}), shareholders: form.sectionB?.shareholders || [], ubos: form.sectionB?.ubos || [] },
-    sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: form.sectionC?.managers || [] },
+    sectionB: {
+      ...emptyForm.sectionB,
+      ...(form.sectionB || {}),
+      shareholders: normalizeSectionBRows(form.sectionB?.shareholders),
+      ubos: normalizeSectionBRows(form.sectionB?.ubos)
+    },
+    sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: normalizeSectionCRows(form.sectionC?.managers) },
+    sectionD: normalizeSectionD(form.sectionD),
     sectionE,
-    sectionF: { ...emptyForm.sectionF, ...(form.sectionF || {}), documents: form.sectionF?.documents?.length ? form.sectionF.documents : emptyForm.sectionF.documents },
+    sectionF: {
+      ...emptyForm.sectionF,
+      ...(form.sectionF || {}),
+      documents: normalizeRequiredDocumentRows(form.sectionF?.documents?.length ? form.sectionF.documents : emptyForm.sectionF.documents),
+      additionalDocuments: normalizeAdditionalDocumentRows(form.sectionF?.additionalDocuments)
+    },
     sectionH: form.sectionH || {}
   };
 }

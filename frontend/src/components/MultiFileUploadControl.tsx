@@ -8,6 +8,7 @@ type MultiFileUploadControlProps = {
   accept?: string;
   buttonLabel?: string;
   placeholder?: string;
+  showFileList?: boolean;
   onSelect: (files: File[]) => void;
   onRemoveName?: (index: number) => void;
 };
@@ -19,6 +20,7 @@ export function MultiFileUploadControl({
   accept,
   buttonLabel = 'Upload',
   placeholder = 'No file selected',
+  showFileList = true,
   onSelect,
   onRemoveName
 }: MultiFileUploadControlProps) {
@@ -50,7 +52,7 @@ export function MultiFileUploadControl({
       >
         <span className="truncate">{summary}</span>
       </div>
-      {visibleNames.length > 1 ? (
+      {showFileList && visibleNames.length > 0 && onRemoveName ? (
         <div className="sm:col-start-2">
           <div className="max-h-24 overflow-y-auto rounded-md border border-slate-200 bg-white p-2">
             <div className="flex flex-wrap gap-1.5">
@@ -62,18 +64,16 @@ export function MultiFileUploadControl({
                 >
                   <FileText className="h-3 w-3 shrink-0" />
                   <span className="max-w-56 truncate">{name}</span>
-                  {onRemoveName ? (
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => onRemoveName(index)}
-                      className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
-                      aria-label={`Remove ${name}`}
-                      title={`Remove ${name}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onRemoveName(index)}
+                    className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label={`Remove ${name}`}
+                    title={`Remove ${name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 </span>
               ))}
             </div>

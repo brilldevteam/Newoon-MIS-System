@@ -1037,8 +1037,8 @@ export class KycService {
 
   async saveRequiredDocuments(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
-    const rows = this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row));
-    const additionalRows = this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row));
+    const rows = this.dedupeRequiredDocumentRows(this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row)));
+    const additionalRows = this.dedupeAdditionalDocumentRows(this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row)));
     const sectionData = {
       uploadedFilesNote: dto.uploadedFilesNote || '',
       additionalDocuments: additionalRows.map((row, index) => ({
@@ -1105,22 +1105,26 @@ export class KycService {
     const syncRows = [
       ...rows
         .filter((row) => Boolean(row.isProvided) && Boolean(this.optionalText(row.fileName)))
-        .map((row) => ({
-          documentType: this.requiredText(row.documentType, 'Document type'),
-          fileName: this.requiredText(row.fileName, 'File name'),
-          storagePath: this.optionalText(row.storagePath),
-          mimeType: this.optionalText(row.mimeType),
-          size: row.size === undefined || row.size === '' ? null : Number(row.size)
-        })),
+        .flatMap((row) =>
+          this.documentFileNames(row.fileName).map((fileName) => ({
+            documentType: this.requiredText(row.documentType, 'Document type'),
+            fileName,
+            storagePath: this.optionalText(row.storagePath),
+            mimeType: this.optionalText(row.mimeType),
+            size: row.size === undefined || row.size === '' ? null : Number(row.size)
+          }))
+        ),
       ...additionalRows
         .filter((row) => Boolean(this.optionalText(row.fileName)))
-        .map((row, index) => ({
-          documentType: this.optionalText(row.documentType) || `Additional document ${index + 1}`,
-          fileName: this.requiredText(row.fileName, 'File name'),
-          storagePath: this.optionalText(row.storagePath),
-          mimeType: this.optionalText(row.mimeType),
-          size: row.size === undefined || row.size === '' ? null : Number(row.size)
-        }))
+        .flatMap((row, index) =>
+          this.documentFileNames(row.fileName).map((fileName) => ({
+            documentType: this.optionalText(row.documentType) || `Additional document ${index + 1}`,
+            fileName,
+            storagePath: this.optionalText(row.storagePath),
+            mimeType: this.optionalText(row.mimeType),
+            size: row.size === undefined || row.size === '' ? null : Number(row.size)
+          }))
+        )
     ];
 
     if (!syncRows.length) return;
@@ -1495,7 +1499,7 @@ export class KycService {
   ) {
     const matchedLegalDocumentIds = new Set<string>();
     const baseRequiredDocuments = savedRequiredDocuments.length
-      ? savedRequiredDocuments
+      ? this.dedupeRequiredDocumentRows(savedRequiredDocuments)
       : REQUIRED_DOCUMENT_TYPES.map((documentType, index) => ({
           documentType,
           isRequired: true,
@@ -1522,20 +1526,18 @@ export class KycService {
       };
     });
 
-    const savedAdditionalDocuments = this.asArray<RowPayload>(sectionData.additionalDocuments);
-    const additionalKeys = new Set(
-      savedAdditionalDocuments
-        .filter((row) => Boolean(this.optionalText(row.fileName)))
-        .map((row) => this.legalDocumentSyncKey(this.optionalText(row.documentType) || 'Additional document', this.requiredText(row.fileName, 'File name')))
+    const savedAdditionalDocuments = this.dedupeAdditionalDocumentRows(this.asArray<RowPayload>(sectionData.additionalDocuments));
+    const additionalFileKeys = new Set(
+      savedAdditionalDocuments.flatMap((row) => this.documentFileNames(row.fileName).map((fileName) => fileName.toLowerCase()))
     );
     const additionalDocuments = [
       ...savedAdditionalDocuments,
       ...legalDocuments
         .filter((document) => !matchedLegalDocumentIds.has(document.id))
         .filter((document) => {
-          const key = this.legalDocumentSyncKey(document.documentType || 'Additional document', document.fileName);
-          if (additionalKeys.has(key)) return false;
-          additionalKeys.add(key);
+          const key = document.fileName.trim().toLowerCase();
+          if (additionalFileKeys.has(key)) return false;
+          additionalFileKeys.add(key);
           return true;
         })
         .map((document, index) => ({
@@ -1553,6 +1555,82 @@ export class KycService {
       documents,
       additionalDocuments
     };
+  }
+
+  private dedupeRequiredDocumentRows<T extends RowPayload>(rows: T[]) {
+    const merged = new Map<string, T>();
+
+    rows.forEach((row) => {
+      const documentType = this.optionalText(row.documentType);
+      const key = this.documentMatchText(documentType || '');
+      if (!key) return;
+
+      const existing = merged.get(key);
+      const fileName = this.documentFileNames([existing?.fileName, row.fileName].filter(Boolean).join(', ')).join(', ');
+
+      merged.set(key, {
+        ...(existing || ({} as T)),
+        ...row,
+        documentType: existing?.documentType || documentType,
+        isRequired: row.isRequired === undefined ? existing?.isRequired ?? true : row.isRequired,
+        isProvided: Boolean(existing?.isProvided) || Boolean(row.isProvided) || Boolean(fileName),
+        fileName,
+        storagePath: existing?.storagePath || row.storagePath,
+        mimeType: existing?.mimeType || row.mimeType,
+        size: existing?.size || row.size
+      } as T);
+    });
+
+    return REQUIRED_DOCUMENT_TYPES.map((documentType, index) => {
+      const row = merged.get(this.documentMatchText(documentType));
+      return (
+        row ||
+        ({
+          documentType,
+          isRequired: true,
+          isProvided: false,
+          fileName: null,
+          storagePath: null,
+          mimeType: null,
+          size: null,
+          sortOrder: index
+        } as unknown as T)
+      );
+    });
+  }
+
+  private dedupeAdditionalDocumentRows<T extends RowPayload>(rows: T[]) {
+    const seen = new Set<string>();
+
+    return rows
+      .map((row, index) => ({
+        ...row,
+        id: this.optionalText(row.id) || `${index + 1}`,
+        fileName: this.documentFileNames(row.fileName).join(', ')
+      }))
+      .filter((row) => {
+        const fileName = this.optionalText(row.fileName);
+        if (!fileName) return false;
+        const key = fileName.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }) as T[];
+  }
+
+  private documentFileNames(value: unknown) {
+    const seen = new Set<string>();
+
+    return this.text(value)
+      .split(',')
+      .map((fileName) => fileName.trim())
+      .filter((fileName) => {
+        if (!fileName) return false;
+        const key = fileName.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   }
 
   private isRequiredDocumentMatch(documentType: string, requiredDocumentType: string) {
@@ -2360,6 +2438,11 @@ export class KycService {
   }
 
   private optionalText(value: unknown) {
+    if (Array.isArray(value)) {
+      const text = value.map((item) => this.text(item).trim()).filter(Boolean).join(', ');
+      return text || null;
+    }
+
     return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
@@ -2554,13 +2637,18 @@ export class KycService {
       pepQuestion: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'Yes'),
       pepNo: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'No'),
       pepDetails: this.text(sectionD.pepDetails),
+      pepDocumentFileNames: this.listText(sectionD.pepDocumentFileNames),
+      pepSupportingDocuments: this.listText(sectionD.pepDocumentFileNames),
       sanctionQuestion: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'Yes'),
       sanctionNo: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'No'),
       sanctionDetails: this.text(sectionD.sanctionDetails),
+      sanctionDocumentFileNames: this.listText(sectionD.sanctionDocumentFileNames),
+      sanctionSupportingDocuments: this.listText(sectionD.sanctionDocumentFileNames),
       dualCitizenshipQuestion: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'Yes'),
       dualCitizenshipNo: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'No'),
       dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
-      dualCitizenshipPassportFileName: this.text(sectionD.dualCitizenshipPassportFileName),
+      dualCitizenshipPassportFileName: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
+      dualCitizenshipPassportFileNames: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
       communicationFullName: this.text(sectionE.fullName),
       communicationPosition: this.optionText(sectionE.position, sectionE.positionOther),
       communicationNationality: this.optionText(sectionE.nationality, sectionE.nationalityOther),
@@ -2777,7 +2865,11 @@ export class KycService {
     return String(value);
   }
 
-  private optionText(value: unknown, otherValue: unknown) {
+  private optionText(value: unknown, otherValue: unknown): string {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.optionText(item, otherValue)).filter(Boolean).join(', ');
+    }
+
     if (value === 'Other') {
       return this.text(otherValue) || 'Other';
     }
@@ -2868,9 +2960,9 @@ ${this.docxParagraph('UBOs:\\n{ubosText}')}
 ${this.docxParagraph('C. Manager / Authorized Signatory / Directors / Secretary')}
 ${this.docxParagraph('{managersText}')}
 ${this.docxParagraph('D. Compliance and Risk Information')}
-${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails}')}
-${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails}')}
-${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}')}
+${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails} | Supporting documents: {pepDocumentFileNames}')}
+${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails} | Supporting documents: {sanctionDocumentFileNames}')}
+${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copies: {dualCitizenshipPassportFileName}')}
 ${this.docxParagraph('E. Key Communication Person')}
 ${this.docxTable([
   ['Full name', '{communicationFullName}', 'Position / Job title', '{communicationPosition}'],
