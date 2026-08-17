@@ -1,0 +1,3 @@
+ALTER TABLE "KycManager"
+ADD COLUMN IF NOT EXISTS "nationality" TEXT,
+ADD COLUMN IF NOT EXISTS "address" TEXT;

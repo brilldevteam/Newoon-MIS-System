@@ -511,6 +511,8 @@ model KycManager {
   fullName              String
   entityName            String?
   nationalityAndAddress String?
+  nationality           String?
+  address               String?
   dateOfBirth           DateTime?
   identityNumber        String?
   position              String?

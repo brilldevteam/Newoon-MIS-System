@@ -15,8 +15,19 @@ function escapeXml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function paragraph(text) {
-  return `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+function runText(text, options = {}) {
+  const font = options.font || 'Times New Roman';
+  const size = options.size || '18';
+  const textParts = String(text ?? '').split('\n');
+  const body = textParts
+    .map((part, index) => `${index > 0 ? '<w:br/>' : ''}<w:t xml:space="preserve">${escapeXml(part)}</w:t>`)
+    .join('');
+  return `<w:r><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>${body}</w:r>`;
+}
+
+function paragraph(text, options = {}) {
+  const pPr = options.pPr || '';
+  return `<w:p>${pPr}${runText(text, options)}</w:p>`;
 }
 
 function replaceRange(value, start, end, replacement) {
@@ -25,6 +36,12 @@ function replaceRange(value, start, end, replacement) {
 
 function matches(value, pattern) {
   return [...value.matchAll(pattern)];
+}
+
+function paragraphPlainText(paragraphXml) {
+  return matches(paragraphXml, /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)
+    .map((item) => item[1])
+    .join('');
 }
 
 function cellText(cellXml, text) {
@@ -67,14 +84,14 @@ function updateTable(documentXml, tableIndex, updater) {
 
 function replaceParagraphContaining(documentXml, searchText, text) {
   const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
-  const match = paragraphs.find((item) => item[0].includes(searchText));
+  const match = paragraphs.find((item) => paragraphPlainText(item[0]).includes(searchText));
   if (!match) return documentXml;
   return replaceRange(documentXml, match.index, match.index + match[0].length, paragraph(text));
 }
 
 function insertParagraphAfterContaining(documentXml, searchText, text) {
   const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
-  const match = paragraphs.find((item) => item[0].includes(searchText));
+  const match = paragraphs.find((item) => paragraphPlainText(item[0]).includes(searchText));
   if (!match) return documentXml;
   return replaceRange(documentXml, match.index + match[0].length, match.index + match[0].length, paragraph(text));
 }
@@ -156,7 +173,8 @@ function buildTemplate() {
       '{managerFullName}',
       '{managerPosition}',
       '{managerEntityName}',
-      '{managerNationalityAndAddress}',
+      '{managerNationality}',
+      '{managerAddress}',
       '{managerDateOfBirth}',
       '{managerIdentityNumber}',
       '{managerAuthorizedSignatory}{/managers}'
@@ -167,12 +185,13 @@ function buildTemplate() {
     return next;
   });
 
+  xml = replaceParagraphContaining(xml, 'Are any of the following people considered as Politically Exposed Persons (PEPs):', '1. Are any of the following people considered as Politically Exposed Persons (PEPs):');
   xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details:', 'Yes, if yes, please provide full details: {pepQuestion}');
   xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide full details: {pepQuestion}', '{pepDetails}');
-  xml = replaceParagraphContaining(xml, 'Has any of the individuals or entities referred above have ever been sanctioned', 'Has any of the individuals or entities referred above have ever been sanctioned by any government or regulatory body including but not limited to the NCTC, United Nations, U.S.A., E.U, U.K, Qatar and FATF member countries?');
+  xml = replaceParagraphContaining(xml, 'Has any of the individuals or entities referred above have ever been sanctioned', '2. Has any of the individuals or entities referred above have ever been sanctioned by any government or regulatory body including but not limited to the NCTC, United Nations, U.S.A., E.U, U.K, Qatar and FATF member countries?');
   xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions:', 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions: {sanctionQuestion}');
   xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions: {sanctionQuestion}', '{sanctionDetails}');
-  xml = replaceParagraphContaining(xml, 'Whether the beneficial owners or key management having dual citizenship?', 'Whether the beneficial owners or key management having dual citizenship?');
+  xml = replaceParagraphContaining(xml, 'Whether the beneficial owners or key management having dual citizenship?', '3. Whether the beneficial owners or key management having dual citizenship?');
   xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide details and passport copy:', 'Yes, if yes, please provide details and passport copy: {dualCitizenshipQuestion}');
   xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide details and passport copy: {dualCitizenshipQuestion}', '{dualCitizenshipDetails}\nPassport copy: {dualCitizenshipPassportFileName}');
 
