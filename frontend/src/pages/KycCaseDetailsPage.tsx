@@ -14,7 +14,7 @@ import {
   ProposalStatus,
   KycCaseStatus,
   updateProposalStatus,
-  uploadLegalDocumentFile,
+  uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
@@ -134,14 +134,14 @@ export function KycCaseDetailsPage() {
     }
   }
 
-  async function replaceDocumentFile(document: KycCase['legalDocuments'][number], file: File | null) {
-    if (!id || !file) return;
+  async function replaceDocumentFile(document: KycCase['legalDocuments'][number], files: File[]) {
+    if (!id || !files.length) return;
     setDocumentError('');
     setUploadingDocumentId(document.id);
     try {
-      setKycCase(await uploadLegalDocumentFile(id, { documentType: document.documentType, file }));
+      setKycCase(await uploadLegalDocumentFiles(id, { documentType: document.documentType, files }));
     } catch (requestError: any) {
-      setDocumentError(requestError.response?.data?.message || 'Unable to upload replacement file.');
+      setDocumentError(requestError.response?.data?.message || 'Unable to upload selected files.');
     } finally {
       setUploadingDocumentId('');
     }
@@ -343,16 +343,17 @@ export function KycCaseDetailsPage() {
                       </button>
                       {canUploadDocuments ? (
                         <label
-                          title={document.storagePath ? 'Replace file' : 'Upload missing file'}
-                          aria-label={`${document.storagePath ? 'Replace' : 'Upload'} ${document.fileName}`}
+                          title={document.storagePath ? 'Upload more files' : 'Upload missing file'}
+                          aria-label={`Upload files for ${document.fileName}`}
                           className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
                         >
                           <Upload className={`h-4 w-4 ${uploadingDocumentId === document.id ? 'animate-pulse' : ''}`} />
                           <input
                             type="file"
+                            multiple
                             className="hidden"
                             onChange={(event) => {
-                              replaceDocumentFile(document, event.target.files?.[0] || null);
+                              replaceDocumentFile(document, Array.from(event.target.files || []));
                               event.currentTarget.value = '';
                             }}
                           />

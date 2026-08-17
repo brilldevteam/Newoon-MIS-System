@@ -37,6 +37,10 @@ export type ReviewStage = 'SUPERVISOR' | 'DMLRO' | 'MLRO' | 'SEF';
 
 export type ProposalStatus = 'NOT_REQUIRED' | 'REQUIRED' | 'SENT' | 'ACCEPTED' | 'REJECTED';
 
+export type EnquiryType = 'EXISTING_LEGAL_ENTITY' | 'PROPOSED_COMPANY' | 'CURRENT_CLIENT_NEW_SERVICES';
+
+export type EnquiryStatus = 'DRAFT' | 'SUBMITTED_TO_AML_SUPERVISOR' | 'RETURNED_TO_BD' | 'READY_FOR_KYC' | 'CONVERTED_TO_KYC' | 'CLOSED';
+
 export type ClientContact = {
   id: string;
   name: string;
@@ -107,12 +111,100 @@ export type KycCase = {
   createdAt: string;
 };
 
+export type EnquiryAttachment = {
+  id: string;
+  documentType: string;
+  fileName: string;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  createdAt: string;
+};
+
+export type EnquiryComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  author?: {
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+};
+
+export type EnquiryStatusHistory = {
+  id: string;
+  fromStatus?: EnquiryStatus | null;
+  toStatus: EnquiryStatus;
+  note?: string | null;
+  createdAt: string;
+  changedBy?: {
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+};
+
+export type Enquiry = {
+  id: string;
+  enquiryCode: string;
+  enquiryType: EnquiryType;
+  status: EnquiryStatus;
+  client?: Client | null;
+  clientId?: string | null;
+  companyName?: string | null;
+  proposedCompanyName?: string | null;
+  requestedServices: string[];
+  keyContactName?: string | null;
+  keyContactEmail?: string | null;
+  keyContactPhone?: string | null;
+  keyContactPosition?: string | null;
+  headOfficeCountry?: string | null;
+  branchCountry?: string | null;
+  areaOfOperation?: string | null;
+  details?: Record<string, any> | null;
+  notes?: string | null;
+  attachments: EnquiryAttachment[];
+  comments: EnquiryComment[];
+  statusHistory: EnquiryStatusHistory[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type EnquiryPayload = {
+  enquiryType?: EnquiryType;
+  clientId?: string;
+  companyName?: string;
+  proposedCompanyName?: string;
+  requestedServices?: string[];
+  keyContactName?: string;
+  keyContactEmail?: string;
+  keyContactPhone?: string;
+  keyContactPosition?: string;
+  headOfficeCountry?: string;
+  branchCountry?: string;
+  areaOfOperation?: string;
+  details?: Record<string, any>;
+  notes?: string;
+  attachments?: Array<{ documentType: string; fileName: string; storagePath?: string; mimeType?: string; size?: number }>;
+};
+
 export type AmlNotification = {
   id: string;
   title: string;
   message: string;
   type?: string;
   isRead?: boolean;
+  createdAt: string;
+  kycCase?: KycCase | null;
+};
+
+export type AppNotification = {
+  id: string;
+  title: string;
+  message: string;
+  type: string;
+  isRead: boolean;
   createdAt: string;
   kycCase?: KycCase | null;
 };
@@ -215,6 +307,84 @@ export function deleteClient(id: string) {
   return api.delete<{ id: string }>(`/clients/${id}`).then((response) => response.data);
 }
 
+export function listEnquiries() {
+  return api.get<Enquiry[]>('/enquiries').then((response) => response.data);
+}
+
+export function createEnquiry(payload: EnquiryPayload) {
+  return api.post<Enquiry>('/enquiries', payload).then((response) => response.data);
+}
+
+export function getEnquiry(id: string) {
+  return api.get<Enquiry>(`/enquiries/${id}`).then((response) => response.data);
+}
+
+export function updateEnquiry(id: string, payload: EnquiryPayload) {
+  return api.patch<Enquiry>(`/enquiries/${id}`, payload).then((response) => response.data);
+}
+
+export function updateEnquiryStatus(id: string, payload: { status: EnquiryStatus; note?: string }) {
+  return api.patch<Enquiry>(`/enquiries/${id}/status`, payload).then((response) => response.data);
+}
+
+export function convertEnquiryToKyc(id: string) {
+  return api.post<KycCase>(`/enquiries/${id}/convert-to-kyc`).then((response) => response.data);
+}
+
+export function addEnquiryComment(id: string, payload: { body: string }) {
+  return api.post<Enquiry>(`/enquiries/${id}/comments`, payload).then((response) => response.data);
+}
+
+export function uploadEnquiryAttachmentFile(id: string, payload: { documentType: string; file: File }) {
+  const data = new FormData();
+  data.append('documentType', payload.documentType);
+  data.append('file', payload.file);
+
+  return api.post<Enquiry>(`/enquiries/${id}/attachments/upload`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((response) => response.data);
+}
+
+export async function uploadEnquiryAttachmentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  let enquiry: Enquiry | null = null;
+  for (const file of payload.files) {
+    enquiry = await uploadEnquiryAttachmentFile(id, { documentType: payload.documentType, file });
+  }
+  return enquiry;
+}
+
+export async function viewEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
+  const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: attachment.mimeType || response.data.type || 'application/octet-stream' });
+  const url = window.URL.createObjectURL(blob);
+  const mimeType = blob.type.toLowerCase();
+  const canPreview = mimeType.startsWith('image/') || mimeType === 'application/pdf' || mimeType.startsWith('text/');
+
+  if (canPreview) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+
+  downloadBlob(url, attachment.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
+  const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
+    responseType: 'blob'
+  });
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, attachment.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export function deleteEnquiry(id: string) {
+  return api.delete<{ id: string }>(`/enquiries/${id}`).then((response) => response.data);
+}
+
 export function listKycCases() {
   return api.get<KycCase[]>('/kyc').then((response) => response.data);
 }
@@ -258,6 +428,14 @@ export function uploadLegalDocumentFile(id: string, payload: { documentType: str
   return api.post<KycCase>(`/kyc/${id}/legal-documents/upload`, data).then((response) => response.data);
 }
 
+export async function uploadLegalDocumentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  let kycCase: KycCase | null = null;
+  for (const file of payload.files) {
+    kycCase = await uploadLegalDocumentFile(id, { documentType: payload.documentType, file });
+  }
+  return kycCase;
+}
+
 export async function viewLegalDocument(caseId: string, document: LegalDocument) {
   const response = await api.get(`/kyc/${caseId}/legal-documents/${document.id}/view`, {
     responseType: 'blob'
@@ -296,6 +474,18 @@ export function addWorkflowComment(id: string, body: string) {
 
 export function getAmlNotifications() {
   return api.get<AmlNotification[]>('/kyc/aml/notifications').then((response) => response.data);
+}
+
+export function getNotifications() {
+  return api.get<AppNotification[]>('/notifications').then((response) => response.data);
+}
+
+export function markNotificationRead(id: string) {
+  return api.patch<AppNotification>(`/notifications/${id}/read`).then((response) => response.data);
+}
+
+export function markAllNotificationsRead() {
+  return api.patch<AppNotification[]>('/notifications/read-all').then((response) => response.data);
 }
 
 export function getMyReviewTasks() {
@@ -379,4 +569,13 @@ export async function downloadGeneratedKycDocument(caseId: string, documentId: s
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+function downloadBlob(url: string, fileName: string) {
+  const link = window.document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

@@ -6,7 +6,7 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "prisma:generate": "prisma generate",
+    "prisma:generate": "node scripts/generate-prisma.cjs",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:studio": "prisma studio",
     "seed": "ts-node prisma/seed.ts"

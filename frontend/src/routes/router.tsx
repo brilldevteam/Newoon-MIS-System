@@ -7,6 +7,9 @@ import { CreateKycCasePage } from '../pages/CreateKycCasePage';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
+import { AddEnquiryPage } from '../pages/AddEnquiryPage';
+import { EnquiryDetailsPage } from '../pages/EnquiryDetailsPage';
+import { EnquiryListPage } from '../pages/EnquiryListPage';
 import { KycCaseDetailsPage } from '../pages/KycCaseDetailsPage';
 import { KycFormEditorPage } from '../pages/KycFormEditorPage';
 import { InternalReviewWorkspacePage } from '../pages/InternalReviewWorkspacePage';
@@ -36,6 +39,20 @@ export const router = createBrowserRouter([
           { path: '/', element: <HomeRedirect /> },
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
+          {
+            element: <RequireRoles roles={workflowRoles.enquiries} />,
+            children: [
+              { path: '/enquiries', element: <EnquiryListPage /> },
+              { path: '/enquiries/:id', element: <EnquiryDetailsPage /> }
+            ]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.clientIntake} />,
+            children: [
+              { path: '/enquiries/new', element: <AddEnquiryPage /> },
+              { path: '/enquiries/:id/edit', element: <AddEnquiryPage /> }
+            ]
+          },
           {
             element: <RequireRoles roles={workflowRoles.clientIntake} />,
             children: [
