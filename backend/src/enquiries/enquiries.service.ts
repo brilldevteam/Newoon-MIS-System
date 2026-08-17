@@ -76,6 +76,30 @@ export class EnquiriesService {
           }
         });
 
+        const reviewerRecipients = await prisma.user.findMany({
+          where: {
+            tenantId,
+            roles: {
+              some: {
+                role: { name: { in: ['DMLRO', 'MLRO'] } }
+              }
+            }
+          },
+          select: { id: true }
+        });
+
+        if (reviewerRecipients.length) {
+          await prisma.notification.createMany({
+            data: reviewerRecipients.map((recipient) => ({
+              tenantId,
+              recipientId: recipient.id,
+              type: NotificationType.GENERAL,
+              title: 'New enquiry created',
+              message: `${this.enquiryDisplayName(enquiry)} was created by BD and is awaiting enquiry workflow action.`
+            }))
+          });
+        }
+
         return enquiry.id;
       });
 

@@ -104,6 +104,8 @@ const qfzMociProposedCompanyAttachments = [
   'Corporate shareholder documents'
 ];
 
+const keyContactAttachmentType = 'Key Contact QID / Passport attachment';
+
 function attachmentTemplates(enquiryType: EnquiryType, proposedLegalForm = ''): AttachmentDraft[] {
   if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
     return [{ documentType: 'Additional document upload 1', fileName: '' }];
@@ -452,6 +454,14 @@ export function AddEnquiryPage() {
     }));
   }
 
+  function setKeyContactAttachmentFiles(files: File[]) {
+    setAttachments((current) => setAttachmentFilesByType(current, keyContactAttachmentType, files));
+  }
+
+  function removeKeyContactAttachmentFile(index: number) {
+    setAttachments((current) => removeAttachmentFileByType(current, keyContactAttachmentType, index));
+  }
+
   return (
     <form onSubmit={submit} className="space-y-6">
       <div>
@@ -614,6 +624,19 @@ export function AddEnquiryPage() {
                 QID / Passport number <RequiredMark />
                 <input required value={form.keyContactIdentityNumber} onChange={(event) => setForm({ ...form, keyContactIdentityNumber: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
+              <div className="md:col-span-2 rounded-md border border-slate-200 bg-slate-50 p-4">
+                <div className="grid gap-3 md:grid-cols-[minmax(180px,260px)_minmax(0,1fr)] md:items-center">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-950">Passport / QID copy attachment</p>
+                    <p className="mt-1 text-xs text-slate-500">Optional. Upload a passport copy or QID if AML needs supporting identity evidence.</p>
+                  </div>
+                  <MultiFileUploadControl
+                    names={attachmentDisplayNames(findAttachmentByType(attachments, keyContactAttachmentType))}
+                    onSelect={setKeyContactAttachmentFiles}
+                    onRemoveName={removeKeyContactAttachmentFile}
+                  />
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -734,6 +757,52 @@ function attachmentDisplayNames(attachment: AttachmentDraft) {
   return attachment.fileName ? attachment.fileName.split(',').map((name) => name.trim()).filter(Boolean) : [];
 }
 
+function findAttachmentByType(attachments: AttachmentDraft[], documentType: string) {
+  return attachments.find((attachment) => attachment.documentType === documentType) || { documentType, fileName: '' };
+}
+
+function setAttachmentFilesByType(attachments: AttachmentDraft[], documentType: string, files: File[]) {
+  const nextAttachment: AttachmentDraft = {
+    ...findAttachmentByType(attachments, documentType),
+    documentType,
+    fileName: files.map((file) => file.name).join(', '),
+    storagePath: files.length ? undefined : null,
+    mimeType: files.length === 1 ? files[0].type || undefined : undefined,
+    size: files.length === 1 ? files[0].size : undefined,
+    files: files.length ? files : undefined
+  };
+
+  const found = attachments.some((attachment) => attachment.documentType === documentType);
+  return found ? attachments.map((attachment) => (attachment.documentType === documentType ? nextAttachment : attachment)) : [nextAttachment, ...attachments];
+}
+
+function removeAttachmentFileByType(attachments: AttachmentDraft[], documentType: string, fileIndex: number) {
+  return attachments.map((attachment) => (attachment.documentType === documentType ? removeAttachmentFile(attachment, fileIndex) : attachment));
+}
+
+function removeAttachmentFile(attachment: AttachmentDraft, fileIndex: number): AttachmentDraft {
+  if (attachment.files?.length) {
+    const nextFiles = attachment.files.filter((_, index) => index !== fileIndex);
+    return {
+      ...attachment,
+      fileName: nextFiles.map((file) => file.name).join(', '),
+      storagePath: nextFiles.length ? undefined : null,
+      mimeType: nextFiles.length === 1 ? nextFiles[0].type || undefined : undefined,
+      size: nextFiles.length === 1 ? nextFiles[0].size : undefined,
+      files: nextFiles.length ? nextFiles : undefined
+    };
+  }
+
+  const nextNames = attachmentDisplayNames(attachment).filter((_, index) => index !== fileIndex);
+  return {
+    ...attachment,
+    fileName: nextNames.join(', '),
+    storagePath: nextNames.length ? attachment.storagePath : null,
+    mimeType: nextNames.length === 1 ? attachment.mimeType : undefined,
+    size: nextNames.length === 1 ? attachment.size : undefined
+  };
+}
+
 function flattenAttachmentMetadata(enquiryType: EnquiryType, attachments: AttachmentDraft[]): NonNullable<EnquiryPayload['attachments']> {
   const items: NonNullable<EnquiryPayload['attachments']> = [];
 
@@ -780,6 +849,10 @@ function AttachmentRows({
           : attachment
       )
     );
+  }
+
+  function removeFile(index: number, fileIndex: number) {
+    onChange(attachments.map((attachment, itemIndex) => (itemIndex === index ? removeAttachmentFile(attachment, fileIndex) : attachment)));
   }
 
   function addAdditionalUpload() {
@@ -831,7 +904,7 @@ function AttachmentRows({
             <p className="text-sm font-medium text-slate-950">
               {attachment.documentType}
             </p>
-            <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} />
+            <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} onRemoveName={(fileIndex) => removeFile(index, fileIndex)} />
             <button
               type="button"
               onClick={() => (additional ? removeAttachment(index) : setFiles(index, []))}

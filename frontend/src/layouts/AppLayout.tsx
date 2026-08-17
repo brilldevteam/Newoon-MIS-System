@@ -255,7 +255,7 @@ export function AppLayout() {
 function notificationLink(notification: AppNotification) {
   const caseId = notification.kycCase?.id;
   if (!caseId) {
-    return ['AML_CASE_SUBMITTED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type) ? '/enquiries' : '/review-tasks';
+    return ['GENERAL', 'AML_CASE_SUBMITTED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type) ? '/enquiries' : '/review-tasks';
   }
 
   if (

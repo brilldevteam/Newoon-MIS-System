@@ -60,6 +60,10 @@ function fileNameList(value: unknown) {
   return typeof value === 'string' ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
 }
 
+function removeFileName(value: unknown, indexToRemove: number) {
+  return fileNameList(value).filter((_, index) => index !== indexToRemove).join(', ');
+}
+
 const countryOptions = [
   '',
   'Afghanistan',
@@ -1250,6 +1254,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
             disabled={uploadingKey === `required-${index}`}
             buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload'}
             onSelect={(files) => uploadDocument(index, files)}
+            onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
           />
         </div>
       ))}
@@ -1278,6 +1283,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
                 buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload file / ZIP'}
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
                 onSelect={(files) => uploadAdditionalDocument(index, files)}
+                onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
               />
               <button
                 type="button"

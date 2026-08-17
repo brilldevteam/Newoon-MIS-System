@@ -13,6 +13,8 @@ import {
   viewEnquiryAttachment
 } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
+import { useAuth } from '../hooks/useAuth';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -37,6 +39,7 @@ function actorName(actor?: { firstName: string; lastName: string; email: string 
 export function EnquiryDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [enquiry, setEnquiry] = useState<Enquiry | null>(null);
   const [statusNote, setStatusNote] = useState('');
   const [comment, setComment] = useState('');
@@ -139,6 +142,7 @@ export function EnquiryDetailsPage() {
 
   const title = enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry';
   const details = enquiry.details || {};
+  const canSubmitToAmlSupervisor = hasAnyRole(user, workflowRoles.caseCreation);
 
   return (
     <div className="space-y-6">
@@ -238,10 +242,12 @@ export function EnquiryDetailsPage() {
         <h2 className="text-base font-semibold text-slate-950">Status Actions</h2>
         <textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} placeholder="Optional status note" className="mt-4 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" disabled={saving} onClick={() => setStatus('SUBMITTED_TO_AML_SUPERVISOR')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
-            <Send className="h-4 w-4" />
-            Submit to AML Supervisor
-          </button>
+          {canSubmitToAmlSupervisor ? (
+            <button type="button" disabled={saving} onClick={() => setStatus('SUBMITTED_TO_AML_SUPERVISOR')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
+              <Send className="h-4 w-4" />
+              Submit to AML Supervisor
+            </button>
+          ) : null}
           <button type="button" disabled={saving} onClick={() => setStatus('RETURNED_TO_BD')} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
             Return to BD
           </button>

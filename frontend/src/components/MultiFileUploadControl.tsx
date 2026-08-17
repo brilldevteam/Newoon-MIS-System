@@ -1,4 +1,4 @@
-import { FileText, Upload } from 'lucide-react';
+import { FileText, Upload, X } from 'lucide-react';
 import { useRef } from 'react';
 
 type MultiFileUploadControlProps = {
@@ -9,6 +9,7 @@ type MultiFileUploadControlProps = {
   buttonLabel?: string;
   placeholder?: string;
   onSelect: (files: File[]) => void;
+  onRemoveName?: (index: number) => void;
 };
 
 export function MultiFileUploadControl({
@@ -18,7 +19,8 @@ export function MultiFileUploadControl({
   accept,
   buttonLabel = 'Upload',
   placeholder = 'No file selected',
-  onSelect
+  onSelect,
+  onRemoveName
 }: MultiFileUploadControlProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const visibleNames = names.filter(Boolean);
@@ -60,6 +62,18 @@ export function MultiFileUploadControl({
                 >
                   <FileText className="h-3 w-3 shrink-0" />
                   <span className="max-w-56 truncate">{name}</span>
+                  {onRemoveName ? (
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => onRemoveName(index)}
+                      className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label={`Remove ${name}`}
+                      title={`Remove ${name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  ) : null}
                 </span>
               ))}
             </div>

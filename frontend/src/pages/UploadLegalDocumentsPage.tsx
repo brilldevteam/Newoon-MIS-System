@@ -96,7 +96,11 @@ export function UploadLegalDocumentsPage() {
               </label>
               <div className="text-sm font-medium text-slate-700 lg:col-span-2">
                 <span className="mb-1 block">Upload documents</span>
-                <MultiFileUploadControl names={document.files.map((file) => file.name)} onSelect={(files) => updateDocument(document.id, { files })} />
+                <MultiFileUploadControl
+                  names={document.files.map((file) => file.name)}
+                  onSelect={(files) => updateDocument(document.id, { files })}
+                  onRemoveName={(fileIndex) => updateDocument(document.id, { files: document.files.filter((_, index) => index !== fileIndex) })}
+                />
               </div>
               <button
                 type="button"
