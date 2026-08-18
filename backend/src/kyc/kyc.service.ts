@@ -40,6 +40,12 @@ const TINY_FONT: Record<string, string[]> = {
   ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
   '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
   '.': ['00000', '00000', '00000', '00000', '00000', '01100', '01100'],
+  ',': ['00000', '00000', '00000', '00000', '00000', '01100', '01000'],
+  ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
+  "'": ['00100', '00100', '00000', '00000', '00000', '00000', '00000'],
+  '(': ['00010', '00100', '01000', '01000', '01000', '00100', '00010'],
+  ')': ['01000', '00100', '00010', '00010', '00010', '00100', '01000'],
+  '&': ['01100', '10010', '10100', '01000', '10101', '10010', '01101'],
   '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
   '%': ['11001', '11010', '00100', '01000', '10110', '00110', '00000'],
   '|': ['00100', '00100', '00100', '00100', '00100', '00100', '00100'],
@@ -2890,7 +2896,7 @@ export class KycService {
   }
 
   private docxImageSize(key: string) {
-    if (key === 'ownershipStructure') return { cx: 5700000, cy: 3270000 };
+    if (key === 'ownershipStructure') return { cx: 6500000, cy: 3800000 };
     return { cx: 1900000, cy: 650000 };
   }
 
@@ -2957,54 +2963,69 @@ export class KycService {
 
   private ownershipStructureImageDataUrl(rootName: string, rows: RowPayload[]) {
     const nodes = this.ownershipDiagramNodes(rootName || 'Client company', rows);
-    const paddingX = 52;
-    const paddingTop = 44;
-    const paddingBottom = 34;
+    const palette = ['#dbeafe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
+    const labelPalette = ['#0f172a', '#bfdbfe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
+    const framePadding = 18;
+    const labelWidth = 110;
+    const diagramLeft = framePadding + labelWidth + 50;
+    const diagramRight = 38;
+    const paddingTop = 74;
+    const paddingBottom = 36;
     const levelGap = 116;
-    const nodeWidth = 178;
-    const nodeHeight = 68;
-    const width = Math.max(860, paddingX * 2 + nodes.leafCount * 210);
-    const height = Math.max(320, paddingTop + paddingBottom + (nodes.maxDepth + 1) * levelGap + nodeHeight);
-    const contentWidth = width - paddingX * 2;
-    const centerY = (depth: number) => paddingTop + 24 + depth * levelGap;
-    const centerX = (x: number) => paddingX + x * contentWidth;
+    const nodeWidth = 220;
+    const nodeHeight = 64;
+    const width = Math.max(1120, diagramLeft + diagramRight + nodes.leafCount * 245);
+    const height = Math.max(360, paddingTop + paddingBottom + (nodes.maxDepth + 1) * levelGap + nodeHeight);
+    const contentWidth = width - diagramLeft - diagramRight;
+    const centerY = (depth: number) => paddingTop + depth * levelGap;
+    const centerX = (x: number) => diagramLeft + x * contentWidth;
 
     const image = this.createPngCanvas(width, height, '#ffffff');
-    this.drawRect(image, 8, 8, width - 16, height - 16, '#ffffff', '#cbd5e1');
-    this.drawRect(image, 14, 14, width - 28, 26, '#f8fafc', '#e2e8f0');
-    this.drawText(image, 'OWNERSHIP STRUCTURE', Math.max(22, Math.round(width / 2) - 86), 23, '#334155', 1);
+    this.drawRect(image, 8, 8, width - 16, height - 16, '#ffffff', '#111827');
+    this.drawRect(image, 14, 14, width - 28, 1, '#111827', '#111827');
+    this.drawText(image, `${rootName || 'CLIENT'} - OWNERSHIP STRUCTURE`, Math.max(22, Math.round(width / 2) - 170), 32, '#0f172a', 2);
+
+    for (let depth = 0; depth <= nodes.maxDepth; depth++) {
+      const y = Math.round(centerY(depth) + 10);
+      const isRootLayer = depth === 0;
+      this.drawRect(image, framePadding + 10, y, labelWidth, 42, labelPalette[depth] || '#e2e8f0', '#64748b');
+      this.drawText(image, `LAYER ${depth}`, framePadding + 30, y + 14, isRootLayer ? '#ffffff' : '#0f172a', 1);
+    }
 
     for (const item of nodes.items.filter((item) => item.parentId)) {
       const parent = nodes.items.find((candidate) => candidate.id === item.parentId);
       if (!parent) continue;
       const x1 = Math.round(centerX(parent.x));
-      const y1 = Math.round(centerY(parent.depth) + nodeHeight + 2);
+      const y1 = Math.round(centerY(parent.depth) + nodeHeight);
       const x2 = Math.round(centerX(item.x));
-      const y2 = Math.round(centerY(item.depth) - 2);
+      const y2 = Math.round(centerY(item.depth));
       const elbowY = Math.round((y1 + y2) / 2);
-      this.drawLine(image, x1, y1, x1, elbowY, '#64748b');
-      this.drawLine(image, x1, elbowY, x2, elbowY, '#64748b');
-      this.drawLine(image, x2, elbowY, x2, y2, '#64748b');
+      this.drawLine(image, x1, y1, x1, elbowY, '#111827');
+      this.drawLine(image, x1, elbowY, x2, elbowY, '#111827');
+      this.drawLine(image, x2, elbowY, x2, y2, '#111827');
+      this.drawLine(image, x2, y2, x2 - 5, y2 - 9, '#111827');
+      this.drawLine(image, x2, y2, x2 + 5, y2 - 9, '#111827');
+      if (item.ownership) this.drawText(image, `${item.ownership}%`, x2 + 8, Math.max(y2 - 22, elbowY + 4), '#0f172a', 1);
     }
 
     for (const item of nodes.items) {
       const x = Math.round(centerX(item.x) - nodeWidth / 2);
       const y = Math.round(centerY(item.depth));
       const isRoot = item.id === 'ROOT';
-      const fill = isRoot ? '#0f766e' : item.isUbo ? '#ecfdf5' : item.type === 'Corporate Entity' ? '#eff6ff' : '#f8fafc';
-      const stroke = isRoot ? '#0f766e' : item.isUbo ? '#10b981' : item.type === 'Corporate Entity' ? '#2563eb' : '#94a3b8';
+      const fill = isRoot ? '#0f172a' : item.isUbo ? '#e0f2fe' : palette[(item.depth - 1) % palette.length] || '#f8fafc';
+      const stroke = isRoot ? '#0f172a' : item.isUbo ? '#0891b2' : '#64748b';
       this.drawRect(image, x + 4, y + 5, nodeWidth, nodeHeight, '#e2e8f0', '#e2e8f0');
       this.drawRect(image, x, y, nodeWidth, nodeHeight, fill, stroke);
-      const name = this.textLines(item.name || 'Unnamed owner', 21);
+      const name = this.textLines(item.name || 'Unnamed owner', 24);
       const primaryText = isRoot ? '#ffffff' : '#0f172a';
       const secondaryText = isRoot ? '#ccfbf1' : '#475569';
-      this.drawText(image, name[0], x + 12, y + 12, primaryText, 1);
-      if (name[1]) this.drawText(image, name[1], x + 12, y + 25, primaryText, 1);
-      this.drawText(image, item.type, x + 12, y + 42, secondaryText, 1);
-      if (item.ownership) this.drawText(image, `${item.ownership}% OWNERSHIP`, x + 12, y + 55, secondaryText, 1);
+      this.drawText(image, name[0], x + 12, y + 11, primaryText, 1);
+      if (name[1]) this.drawText(image, name[1], x + 12, y + 23, primaryText, 1);
+      this.drawText(image, item.type, x + 12, y + 39, secondaryText, 1);
+      if (item.detail) this.drawText(image, this.textLines(item.detail, 24)[0], x + 12, y + 52, secondaryText, 1);
       if (item.isUbo) {
-        this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 20, 42, 14, '#bbf7d0', '#86efac');
-        this.drawText(image, 'UBO', x + nodeWidth - 46, y + nodeHeight - 17, '#065f46', 1);
+        this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 18, 42, 13, '#ccfbf1', '#67e8f9');
+        this.drawText(image, 'UBO', x + nodeWidth - 46, y + nodeHeight - 16, '#155e75', 1);
       }
     }
 
@@ -3018,6 +3039,7 @@ export class KycService {
       name: string;
       type: string;
       ownership: string;
+      detail: string;
       isUbo: boolean;
       depth: number;
       x: number;
@@ -3031,7 +3053,7 @@ export class KycService {
     }, {});
 
     const items: DiagramNode[] = [
-      { id: 'ROOT', parentId: '', name: rootName, type: 'Client company', ownership: '', isUbo: false, depth: 0, x: 0.5 }
+      { id: 'ROOT', parentId: '', name: rootName, type: 'Client company', ownership: '', detail: '(Layer 0)', isUbo: false, depth: 0, x: 0.5 }
     ];
     let leafIndex = 0;
     let maxDepth = 0;
@@ -3048,6 +3070,7 @@ export class KycService {
           name: this.text(row.fullName) || 'Unnamed owner',
           type: this.text(row.shareholderType || 'Individual'),
           ownership: this.text(row.ownershipPercentage || '0'),
+          detail: this.optionText(row.nationality, row.nationalityOther) || this.text(row.residenceAddress),
           isUbo: Boolean(row.isUbo),
           depth,
           x: childX

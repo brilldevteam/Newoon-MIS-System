@@ -672,6 +672,12 @@ export function KycFormEditorPage() {
     }
   }, [activeSection, visibleSections]);
 
+  useEffect(() => {
+    if (canEditAllSections || canPrepareKyc) {
+      setActiveSection('sectionA');
+    }
+  }, [id, canEditAllSections, canPrepareKyc]);
+
   function setSection(section: SectionKey, value: Record<string, any>) {
     setForm((current) => {
       const next = { ...current, [section]: value };
@@ -1178,16 +1184,35 @@ function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: 
 
 function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
   const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
   const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate shareholder ${index + 1}`]));
+
+  function rowId(row: Row, index: number) {
+    return row.id || String(index);
+  }
 
   function patchRow(index: number, patch: Row) {
     onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
   }
 
+  function addOwner() {
+    const owner = createOwnershipRow();
+    setExpandedRows((current) => ({ ...current, [owner.id || String(rows.length)]: true }));
+    onChange([...rows, owner]);
+  }
+
+  function toggleRow(rowKey: string) {
+    setExpandedRows((current) => ({ ...current, [rowKey]: !current[rowKey] }));
+  }
+
+  function setAllExpanded(isExpanded: boolean) {
+    setExpandedRows(Object.fromEntries(rows.map((row, index) => [rowId(row, index), isExpanded])));
+  }
+
   async function lookup(index: number) {
     const row = rows[index];
-    const rowKey = row.id || String(index);
+    const rowKey = rowId(row, index);
     const identifier = String(row.identityNumber || '').trim();
     if (!identifier) {
       setLookupMessages((current) => ({ ...current, [rowKey]: 'Enter a CR, QID, or passport number first.' }));
@@ -1211,78 +1236,115 @@ function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: R
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-slate-950">Ownership rows</p>
           <p className="text-xs text-slate-500">Add each direct or layered owner. Corporate rows can be selected as a parent for the next layer.</p>
         </div>
-        <button type="button" onClick={() => onChange([...rows, createOwnershipRow()])} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-          <Plus className="h-4 w-4" />
-          Add owner
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {rows.length ? (
+            <button type="button" onClick={() => setAllExpanded(false)} className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" title="Collapse all ownership rows">
+              Collapse
+            </button>
+          ) : null}
+          {rows.length ? (
+            <button type="button" onClick={() => setAllExpanded(true)} className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" title="Expand all ownership rows">
+              Expand
+            </button>
+          ) : null}
+          <button type="button" onClick={addOwner} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700">
+            <Plus className="h-4 w-4" />
+            Owner
+          </button>
+        </div>
       </div>
       {rows.map((row, index) => {
-        const rowKey = row.id || String(index);
+        const rowKey = rowId(row, index);
+        const isExpanded = expandedRows[rowKey] ?? rows.length <= 2;
+        const parentText = row.parentRowId ? `Owned by ${parentLabels.get(row.parentRowId) || 'corporate shareholder'}` : `Direct shareholder of ${rootName || 'client company'}`;
+        const nationalityText = Array.isArray(row.nationality) ? row.nationality.join(', ') : row.nationality || '';
         return (
-          <div key={rowKey} className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <Select label="Shareholder type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
-              <label className="text-sm font-medium text-slate-700">
-                Parent owner / owned entity
-                <select
-                  value={row.parentRowId || ''}
-                  onChange={(event) => patchRow(index, { parentRowId: event.target.value })}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                >
-                  <option value="">Direct shareholder of {rootName || 'client company'}</option>
-                  {corporateParents
-                    .filter((parent, parentIndex) => (parent.id || String(parentIndex)) !== rowKey)
-                    .map((parent, parentIndex) => {
-                      const parentId = parent.id || String(parentIndex);
-                      return (
-                        <option key={parentId} value={parentId}>
-                          {parent.fullName || `Corporate shareholder ${parentIndex + 1}`}
-                        </option>
-                      );
-                    })}
-                </select>
-              </label>
-              <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
-              <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
-              <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
-              <div className="text-sm font-medium text-slate-700">
-                <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
-                <div className="mt-1 flex gap-2">
-                  <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    Lookup
-                  </button>
+          <div key={rowKey} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+              <button type="button" onClick={() => toggleRow(rowKey)} className="inline-flex min-w-0 flex-1 items-center gap-3 text-left">
+                <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-950">{row.fullName || `Owner ${index + 1}`}</p>
+                  <p className="truncate text-xs text-slate-500">{parentText}</p>
                 </div>
-                {row.linkedClientId ? (
-                  <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
-                    Linked to existing client: {row.linkedClientName}
-                    <button type="button" onClick={() => patchRow(index, { linkedClientId: '', linkedClientName: '' })} className="text-brand-900">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ) : lookupMessages[rowKey] ? (
-                  <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
-                ) : null}
+              </button>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700">{row.shareholderType || 'Individual'}</span>
+                {row.ownershipPercentage ? <span className="rounded-full bg-brand-50 px-2 py-1 font-semibold text-brand-700">{row.ownershipPercentage}%</span> : null}
+                {nationalityText ? <span className="max-w-[180px] truncate rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600">{nationalityText}</span> : null}
+                {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">UBO</span> : null}
+                {row.linkedClientId ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">Linked client</span> : null}
               </div>
-              <Field label="Ownership %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
-              <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
-              <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
-                Mark as UBO
-              </label>
-            </div>
-            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
-              <span>{row.parentRowId ? `Owned by ${parentLabels.get(row.parentRowId) || 'corporate shareholder'}` : `Direct shareholder of ${rootName || 'client company'}`}</span>
-              <button type="button" onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))} className="inline-flex items-center gap-2 font-semibold text-red-600">
+              <button
+                type="button"
+                onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+                title="Remove owner"
+                aria-label={`Remove ${row.fullName || `owner ${index + 1}`}`}
+              >
                 <Trash2 className="h-4 w-4" />
-                Remove
               </button>
             </div>
+            {isExpanded ? (
+              <div className="p-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Select label="Shareholder type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
+                  <label className="text-sm font-medium text-slate-700">
+                    Parent owner / owned entity
+                    <select
+                      value={row.parentRowId || ''}
+                      onChange={(event) => patchRow(index, { parentRowId: event.target.value })}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    >
+                      <option value="">Direct shareholder of {rootName || 'client company'}</option>
+                      {corporateParents
+                        .filter((parent, parentIndex) => (parent.id || String(parentIndex)) !== rowKey)
+                        .map((parent, parentIndex) => {
+                          const parentId = parent.id || String(parentIndex);
+                          return (
+                            <option key={parentId} value={parentId}>
+                              {parent.fullName || `Corporate shareholder ${parentIndex + 1}`}
+                            </option>
+                          );
+                        })}
+                    </select>
+                  </label>
+                  <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+                  <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                  <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
+                  <div className="text-sm font-medium text-slate-700">
+                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
+                    <div className="mt-1 flex gap-2">
+                      <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Lookup
+                      </button>
+                    </div>
+                    {row.linkedClientId ? (
+                      <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
+                        Linked to existing client: {row.linkedClientName}
+                        <button type="button" onClick={() => patchRow(index, { linkedClientId: '', linkedClientName: '' })} className="text-brand-900">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : lookupMessages[rowKey] ? (
+                      <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
+                    ) : null}
+                  </div>
+                  <Field label="Ownership %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
+                  <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
+                  <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
+                    Mark as UBO
+                  </label>
+                </div>
+              </div>
+            ) : null}
           </div>
         );
       })}
@@ -1293,43 +1355,53 @@ function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: R
 
 function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string; rows: Row[]; ubos: Row[] }) {
   const hasRows = rows.length > 0;
-  const childrenByParent = new Map<string, Row[]>();
-  rows.forEach((row, index) => {
-    const rowId = row.id || String(index);
-    const parent = row.parentRowId || 'ROOT';
-    childrenByParent.set(parent, [...(childrenByParent.get(parent) || []), { ...row, id: rowId }]);
-  });
   const uboIds = new Set([
     ...rows.filter((row) => row.isUbo).map((row, index) => row.id || String(index)),
     ...ubos.map((row) => String(row.identityNumber || row.fullName || ''))
   ]);
-
-  function renderChildren(parentId: string, depth = 0): React.ReactNode {
+  const normalizedRows: Row[] = rows.map((row, index) => ({ ...row, id: row.id || `ownership-${index + 1}` }));
+  const childrenByParent = new Map<string, Row[]>();
+  normalizedRows.forEach((row) => {
+    const parent = row.parentRowId || 'ROOT';
+    childrenByParent.set(parent, [...(childrenByParent.get(parent) || []), row]);
+  });
+  type DiagramNode = Row & { id: string; parentId: string; depth: number; x: number };
+  const diagramNodes: DiagramNode[] = [{ id: 'ROOT', parentId: '', depth: 0, x: 0.5, fullName: rootName || 'Client company', shareholderType: 'Client company' } as DiagramNode];
+  let leafIndex = 0;
+  let maxDepth = 0;
+  const walk = (parentId: string, depth: number): number => {
     const children = childrenByParent.get(parentId) || [];
-    if (!children.length) return null;
-
-    return (
-      <div className="mt-4 flex flex-wrap justify-center gap-3">
-        {children.map((row) => {
-          const isUbo = Boolean(row.isUbo) || uboIds.has(String(row.identityNumber || row.fullName || ''));
-          const hasChildren = (childrenByParent.get(row.id) || []).length > 0;
-          return (
-            <div key={row.id} className="flex min-w-[160px] max-w-[220px] flex-col items-center">
-              <div className="h-4 w-px bg-slate-300" />
-              <div className={`w-full rounded-md border p-3 text-center text-xs shadow-sm ${isUbo ? 'border-brand-300 bg-brand-50 text-brand-900' : 'border-slate-200 bg-white text-slate-700'}`}>
-                <p className="font-semibold text-slate-950">{row.fullName || 'Unnamed owner'}</p>
-                <p>{row.shareholderType || 'Individual'}</p>
-                <p>{row.ownershipPercentage || 0}% ownership</p>
-                {isUbo ? <p className="mt-1 rounded-full bg-brand-100 px-2 py-0.5 font-semibold text-brand-700">UBO</p> : null}
-                {row.linkedClientName ? <p className="mt-1 text-[10px] font-semibold text-brand-700">Linked: {row.linkedClientName}</p> : null}
-              </div>
-              {hasChildren && depth < 8 ? renderChildren(row.id, depth + 1) : null}
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
+    if (!children.length) return leafIndex++;
+    const childXs = children.map((row) => {
+      const childX = walk(row.id, depth + 1);
+      diagramNodes.push({ ...(row as Row), id: String(row.id), parentId, depth, x: childX } as DiagramNode);
+      maxDepth = Math.max(maxDepth, depth);
+      return childX;
+    });
+    return childXs.reduce((sum, value) => sum + value, 0) / childXs.length;
+  };
+  const rootX = walk('ROOT', 1);
+  const leafCount = Math.max(1, leafIndex);
+  diagramNodes.forEach((node) => {
+    node.x = ((node.id === 'ROOT' ? rootX : node.x) + 0.5) / leafCount;
+  });
+  const layerColors = ['bg-slate-950 text-white', 'bg-blue-50 text-slate-950 border-blue-300', 'bg-green-50 text-slate-950 border-green-300', 'bg-amber-50 text-slate-950 border-amber-300', 'bg-purple-50 text-slate-950 border-purple-300', 'bg-red-50 text-slate-950 border-red-300', 'bg-cyan-50 text-slate-950 border-cyan-300'];
+  const layerCount = Math.max(1, maxDepth + 1);
+  const diagramWidth = Math.max(920, leafCount * 250 + 170);
+  const rowHeight = 112;
+  const nodeWidth = 220;
+  const nodeHeight = 74;
+  const diagramHeight = 84 + layerCount * rowHeight;
+  const leftRail = 122;
+  const topOffset = 62;
+  const usableWidth = diagramWidth - leftRail - 55;
+  const nodeCenterX = (node: DiagramNode) => leftRail + 30 + node.x * usableWidth;
+  const nodeTop = (node: DiagramNode) => topOffset + node.depth * rowHeight;
+  const nodeDetail = (node: DiagramNode) => {
+    if (node.id === 'ROOT') return 'Layer 0';
+    if (Array.isArray(node.nationality)) return node.nationality.join(', ');
+    return node.nationality || node.residenceAddress || '';
+  };
 
   return (
     <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -1337,12 +1409,58 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
       {!hasRows ? (
         <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No ownership structure generated.</p>
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-md border border-slate-200 bg-white p-4">
-          <div className="mx-auto min-w-[260px] text-center">
-            <div className="mx-auto inline-block rounded-md border border-brand-300 bg-brand-600 px-4 py-3 text-sm font-semibold text-white shadow-sm">
-              {rootName || 'Client company'}
-            </div>
-            {renderChildren('ROOT')}
+        <div className="mt-4 overflow-x-auto rounded-md border-2 border-slate-800 bg-white p-3">
+          <div className="relative mx-auto" style={{ width: diagramWidth, height: diagramHeight }}>
+            <h4 className="absolute left-0 right-0 top-3 text-center text-lg font-bold uppercase tracking-wide text-slate-950">
+              {rootName || 'Client company'} - Ownership Structure
+            </h4>
+            {Array.from({ length: layerCount }).map((_, depth) => (
+              <div
+                key={depth}
+                className={`absolute left-3 flex h-12 w-24 items-center justify-center rounded-md border text-sm font-bold shadow-sm ${layerColors[depth] || 'border-slate-300 bg-slate-50 text-slate-950'}`}
+                style={{ top: topOffset + depth * rowHeight + 12 }}
+              >
+                Layer {depth}
+              </div>
+            ))}
+            <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${diagramWidth} ${diagramHeight}`} preserveAspectRatio="none">
+              {diagramNodes.filter((node) => node.parentId).map((node) => {
+                const parent = diagramNodes.find((candidate) => candidate.id === node.parentId);
+                if (!parent) return null;
+                const x1 = nodeCenterX(parent);
+                const y1 = nodeTop(parent) + nodeHeight;
+                const x2 = nodeCenterX(node);
+                const y2 = nodeTop(node);
+                const elbowY = (y1 + y2) / 2;
+                return (
+                  <g key={`${node.parentId}-${node.id}`}>
+                    <path d={`M ${x1} ${y1} V ${elbowY} H ${x2} V ${y2}`} fill="none" stroke="#111827" strokeWidth="2" />
+                    <path d={`M ${x2 - 5} ${y2 - 8} L ${x2} ${y2} L ${x2 + 5} ${y2 - 8}`} fill="none" stroke="#111827" strokeWidth="2" />
+                    <text x={x2 + 8} y={Math.max(y2 - 12, elbowY - 4)} className="fill-slate-950 text-[13px] font-bold">
+                      {node.ownershipPercentage ? `${node.ownershipPercentage}%` : ''}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+            {diagramNodes.map((node) => {
+              const isRoot = node.id === 'ROOT';
+              const isUbo = Boolean(node.isUbo) || uboIds.has(String(node.identityNumber || node.fullName || ''));
+              const top = nodeTop(node);
+              const left = nodeCenterX(node) - nodeWidth / 2;
+              return (
+                <div
+                  key={node.id}
+                  className={`absolute flex flex-col items-center justify-center rounded-md border px-3 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
+                  style={{ width: nodeWidth, height: nodeHeight, left, top }}
+                >
+                  <p className="line-clamp-2 font-bold uppercase leading-tight">{node.fullName || 'Unnamed owner'}</p>
+                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{node.shareholderType || 'Individual'}</p>
+                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{nodeDetail(node)}</p>
+                  {isUbo ? <span className="mt-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold text-cyan-800">UBO</span> : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
