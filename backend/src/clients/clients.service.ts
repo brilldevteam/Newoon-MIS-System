@@ -72,6 +72,48 @@ export class ClientsService {
     return client;
   }
 
+  async matchByIdentifier(user: RequestUser, type: string, identifier: string) {
+    const normalizedType = String(type || '').toLowerCase();
+    const value = String(identifier || '').trim();
+
+    if (!value) {
+      return { match: null };
+    }
+
+    if (normalizedType === 'corporate') {
+      const client = await this.prisma.client.findFirst({
+        where: {
+          ...this.tenantWhere(user),
+          registrationNumber: { equals: value, mode: 'insensitive' }
+        }
+      });
+
+      return { match: client ? this.clientMatch(client, 'client-registration') : null };
+    }
+
+    const shareholder = await this.prisma.kycShareholder.findFirst({
+      where: {
+        ...this.tenantWhere(user),
+        identityNumber: { equals: value, mode: 'insensitive' }
+      },
+      include: { kycCase: { include: { client: true } } }
+    });
+
+    if (shareholder?.kycCase.client) {
+      return { match: this.clientMatch(shareholder.kycCase.client, 'kyc-shareholder') };
+    }
+
+    const ubo = await this.prisma.kycUbo.findFirst({
+      where: {
+        ...this.tenantWhere(user),
+        identityNumber: { equals: value, mode: 'insensitive' }
+      },
+      include: { kycCase: { include: { client: true } } }
+    });
+
+    return { match: ubo?.kycCase.client ? this.clientMatch(ubo.kycCase.client, 'kyc-ubo') : null };
+  }
+
   async update(user: RequestUser, id: string, dto: UpdateClientDto) {
     const existing = await this.findOne(user, id);
     const tenantId = existing.tenantId;
@@ -140,5 +182,17 @@ export class ClientsService {
     }
 
     return user.tenantId;
+  }
+
+  private clientMatch(client: { id: string; name: string; registrationNumber?: string | null; industry?: string | null; country?: string | null; status: string }, source: string) {
+    return {
+      id: client.id,
+      name: client.name,
+      registrationNumber: client.registrationNumber,
+      industry: client.industry,
+      country: client.country,
+      status: client.status,
+      source
+    };
   }
 }

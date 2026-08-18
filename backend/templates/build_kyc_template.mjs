@@ -147,6 +147,7 @@ function buildTemplate() {
 
   xml = replaceParagraphContaining(xml, 'Yes ☐No ☐', 'Yes {uboDifferentYes}    No {uboDifferentNo}');
   xml = replaceParagraphContaining(xml, 'If yes, please provide UBOs/Group structure and details. UBOs/ Group structure:', 'If yes, please provide UBOs/Group structure and details. UBOs/ Group structure: {uboGroupStructureNotes}');
+  xml = insertParagraphAfterContaining(xml, 'If yes, please provide UBOs/Group structure and details. UBOs/ Group structure: {uboGroupStructureNotes}', 'Auto-generated ownership structure:\n{ownershipStructureText}');
 
   xml = updateTable(xml, 2, (table) => {
     let next = removeTableRows(table, [7, 6, 5, 4, 3, 2]);

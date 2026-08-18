@@ -28,6 +28,10 @@ Supported placeholders:
 {relatedIndustry}
 {prospectiveService}
 {shareholdersText}
+{ownershipStructureText}
+{shareholderType}
+{shareholderLinkedClient}
+{shareholderIsUbo}
 {totalOwnershipPercentage}
 {uboDifferentFromShareholders}
 {uboGroupStructureNotes}

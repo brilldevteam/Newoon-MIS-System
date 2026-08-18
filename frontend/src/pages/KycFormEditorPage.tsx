@@ -15,6 +15,7 @@ import {
   getKycForm,
   KycCase,
   KycFormData,
+  matchClientByIdentifier,
   saveKycFormSection,
   submitDmlroReview,
   uploadLegalDocumentFiles
@@ -654,7 +655,7 @@ export function KycFormEditorPage() {
   }, [id]);
 
   const totalOwnership = useMemo(
-    () => (form.sectionB.shareholders || []).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0),
+    () => directOwnershipTotal(form.sectionB.shareholders || []),
     [form.sectionB.shareholders]
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
@@ -1041,7 +1042,14 @@ export function KycFormEditorPage() {
           </div>
           <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
             {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
-            {activeSection === 'sectionB' ? <SectionBForm data={form.sectionB} total={totalOwnership} onChange={(value) => setSection('sectionB', value)} /> : null}
+            {activeSection === 'sectionB' ? (
+              <SectionBForm
+                data={form.sectionB}
+                total={totalOwnership}
+                rootName={form.sectionA.legalName || kycCase.client.name}
+                onChange={(value) => setSection('sectionB', value)}
+              />
+            ) : null}
             {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
             {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
             {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
@@ -1112,19 +1120,233 @@ function SectionAForm({ data, onChange }: FormProps) {
   );
 }
 
-function SectionBForm({ data, total, onChange }: FormProps & { total: number }) {
+function createOwnershipRow(): Row {
+  return {
+    id: crypto.randomUUID(),
+    shareholderType: 'Individual',
+    parentRowId: '',
+    isUbo: false
+  };
+}
+
+function directOwnershipTotal(rows: Row[]) {
+  return rows.filter((row) => !row.parentRowId).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0);
+}
+
+function ownershipLayerTotals(rows: Row[]) {
+  const totals = new Map<string, number>();
+  rows.forEach((row) => {
+    const parentKey = row.parentRowId || 'ROOT';
+    totals.set(parentKey, (totals.get(parentKey) || 0) + Number(row.ownershipPercentage || 0));
+  });
+  return totals;
+}
+
+function effectiveUboRows(sectionB: Record<string, any>) {
+  const manualRows = sectionB.ubos || [];
+  if (manualRows.length) return manualRows;
+  return (sectionB.shareholders || []).filter((row: Row) => row.isUbo);
+}
+
+function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: number; rootName: string }) {
+  const shareholders = data.shareholders || [];
+  const totals = ownershipLayerTotals(shareholders);
+  const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
+  const hasUbo = shareholders.some((row: Row) => row.isUbo) || Boolean(data.ubos?.length);
+
   return (
     <div className="space-y-5">
-      <DynamicRows title="Shareholders" rows={data.shareholders || []} onChange={(rows) => onChange({ ...data, shareholders: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
-      ]} />
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">Total ownership percentage: {total.toFixed(2)}%</div>
+      <OwnershipRows rootName={rootName} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
+      <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+        Direct ownership percentage: {total.toFixed(2)}%
+        {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more ownership layers exceed 100%.</span> : null}
+      </div>
+      {!hasUbo ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+          No UBO is marked yet. You can save the draft, but mark the UBO before finalizing the KYC file.
+        </div>
+      ) : null}
+      <OwnershipStructureDiagram rootName={rootName} rows={shareholders} ubos={data.ubos || []} />
       <Choice label="UBO different from shareholders" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="UBO group structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="UBO rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
         ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
+  );
+}
+
+function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
+  const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
+  const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
+  const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate shareholder ${index + 1}`]));
+
+  function patchRow(index: number, patch: Row) {
+    onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  async function lookup(index: number) {
+    const row = rows[index];
+    const rowKey = row.id || String(index);
+    const identifier = String(row.identityNumber || '').trim();
+    if (!identifier) {
+      setLookupMessages((current) => ({ ...current, [rowKey]: 'Enter a CR, QID, or passport number first.' }));
+      return;
+    }
+
+    setLookupMessages((current) => ({ ...current, [rowKey]: 'Checking existing clients...' }));
+    try {
+      const response = await matchClientByIdentifier((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'corporate' : 'individual', identifier);
+      if (response.match) {
+        patchRow(index, { linkedClientId: response.match.id, linkedClientName: response.match.name });
+        setLookupMessages((current) => ({ ...current, [rowKey]: 'Linked to existing client.' }));
+      } else {
+        patchRow(index, { linkedClientId: '', linkedClientName: '' });
+        setLookupMessages((current) => ({ ...current, [rowKey]: 'No existing client match found.' }));
+      }
+    } catch {
+      setLookupMessages((current) => ({ ...current, [rowKey]: 'Unable to check existing clients right now.' }));
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">Ownership rows</p>
+          <p className="text-xs text-slate-500">Add each direct or layered owner. Corporate rows can be selected as a parent for the next layer.</p>
+        </div>
+        <button type="button" onClick={() => onChange([...rows, createOwnershipRow()])} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          <Plus className="h-4 w-4" />
+          Add owner
+        </button>
+      </div>
+      {rows.map((row, index) => {
+        const rowKey = row.id || String(index);
+        return (
+          <div key={rowKey} className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Select label="Shareholder type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
+              <label className="text-sm font-medium text-slate-700">
+                Parent owner / owned entity
+                <select
+                  value={row.parentRowId || ''}
+                  onChange={(event) => patchRow(index, { parentRowId: event.target.value })}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                >
+                  <option value="">Direct shareholder of {rootName || 'client company'}</option>
+                  {corporateParents
+                    .filter((parent, parentIndex) => (parent.id || String(parentIndex)) !== rowKey)
+                    .map((parent, parentIndex) => {
+                      const parentId = parent.id || String(parentIndex);
+                      return (
+                        <option key={parentId} value={parentId}>
+                          {parent.fullName || `Corporate shareholder ${parentIndex + 1}`}
+                        </option>
+                      );
+                    })}
+                </select>
+              </label>
+              <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+              <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+              <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
+              <div className="text-sm font-medium text-slate-700">
+                <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
+                <div className="mt-1 flex gap-2">
+                  <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Lookup
+                  </button>
+                </div>
+                {row.linkedClientId ? (
+                  <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
+                    Linked to existing client: {row.linkedClientName}
+                    <button type="button" onClick={() => patchRow(index, { linkedClientId: '', linkedClientName: '' })} className="text-brand-900">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : lookupMessages[rowKey] ? (
+                  <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
+                ) : null}
+              </div>
+              <Field label="Ownership %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
+              <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
+              <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
+                Mark as UBO
+              </label>
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
+              <span>{row.parentRowId ? `Owned by ${parentLabels.get(row.parentRowId) || 'corporate shareholder'}` : `Direct shareholder of ${rootName || 'client company'}`}</span>
+              <button type="button" onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))} className="inline-flex items-center gap-2 font-semibold text-red-600">
+                <Trash2 className="h-4 w-4" />
+                Remove
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {!rows.length ? <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">No ownership rows added yet.</div> : null}
+    </div>
+  );
+}
+
+function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string; rows: Row[]; ubos: Row[] }) {
+  const hasRows = rows.length > 0;
+  const childrenByParent = new Map<string, Row[]>();
+  rows.forEach((row, index) => {
+    const rowId = row.id || String(index);
+    const parent = row.parentRowId || 'ROOT';
+    childrenByParent.set(parent, [...(childrenByParent.get(parent) || []), { ...row, id: rowId }]);
+  });
+  const uboIds = new Set([
+    ...rows.filter((row) => row.isUbo).map((row, index) => row.id || String(index)),
+    ...ubos.map((row) => String(row.identityNumber || row.fullName || ''))
+  ]);
+
+  function renderChildren(parentId: string, depth = 0): React.ReactNode {
+    const children = childrenByParent.get(parentId) || [];
+    if (!children.length) return null;
+
+    return (
+      <div className="mt-4 flex flex-wrap justify-center gap-3">
+        {children.map((row) => {
+          const isUbo = Boolean(row.isUbo) || uboIds.has(String(row.identityNumber || row.fullName || ''));
+          const hasChildren = (childrenByParent.get(row.id) || []).length > 0;
+          return (
+            <div key={row.id} className="flex min-w-[160px] max-w-[220px] flex-col items-center">
+              <div className="h-4 w-px bg-slate-300" />
+              <div className={`w-full rounded-md border p-3 text-center text-xs shadow-sm ${isUbo ? 'border-brand-300 bg-brand-50 text-brand-900' : 'border-slate-200 bg-white text-slate-700'}`}>
+                <p className="font-semibold text-slate-950">{row.fullName || 'Unnamed owner'}</p>
+                <p>{row.shareholderType || 'Individual'}</p>
+                <p>{row.ownershipPercentage || 0}% ownership</p>
+                {isUbo ? <p className="mt-1 rounded-full bg-brand-100 px-2 py-0.5 font-semibold text-brand-700">UBO</p> : null}
+                {row.linkedClientName ? <p className="mt-1 text-[10px] font-semibold text-brand-700">Linked: {row.linkedClientName}</p> : null}
+              </div>
+              {hasChildren && depth < 8 ? renderChildren(row.id, depth + 1) : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-950">Ownership Structure</p>
+      {!hasRows ? (
+        <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No ownership structure generated.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto rounded-md border border-slate-200 bg-white p-4">
+          <div className="mx-auto min-w-[260px] text-center">
+            <div className="mx-auto inline-block rounded-md border border-brand-300 bg-brand-600 px-4 py-3 text-sm font-semibold text-white shadow-sm">
+              {rootName || 'Client company'}
+            </div>
+            {renderChildren('ROOT')}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1564,11 +1786,12 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Ownership / Shareholders">
-          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Ownership %', 'Address', 'Linked client', 'UBO']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
           <p className="mt-2 font-semibold">Total ownership percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
           <p>UBO different from shareholders: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>UBO group structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
-          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
+          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
           <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
@@ -2154,8 +2377,14 @@ function normalizeSectionBNationality(value: any) {
 }
 
 function normalizeSectionBRows(rows: Row[] | undefined) {
-  return (rows || []).map((row) => ({
+  return (rows || []).map((row, index) => ({
     ...row,
+    id: row.id || `ownership-${index + 1}`,
+    shareholderType: row.shareholderType || 'Individual',
+    parentRowId: row.parentRowId || '',
+    linkedClientId: row.linkedClientId || '',
+    linkedClientName: row.linkedClientName || '',
+    isUbo: Boolean(row.isUbo),
     nationality: normalizeSectionBNationality(row.nationality)
   }));
 }

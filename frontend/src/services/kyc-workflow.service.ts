@@ -290,6 +290,14 @@ export function getClient(id: string) {
   return api.get<Client>(`/clients/${id}`).then((response) => response.data);
 }
 
+export function matchClientByIdentifier(type: 'corporate' | 'individual', identifier: string) {
+  return api
+    .get<{ match: (Pick<Client, 'id' | 'name' | 'registrationNumber' | 'industry' | 'country' | 'status'> & { source: string }) | null }>('/clients/match', {
+      params: { type, identifier }
+    })
+    .then((response) => response.data);
+}
+
 export function updateClient(
   id: string,
   payload: {
