@@ -18,6 +18,19 @@ function createUploadRow(): UploadRow {
   };
 }
 
+function mergeSelectedFiles(existingFiles: File[], selectedFiles: File[]) {
+  const seen = new Set(existingFiles.map((file) => `${file.name}-${file.size}-${file.lastModified}`));
+  return [
+    ...existingFiles,
+    ...selectedFiles.filter((file) => {
+      const key = `${file.name}-${file.size}-${file.lastModified}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+  ];
+}
+
 export function UploadLegalDocumentsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -98,7 +111,7 @@ export function UploadLegalDocumentsPage() {
                 <span className="mb-1 block">Upload documents</span>
                 <MultiFileUploadControl
                   names={document.files.map((file) => file.name)}
-                  onSelect={(files) => updateDocument(document.id, { files })}
+                  onSelect={(files) => updateDocument(document.id, { files: mergeSelectedFiles(document.files, files) })}
                   onRemoveName={(fileIndex) => updateDocument(document.id, { files: document.files.filter((_, index) => index !== fileIndex) })}
                 />
               </div>
