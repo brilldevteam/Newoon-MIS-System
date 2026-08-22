@@ -88,19 +88,28 @@ export class ClientsService {
         }
       });
 
-      return { match: client ? this.clientMatch(client, 'client-registration') : null };
+      if (client) {
+        return { match: this.clientMatch(client, 'client-registration') };
+      }
+
+      return { match: await this.matchKycOwnerByIdentifier(user, value) };
     }
 
+    return { match: await this.matchKycOwnerByIdentifier(user, value) };
+  }
+
+  private async matchKycOwnerByIdentifier(user: RequestUser, value: string) {
     const shareholder = await this.prisma.kycShareholder.findFirst({
       where: {
         ...this.tenantWhere(user),
         identityNumber: { equals: value, mode: 'insensitive' }
       },
-      include: { kycCase: { include: { client: true } } }
+      include: { kycCase: { include: { client: true } } },
+      orderBy: { createdAt: 'desc' }
     });
 
     if (shareholder?.kycCase.client) {
-      return { match: this.clientMatch(shareholder.kycCase.client, 'kyc-shareholder') };
+      return this.clientMatch(shareholder.kycCase.client, 'kyc-shareholder');
     }
 
     const ubo = await this.prisma.kycUbo.findFirst({
@@ -108,10 +117,11 @@ export class ClientsService {
         ...this.tenantWhere(user),
         identityNumber: { equals: value, mode: 'insensitive' }
       },
-      include: { kycCase: { include: { client: true } } }
+      include: { kycCase: { include: { client: true } } },
+      orderBy: { createdAt: 'desc' }
     });
 
-    return { match: ubo?.kycCase.client ? this.clientMatch(ubo.kycCase.client, 'kyc-ubo') : null };
+    return ubo?.kycCase.client ? this.clientMatch(ubo.kycCase.client, 'kyc-ubo') : null;
   }
 
   async update(user: RequestUser, id: string, dto: UpdateClientDto) {
