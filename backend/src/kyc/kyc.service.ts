@@ -24,6 +24,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, w
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { promisify } from 'util';
+import { deflateSync } from 'zlib';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -34,6 +35,58 @@ import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
 
 const execFileAsync = promisify(execFile);
+
+const TINY_FONT: Record<string, string[]> = {
+  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
+  '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
+  '.': ['00000', '00000', '00000', '00000', '00000', '01100', '01100'],
+  ',': ['00000', '00000', '00000', '00000', '00000', '01100', '01000'],
+  ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
+  "'": ['00100', '00100', '00000', '00000', '00000', '00000', '00000'],
+  '(': ['00010', '00100', '01000', '01000', '01000', '00100', '00010'],
+  ')': ['01000', '00100', '00010', '00010', '00010', '00100', '01000'],
+  '&': ['01100', '10010', '10100', '01000', '10101', '10010', '01101'],
+  '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
+  '%': ['11001', '11010', '00100', '01000', '10110', '00110', '00000'],
+  '|': ['00100', '00100', '00100', '00100', '00100', '00100', '00100'],
+  '?': ['11110', '00001', '00010', '00100', '00100', '00000', '00100'],
+  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
+  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
+  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
+  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
+  '5': ['11111', '10000', '10000', '11110', '00001', '00001', '11110'],
+  '6': ['01110', '10000', '10000', '11110', '10001', '10001', '01110'],
+  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
+  '9': ['01110', '10001', '10001', '01111', '00001', '00001', '01110'],
+  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
+  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
+  C: ['01111', '10000', '10000', '10000', '10000', '10000', '01111'],
+  D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
+  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
+  F: ['11111', '10000', '10000', '11110', '10000', '10000', '10000'],
+  G: ['01111', '10000', '10000', '10011', '10001', '10001', '01111'],
+  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
+  I: ['01110', '00100', '00100', '00100', '00100', '00100', '01110'],
+  J: ['00111', '00010', '00010', '00010', '00010', '10010', '01100'],
+  K: ['10001', '10010', '10100', '11000', '10100', '10010', '10001'],
+  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
+  M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
+  N: ['10001', '11001', '10101', '10011', '10001', '10001', '10001'],
+  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
+  P: ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
+  Q: ['01110', '10001', '10001', '10001', '10101', '10010', '01101'],
+  R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
+  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
+  T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
+  U: ['10001', '10001', '10001', '10001', '10001', '10001', '01110'],
+  V: ['10001', '10001', '10001', '10001', '10001', '01010', '00100'],
+  W: ['10001', '10001', '10001', '10101', '10101', '10101', '01010'],
+  X: ['10001', '10001', '01010', '00100', '01010', '10001', '10001'],
+  Y: ['10001', '10001', '01010', '00100', '00100', '00100', '00100'],
+  Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111']
+};
 
 const REQUIRED_DOCUMENT_TYPES = [
   'Commercial Registration / CR Extract',
@@ -908,11 +961,23 @@ export class KycService {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
     const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row));
     const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row));
-    const total = rows.reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+    const total = rows.filter((row) => !this.text(row.parentRowId)).reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+    const layerTotals = rows.reduce<Record<string, number>>((totals, row) => {
+      const parentKey = this.text(row.parentRowId) || 'ROOT';
+      totals[parentKey] = (totals[parentKey] || 0) + this.numberValue(row.ownershipPercentage);
+      return totals;
+    }, {});
 
-    if (total > 100) {
-      throw new BadRequestException('Total ownership percentage cannot exceed 100');
+    if (Object.values(layerTotals).some((layerTotal) => layerTotal > 100)) {
+      throw new BadRequestException('Ownership percentage cannot exceed 100% within the same ownership layer');
     }
+    const sectionData = {
+      totalOwnershipPercentage: total,
+      uboDifferentFromShareholders: dto.uboDifferentFromShareholders || 'No',
+      uboGroupStructureNotes: dto.uboGroupStructureNotes || '',
+      shareholders: rows,
+      ubos
+    };
 
     await this.prisma.$transaction(async (tx) => {
       await tx.kycShareholder.deleteMany({ where: { kycFormId: form.id } });
@@ -920,11 +985,7 @@ export class KycService {
       await tx.kycSectionData.upsert({
         where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey: KycFormSectionKey.OWNERSHIP } },
         update: {
-          data: this.jsonValue({
-            totalOwnershipPercentage: total,
-            uboDifferentFromShareholders: dto.uboDifferentFromShareholders || 'No',
-            uboGroupStructureNotes: dto.uboGroupStructureNotes || ''
-          }),
+          data: this.jsonValue(sectionData),
           updatedBy: user.id
         },
         create: {
@@ -932,11 +993,7 @@ export class KycService {
           kycCaseId: id,
           kycFormId: form.id,
           sectionKey: KycFormSectionKey.OWNERSHIP,
-          data: this.jsonValue({
-            totalOwnershipPercentage: total,
-            uboDifferentFromShareholders: dto.uboDifferentFromShareholders || 'No',
-            uboGroupStructureNotes: dto.uboGroupStructureNotes || ''
-          }),
+          data: this.jsonValue(sectionData),
           createdBy: user.id,
           updatedBy: user.id
         }
@@ -1037,8 +1094,8 @@ export class KycService {
 
   async saveRequiredDocuments(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
-    const rows = this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row));
-    const additionalRows = this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row));
+    const rows = this.dedupeRequiredDocumentRows(this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row)));
+    const additionalRows = this.dedupeAdditionalDocumentRows(this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row)));
     const sectionData = {
       uploadedFilesNote: dto.uploadedFilesNote || '',
       additionalDocuments: additionalRows.map((row, index) => ({
@@ -1105,22 +1162,26 @@ export class KycService {
     const syncRows = [
       ...rows
         .filter((row) => Boolean(row.isProvided) && Boolean(this.optionalText(row.fileName)))
-        .map((row) => ({
-          documentType: this.requiredText(row.documentType, 'Document type'),
-          fileName: this.requiredText(row.fileName, 'File name'),
-          storagePath: this.optionalText(row.storagePath),
-          mimeType: this.optionalText(row.mimeType),
-          size: row.size === undefined || row.size === '' ? null : Number(row.size)
-        })),
+        .flatMap((row) =>
+          this.documentFileNames(row.fileName).map((fileName) => ({
+            documentType: this.requiredText(row.documentType, 'Document type'),
+            fileName,
+            storagePath: this.optionalText(row.storagePath),
+            mimeType: this.optionalText(row.mimeType),
+            size: row.size === undefined || row.size === '' ? null : Number(row.size)
+          }))
+        ),
       ...additionalRows
         .filter((row) => Boolean(this.optionalText(row.fileName)))
-        .map((row, index) => ({
-          documentType: this.optionalText(row.documentType) || `Additional document ${index + 1}`,
-          fileName: this.requiredText(row.fileName, 'File name'),
-          storagePath: this.optionalText(row.storagePath),
-          mimeType: this.optionalText(row.mimeType),
-          size: row.size === undefined || row.size === '' ? null : Number(row.size)
-        }))
+        .flatMap((row, index) =>
+          this.documentFileNames(row.fileName).map((fileName) => ({
+            documentType: this.optionalText(row.documentType) || `Additional document ${index + 1}`,
+            fileName,
+            storagePath: this.optionalText(row.storagePath),
+            mimeType: this.optionalText(row.mimeType),
+            size: row.size === undefined || row.size === '' ? null : Number(row.size)
+          }))
+        )
     ];
 
     if (!syncRows.length) return;
@@ -1409,6 +1470,7 @@ export class KycService {
   private serializeForm(form: Prisma.KycFormGetPayload<{ include: ReturnType<KycService['formInclude']> }>) {
     const section = (key: KycFormSectionKey) =>
       (form.sections.find((item) => item.sectionKey === key)?.data || {}) as Record<string, unknown>;
+    const ownershipSection = section(KycFormSectionKey.OWNERSHIP);
 
     return {
       id: form.id,
@@ -1419,9 +1481,9 @@ export class KycService {
       version: form.version,
       sectionA: section(KycFormSectionKey.GENERAL_COMPANY),
       sectionB: {
-        ...section(KycFormSectionKey.OWNERSHIP),
-        shareholders: form.shareholders,
-        ubos: form.ubos
+        ...ownershipSection,
+        shareholders: this.sectionRows(ownershipSection.shareholders, form.shareholders),
+        ubos: this.sectionRows(ownershipSection.ubos, form.ubos)
       },
       sectionC: {
         ...section(KycFormSectionKey.MANAGEMENT),
@@ -1471,6 +1533,11 @@ export class KycService {
     };
   }
 
+  private sectionRows(jsonRows: unknown, modelRows: unknown[]) {
+    const rows = this.asArray<RowPayload>(jsonRows);
+    return rows.length ? rows : modelRows;
+  }
+
   private sectionFWithCaseDocuments(
     sectionData: Record<string, unknown>,
     savedRequiredDocuments: Array<{
@@ -1495,7 +1562,7 @@ export class KycService {
   ) {
     const matchedLegalDocumentIds = new Set<string>();
     const baseRequiredDocuments = savedRequiredDocuments.length
-      ? savedRequiredDocuments
+      ? this.dedupeRequiredDocumentRows(savedRequiredDocuments)
       : REQUIRED_DOCUMENT_TYPES.map((documentType, index) => ({
           documentType,
           isRequired: true,
@@ -1522,20 +1589,18 @@ export class KycService {
       };
     });
 
-    const savedAdditionalDocuments = this.asArray<RowPayload>(sectionData.additionalDocuments);
-    const additionalKeys = new Set(
-      savedAdditionalDocuments
-        .filter((row) => Boolean(this.optionalText(row.fileName)))
-        .map((row) => this.legalDocumentSyncKey(this.optionalText(row.documentType) || 'Additional document', this.requiredText(row.fileName, 'File name')))
+    const savedAdditionalDocuments = this.dedupeAdditionalDocumentRows(this.asArray<RowPayload>(sectionData.additionalDocuments));
+    const additionalFileKeys = new Set(
+      savedAdditionalDocuments.flatMap((row) => this.documentFileNames(row.fileName).map((fileName) => fileName.toLowerCase()))
     );
     const additionalDocuments = [
       ...savedAdditionalDocuments,
       ...legalDocuments
         .filter((document) => !matchedLegalDocumentIds.has(document.id))
         .filter((document) => {
-          const key = this.legalDocumentSyncKey(document.documentType || 'Additional document', document.fileName);
-          if (additionalKeys.has(key)) return false;
-          additionalKeys.add(key);
+          const key = document.fileName.trim().toLowerCase();
+          if (additionalFileKeys.has(key)) return false;
+          additionalFileKeys.add(key);
           return true;
         })
         .map((document, index) => ({
@@ -1553,6 +1618,82 @@ export class KycService {
       documents,
       additionalDocuments
     };
+  }
+
+  private dedupeRequiredDocumentRows<T extends RowPayload>(rows: T[]) {
+    const merged = new Map<string, T>();
+
+    rows.forEach((row) => {
+      const documentType = this.optionalText(row.documentType);
+      const key = this.documentMatchText(documentType || '');
+      if (!key) return;
+
+      const existing = merged.get(key);
+      const fileName = this.documentFileNames([existing?.fileName, row.fileName].filter(Boolean).join(', ')).join(', ');
+
+      merged.set(key, {
+        ...(existing || ({} as T)),
+        ...row,
+        documentType: existing?.documentType || documentType,
+        isRequired: row.isRequired === undefined ? existing?.isRequired ?? true : row.isRequired,
+        isProvided: Boolean(existing?.isProvided) || Boolean(row.isProvided) || Boolean(fileName),
+        fileName,
+        storagePath: existing?.storagePath || row.storagePath,
+        mimeType: existing?.mimeType || row.mimeType,
+        size: existing?.size || row.size
+      } as T);
+    });
+
+    return REQUIRED_DOCUMENT_TYPES.map((documentType, index) => {
+      const row = merged.get(this.documentMatchText(documentType));
+      return (
+        row ||
+        ({
+          documentType,
+          isRequired: true,
+          isProvided: false,
+          fileName: null,
+          storagePath: null,
+          mimeType: null,
+          size: null,
+          sortOrder: index
+        } as unknown as T)
+      );
+    });
+  }
+
+  private dedupeAdditionalDocumentRows<T extends RowPayload>(rows: T[]) {
+    const seen = new Set<string>();
+
+    return rows
+      .map((row, index) => ({
+        ...row,
+        id: this.optionalText(row.id) || `${index + 1}`,
+        fileName: this.documentFileNames(row.fileName).join(', ')
+      }))
+      .filter((row) => {
+        const fileName = this.optionalText(row.fileName);
+        if (!fileName) return false;
+        const key = fileName.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }) as T[];
+  }
+
+  private documentFileNames(value: unknown) {
+    const seen = new Set<string>();
+
+    return this.text(value)
+      .split(',')
+      .map((fileName) => fileName.trim())
+      .filter((fileName) => {
+        if (!fileName) return false;
+        const key = fileName.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   }
 
   private isRequiredDocumentMatch(documentType: string, requiredDocumentType: string) {
@@ -2360,6 +2501,11 @@ export class KycService {
   }
 
   private optionalText(value: unknown) {
+    if (Array.isArray(value)) {
+      const text = value.map((item) => this.text(item).trim()).filter(Boolean).join(', ');
+      return text || null;
+    }
+
     return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
@@ -2490,16 +2636,21 @@ export class KycService {
     const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
     const sectionG = payload.sectionG as Record<string, unknown>;
     const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
-    const shareholders = this.templateRows(sectionB.shareholders, (row, index) => ({
+    const ownershipRows = this.asArray<RowPayload>(sectionB.shareholders);
+    const effectiveUbos = sectionB.ubos?.length ? sectionB.ubos : ownershipRows.filter((row) => Boolean(row.isUbo));
+    const shareholders = this.templateRows(ownershipRows, (row, index) => ({
       shareholderNo: String(index + 1),
+      shareholderType: this.text(row.shareholderType || 'Individual'),
       shareholderFullName: this.text(row.fullName),
       shareholderNationality: this.optionText(row.nationality, row.nationalityOther),
       shareholderDateOfBirth: this.text(row.dateOfBirth),
       shareholderIdentityNumber: this.text(row.identityNumber),
       shareholderOwnershipPercentage: this.text(row.ownershipPercentage),
-      shareholderResidenceAddress: this.text(row.residenceAddress)
+      shareholderResidenceAddress: this.text(row.residenceAddress),
+      shareholderLinkedClient: this.text(row.linkedClientName),
+      shareholderIsUbo: row.isUbo ? 'Yes' : 'No'
     }));
-    const ubos = this.templateRows(sectionB.ubos, (row, index) => ({
+    const ubos = this.templateRows(effectiveUbos, (row, index) => ({
       uboNo: String(index + 1),
       uboFullName: this.text(row.fullName),
       uboNationality: this.optionText(row.nationality, row.nationalityOther),
@@ -2520,7 +2671,10 @@ export class KycService {
       managerPosition: this.optionText(row.position, row.positionOther),
       managerAuthorizedSignatory: row.isAuthorizedSignatory ? 'Yes' : 'No'
     }));
-    const totalUboPercentage = (sectionB.ubos || []).reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+    const totalUboPercentage = effectiveUbos.reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+
+    const ownershipRootName = this.text(sectionA.legalName) || 'Client company';
+    const ownershipStructureText = this.ownershipStructureText(ownershipRootName, ownershipRows);
 
     return {
       date: this.text(sectionA.date),
@@ -2548,19 +2702,25 @@ export class KycService {
       ubos,
       managers,
       totalUboPercentage: this.text(totalUboPercentage),
-      shareholdersText: this.rowsText(sectionB.shareholders, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
-      ubosText: this.rowsText(sectionB.ubos, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
+      ownershipStructureText: this.imageToken('ownershipStructure'),
+      shareholdersText: this.rowsText(ownershipRows, ['shareholderType', 'fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
+      ubosText: this.rowsText(effectiveUbos, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
       managersText: this.rowsText(sectionC.managers, ['fullName', 'entityName', 'position', 'isAuthorizedSignatory']),
       pepQuestion: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'Yes'),
       pepNo: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'No'),
       pepDetails: this.text(sectionD.pepDetails),
+      pepDocumentFileNames: this.listText(sectionD.pepDocumentFileNames),
+      pepSupportingDocuments: this.listText(sectionD.pepDocumentFileNames),
       sanctionQuestion: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'Yes'),
       sanctionNo: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'No'),
       sanctionDetails: this.text(sectionD.sanctionDetails),
+      sanctionDocumentFileNames: this.listText(sectionD.sanctionDocumentFileNames),
+      sanctionSupportingDocuments: this.listText(sectionD.sanctionDocumentFileNames),
       dualCitizenshipQuestion: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'Yes'),
       dualCitizenshipNo: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'No'),
       dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
-      dualCitizenshipPassportFileName: this.text(sectionD.dualCitizenshipPassportFileName),
+      dualCitizenshipPassportFileName: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
+      dualCitizenshipPassportFileNames: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
       communicationFullName: this.text(sectionE.fullName),
       communicationPosition: this.optionText(sectionE.position, sectionE.positionOther),
       communicationNationality: this.optionText(sectionE.nationality, sectionE.nationalityOther),
@@ -2644,6 +2804,7 @@ export class KycService {
         ['Comments', this.text(sectionH.sefComments)]
       ]),
       _docxImages: {
+        ownershipStructure: this.ownershipStructureImageDataUrl(ownershipRootName, ownershipRows),
         declarationSignature: this.text(sectionG.signatureDataUrl),
         companyStamp: this.text(sectionG.stampDataUrl),
         amlSignature: this.text(sectionH.amlSignatureDataUrl),
@@ -2668,12 +2829,12 @@ export class KycService {
 
   private docxImageReplacements(templateData: Record<string, unknown>) {
     const images = (templateData._docxImages || {}) as Record<string, unknown>;
-    const replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer } }> = [];
+    const replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer }; size?: { cx: number; cy: number } }> = [];
 
     for (const [key, value] of Object.entries(images)) {
       const image = this.parseImageDataUrl(this.text(value));
       if (image) {
-        replacements.push({ key, token: this.imageToken(key), image });
+        replacements.push({ key, token: this.imageToken(key), image, size: this.docxImageSize(key) });
       }
     }
 
@@ -2682,7 +2843,7 @@ export class KycService {
 
   private applyDocxImages(
     zip: PizZip,
-    replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer } }>
+    replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer }; size?: { cx: number; cy: number } }>
   ) {
     if (!replacements.length) return;
 
@@ -2708,7 +2869,7 @@ export class KycService {
       contentTypesXml = this.ensureContentType(contentTypesXml, replacement.image.extension, replacement.image.mimeType);
       documentXml = documentXml.replace(
         new RegExp(`<w:t[^>]*>${this.escapeRegExp(replacement.token)}</w:t>`, 'g'),
-        this.docxImageDrawing(relId)
+        this.docxImageDrawing(relId, replacement.size)
       );
     });
 
@@ -2718,10 +2879,10 @@ export class KycService {
   }
 
   private parseImageDataUrl(value: string) {
-    const match = /^data:(image\/(?:png|jpeg|jpg|gif));base64,(.+)$/i.exec(value);
+    const match = /^data:(image\/(?:png|jpeg|jpg|gif|svg\+xml));base64,(.+)$/i.exec(value);
     if (!match) return null;
     const mimeType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
-    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.split('/')[1];
+    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/svg+xml' ? 'svg' : mimeType.split('/')[1];
     return {
       mimeType,
       extension,
@@ -2734,9 +2895,14 @@ export class KycService {
     return contentTypesXml.replace('</Types>', `<Default Extension="${extension}" ContentType="${mimeType}"/></Types>`);
   }
 
-  private docxImageDrawing(relId: string) {
-    const cx = 1900000;
-    const cy = 650000;
+  private docxImageSize(key: string) {
+    if (key === 'ownershipStructure') return { cx: 6500000, cy: 3800000 };
+    return { cx: 1900000, cy: 650000 };
+  }
+
+  private docxImageDrawing(relId: string, size?: { cx: number; cy: number }) {
+    const cx = size?.cx || 1900000;
+    const cy = size?.cy || 650000;
     return `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="Signature"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="Signature"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
   }
 
@@ -2769,6 +2935,305 @@ export class KycService {
       .join('\n');
   }
 
+  private ownershipStructureText(rootName: string, rows: RowPayload[]) {
+    if (!rows.length) return 'No ownership structure generated';
+
+    const childrenByParent = rows.reduce<Record<string, RowPayload[]>>((groups, row, index) => {
+      const rowId = this.text(row.id) || `ownership-${index + 1}`;
+      const parentKey = this.text(row.parentRowId) || 'ROOT';
+      groups[parentKey] = [...(groups[parentKey] || []), { ...row, id: rowId }];
+      return groups;
+    }, {});
+
+    const lines = [rootName || 'Client company'];
+    const render = (parentId: string, depth: number) => {
+      for (const row of childrenByParent[parentId] || []) {
+        const marker = row.isUbo ? ' [UBO]' : '';
+        const linked = this.text(row.linkedClientName) ? ` | Linked client: ${this.text(row.linkedClientName)}` : '';
+        lines.push(
+          `${'  '.repeat(depth)}- ${this.text(row.fullName) || 'Unnamed owner'} (${this.text(row.shareholderType || 'Individual')}, ${this.text(row.ownershipPercentage) || '0'}%)${marker}${linked}`
+        );
+        render(this.text(row.id), depth + 1);
+      }
+    };
+
+    render('ROOT', 1);
+    return lines.join('\n');
+  }
+
+  private ownershipStructureImageDataUrl(rootName: string, rows: RowPayload[]) {
+    const nodes = this.ownershipDiagramNodes(rootName || 'Client company', rows);
+    const palette = ['#dbeafe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
+    const labelPalette = ['#0f172a', '#bfdbfe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
+    const framePadding = 18;
+    const labelWidth = 110;
+    const diagramLeft = framePadding + labelWidth + 50;
+    const diagramRight = 38;
+    const paddingTop = 74;
+    const paddingBottom = 36;
+    const levelGap = 116;
+    const nodeWidth = 220;
+    const nodeHeight = 64;
+    const width = Math.max(1120, diagramLeft + diagramRight + nodes.leafCount * 245);
+    const height = Math.max(360, paddingTop + paddingBottom + (nodes.maxDepth + 1) * levelGap + nodeHeight);
+    const contentWidth = width - diagramLeft - diagramRight;
+    const centerY = (depth: number) => paddingTop + depth * levelGap;
+    const centerX = (x: number) => diagramLeft + x * contentWidth;
+
+    const image = this.createPngCanvas(width, height, '#ffffff');
+    this.drawRect(image, 8, 8, width - 16, height - 16, '#ffffff', '#111827');
+    this.drawRect(image, 14, 14, width - 28, 1, '#111827', '#111827');
+    this.drawText(image, `${rootName || 'CLIENT'} - OWNERSHIP STRUCTURE`, Math.max(22, Math.round(width / 2) - 170), 32, '#0f172a', 2);
+
+    for (let depth = 0; depth <= nodes.maxDepth; depth++) {
+      const y = Math.round(centerY(depth) + 10);
+      const isRootLayer = depth === 0;
+      this.drawRect(image, framePadding + 10, y, labelWidth, 42, labelPalette[depth] || '#e2e8f0', '#64748b');
+      this.drawText(image, `LAYER ${depth}`, framePadding + 30, y + 14, isRootLayer ? '#ffffff' : '#0f172a', 1);
+    }
+
+    for (const item of nodes.items.filter((item) => item.parentId)) {
+      const parent = nodes.items.find((candidate) => candidate.id === item.parentId);
+      if (!parent) continue;
+      const x1 = Math.round(centerX(parent.x));
+      const y1 = Math.round(centerY(parent.depth) + nodeHeight);
+      const x2 = Math.round(centerX(item.x));
+      const y2 = Math.round(centerY(item.depth));
+      const elbowY = Math.round((y1 + y2) / 2);
+      this.drawLine(image, x1, y1, x1, elbowY, '#111827');
+      this.drawLine(image, x1, elbowY, x2, elbowY, '#111827');
+      this.drawLine(image, x2, elbowY, x2, y2, '#111827');
+      this.drawLine(image, x2, y2, x2 - 5, y2 - 9, '#111827');
+      this.drawLine(image, x2, y2, x2 + 5, y2 - 9, '#111827');
+      if (item.ownership) this.drawText(image, `${item.ownership}%`, x2 + 8, Math.max(y2 - 22, elbowY + 4), '#0f172a', 1);
+    }
+
+    for (const item of nodes.items) {
+      const x = Math.round(centerX(item.x) - nodeWidth / 2);
+      const y = Math.round(centerY(item.depth));
+      const isRoot = item.id === 'ROOT';
+      const fill = isRoot ? '#0f172a' : item.isUbo ? '#e0f2fe' : palette[(item.depth - 1) % palette.length] || '#f8fafc';
+      const stroke = isRoot ? '#0f172a' : item.isUbo ? '#0891b2' : '#64748b';
+      this.drawRect(image, x + 4, y + 5, nodeWidth, nodeHeight, '#e2e8f0', '#e2e8f0');
+      this.drawRect(image, x, y, nodeWidth, nodeHeight, fill, stroke);
+      const name = this.textLines(item.name || 'Unnamed owner', 24);
+      const primaryText = isRoot ? '#ffffff' : '#0f172a';
+      const secondaryText = isRoot ? '#ccfbf1' : '#475569';
+      this.drawText(image, name[0], x + 12, y + 11, primaryText, 1);
+      if (name[1]) this.drawText(image, name[1], x + 12, y + 23, primaryText, 1);
+      this.drawText(image, item.type, x + 12, y + 39, secondaryText, 1);
+      if (item.detail) this.drawText(image, this.textLines(item.detail, 24)[0], x + 12, y + 52, secondaryText, 1);
+      if (item.isUbo) {
+        this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 18, 42, 13, '#ccfbf1', '#67e8f9');
+        this.drawText(image, 'UBO', x + nodeWidth - 46, y + nodeHeight - 16, '#155e75', 1);
+      }
+    }
+
+    return `data:image/png;base64,${this.encodePng(image).toString('base64')}`;
+  }
+
+  private ownershipDiagramNodes(rootName: string, rows: RowPayload[]) {
+    type DiagramNode = {
+      id: string;
+      parentId: string;
+      name: string;
+      type: string;
+      ownership: string;
+      detail: string;
+      isUbo: boolean;
+      depth: number;
+      x: number;
+    };
+
+    const normalizedRows: RowPayload[] = rows.map((row, index) => ({ ...row, id: this.text(row.id) || `ownership-${index + 1}` }));
+    const childrenByParent = normalizedRows.reduce<Record<string, RowPayload[]>>((groups, row) => {
+      const parentId = this.text(row.parentRowId) || 'ROOT';
+      groups[parentId] = [...(groups[parentId] || []), row];
+      return groups;
+    }, {});
+
+    const items: DiagramNode[] = [
+      { id: 'ROOT', parentId: '', name: rootName, type: 'Client company', ownership: '', detail: '(Layer 0)', isUbo: false, depth: 0, x: 0.5 }
+    ];
+    let leafIndex = 0;
+    let maxDepth = 0;
+
+    const render = (parentId: string, depth: number): number => {
+      const children = childrenByParent[parentId] || [];
+      if (!children.length) return leafIndex++;
+      const childXs = children.map((row) => {
+        const rowId = this.text(row.id);
+        const childX = render(rowId, depth + 1);
+        items.push({
+          id: rowId,
+          parentId,
+          name: this.text(row.fullName) || 'Unnamed owner',
+          type: this.text(row.shareholderType || 'Individual'),
+          ownership: this.text(row.ownershipPercentage || '0'),
+          detail: this.optionText(row.nationality, row.nationalityOther) || this.text(row.residenceAddress),
+          isUbo: Boolean(row.isUbo),
+          depth,
+          x: childX
+        });
+        maxDepth = Math.max(maxDepth, depth);
+        return childX;
+      });
+      return childXs.reduce((sum, value) => sum + value, 0) / childXs.length;
+    };
+
+    const rootX = render('ROOT', 1);
+    const leafCount = Math.max(1, leafIndex);
+    items.forEach((item) => {
+      item.x = item.id === 'ROOT' ? rootX : item.x;
+      item.x = (item.x + 0.5) / leafCount;
+    });
+
+    return { items, leafCount, maxDepth };
+  }
+
+  private textLines(value: string, maxLength: number) {
+    const words = value.split(/\s+/).filter(Boolean);
+    const lines = ['', ''];
+    for (const word of words) {
+      const target = lines[0].length + word.length + 1 <= maxLength ? 0 : 1;
+      if (lines[target].length + word.length + 1 <= maxLength) {
+        lines[target] = `${lines[target]} ${word}`.trim();
+      }
+    }
+    return [lines[0] || value.slice(0, maxLength), lines[1]];
+  }
+
+  private createPngCanvas(width: number, height: number, background: string) {
+    const data = Buffer.alloc(width * height * 4);
+    const color = this.hexColor(background);
+    for (let offset = 0; offset < data.length; offset += 4) {
+      data[offset] = color.r;
+      data[offset + 1] = color.g;
+      data[offset + 2] = color.b;
+      data[offset + 3] = 255;
+    }
+    return { width, height, data };
+  }
+
+  private drawRect(image: { width: number; height: number; data: Buffer }, x: number, y: number, width: number, height: number, fill: string, stroke: string) {
+    const fillColor = this.hexColor(fill);
+    const strokeColor = this.hexColor(stroke);
+    for (let py = y; py < y + height; py++) {
+      for (let px = x; px < x + width; px++) {
+        const isBorder = py === y || py === y + height - 1 || px === x || px === x + width - 1;
+        this.setPixel(image, px, py, isBorder ? strokeColor : fillColor);
+      }
+    }
+  }
+
+  private drawLine(image: { width: number; height: number; data: Buffer }, x1: number, y1: number, x2: number, y2: number, colorValue: string) {
+    const color = this.hexColor(colorValue);
+    let dx = Math.abs(x2 - x1);
+    let dy = -Math.abs(y2 - y1);
+    const sx = x1 < x2 ? 1 : -1;
+    const sy = y1 < y2 ? 1 : -1;
+    let error = dx + dy;
+    let x = x1;
+    let y = y1;
+
+    while (true) {
+      this.setPixel(image, x, y, color);
+      this.setPixel(image, x + 1, y, color);
+      if (x === x2 && y === y2) break;
+      const e2 = 2 * error;
+      if (e2 >= dy) {
+        error += dy;
+        x += sx;
+      }
+      if (e2 <= dx) {
+        error += dx;
+        y += sy;
+      }
+      dx = Math.abs(x2 - x1);
+      dy = -Math.abs(y2 - y1);
+    }
+  }
+
+  private drawText(image: { width: number; height: number; data: Buffer }, value: string, x: number, y: number, colorValue: string, scale: number) {
+    const color = this.hexColor(colorValue);
+    const text = value.toUpperCase().replace(/[^\x20-\x7E]/g, '');
+    let cursorX = x;
+    for (const character of text) {
+      const glyph = this.glyph(character);
+      for (let row = 0; row < glyph.length; row++) {
+        for (let column = 0; column < glyph[row].length; column++) {
+          if (glyph[row][column] !== '1') continue;
+          for (let sy = 0; sy < scale; sy++) {
+            for (let sx = 0; sx < scale; sx++) {
+              this.setPixel(image, cursorX + column * scale + sx, y + row * scale + sy, color);
+            }
+          }
+        }
+      }
+      cursorX += 6 * scale;
+    }
+  }
+
+  private glyph(character: string) {
+    return TINY_FONT[character] || TINY_FONT['?'];
+  }
+
+  private setPixel(image: { width: number; height: number; data: Buffer }, x: number, y: number, color: { r: number; g: number; b: number }) {
+    if (x < 0 || y < 0 || x >= image.width || y >= image.height) return;
+    const offset = (Math.floor(y) * image.width + Math.floor(x)) * 4;
+    image.data[offset] = color.r;
+    image.data[offset + 1] = color.g;
+    image.data[offset + 2] = color.b;
+    image.data[offset + 3] = 255;
+  }
+
+  private hexColor(value: string) {
+    const normalized = value.replace('#', '');
+    const number = Number.parseInt(normalized, 16);
+    return {
+      r: (number >> 16) & 255,
+      g: (number >> 8) & 255,
+      b: number & 255
+    };
+  }
+
+  private encodePng(image: { width: number; height: number; data: Buffer }) {
+    const raw = Buffer.alloc((image.width * 4 + 1) * image.height);
+    for (let y = 0; y < image.height; y++) {
+      raw[y * (image.width * 4 + 1)] = 0;
+      image.data.copy(raw, y * (image.width * 4 + 1) + 1, y * image.width * 4, (y + 1) * image.width * 4);
+    }
+
+    return Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      this.pngChunk('IHDR', Buffer.concat([this.uint32(image.width), this.uint32(image.height), Buffer.from([8, 6, 0, 0, 0])])),
+      this.pngChunk('IDAT', deflateSync(raw)),
+      this.pngChunk('IEND', Buffer.alloc(0))
+    ]);
+  }
+
+  private pngChunk(type: string, data: Buffer) {
+    const typeBuffer = Buffer.from(type);
+    return Buffer.concat([this.uint32(data.length), typeBuffer, data, this.uint32(this.crc32(Buffer.concat([typeBuffer, data])))]);
+  }
+
+  private uint32(value: number) {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32BE(value >>> 0, 0);
+    return buffer;
+  }
+
+  private crc32(buffer: Buffer) {
+    let crc = 0xffffffff;
+    for (const byte of buffer) {
+      crc ^= byte;
+      for (let index = 0; index < 8; index++) {
+        crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
   private text(value: unknown) {
     if (value === null || value === undefined) return '';
     if (value === 'undefined') return '';
@@ -2777,7 +3242,11 @@ export class KycService {
     return String(value);
   }
 
-  private optionText(value: unknown, otherValue: unknown) {
+  private optionText(value: unknown, otherValue: unknown): string {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.optionText(item, otherValue)).filter(Boolean).join(', ');
+    }
+
     if (value === 'Other') {
       return this.text(otherValue) || 'Other';
     }
@@ -2864,13 +3333,14 @@ ${this.docxParagraph('B. Ownership / Shareholders')}
 ${this.docxParagraph('Shareholders:\\n{shareholdersText}')}
 ${this.docxParagraph('Total Ownership: {totalOwnershipPercentage}% | UBO different: {uboDifferentFromShareholders}')}
 ${this.docxParagraph('UBO Group Structure Notes: {uboGroupStructureNotes}')}
+${this.docxParagraph('Ownership Structure:\\n{ownershipStructureText}')}
 ${this.docxParagraph('UBOs:\\n{ubosText}')}
 ${this.docxParagraph('C. Manager / Authorized Signatory / Directors / Secretary')}
 ${this.docxParagraph('{managersText}')}
 ${this.docxParagraph('D. Compliance and Risk Information')}
-${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails}')}
-${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails}')}
-${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copy: {dualCitizenshipPassportFileName}')}
+${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails} | Supporting documents: {pepDocumentFileNames}')}
+${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails} | Supporting documents: {sanctionDocumentFileNames}')}
+${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copies: {dualCitizenshipPassportFileName}')}
 ${this.docxParagraph('E. Key Communication Person')}
 ${this.docxTable([
   ['Full name', '{communicationFullName}', 'Position / Job title', '{communicationPosition}'],

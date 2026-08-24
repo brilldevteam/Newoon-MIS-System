@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -22,6 +22,11 @@ export class ClientsController {
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.clientsService.findAll(user);
+  }
+
+  @Get('match')
+  match(@CurrentUser() user: RequestUser, @Query('type') type: string, @Query('identifier') identifier: string) {
+    return this.clientsService.matchByIdentifier(user, type, identifier);
   }
 
   @Get(':id')

@@ -15,6 +15,7 @@ import {
   getKycForm,
   KycCase,
   KycFormData,
+  matchClientByIdentifier,
   saveKycFormSection,
   submitDmlroReview,
   uploadLegalDocumentFiles
@@ -62,6 +63,27 @@ function fileNameList(value: unknown) {
 
 function removeFileName(value: unknown, indexToRemove: number) {
   return fileNameList(value).filter((_, index) => index !== indexToRemove).join(', ');
+}
+
+function uniqueFileNameText(value: unknown) {
+  const seen = new Set<string>();
+  return fileNameList(value)
+    .filter((name) => {
+      const key = name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(', ');
+}
+
+function documentKey(value: unknown) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 const countryOptions = [
@@ -633,7 +655,7 @@ export function KycFormEditorPage() {
   }, [id]);
 
   const totalOwnership = useMemo(
-    () => (form.sectionB.shareholders || []).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0),
+    () => directOwnershipTotal(form.sectionB.shareholders || []),
     [form.sectionB.shareholders]
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
@@ -649,6 +671,12 @@ export function KycFormEditorPage() {
       setActiveSection(visibleSections[0]?.key || 'sectionH');
     }
   }, [activeSection, visibleSections]);
+
+  useEffect(() => {
+    if (canEditAllSections || canPrepareKyc) {
+      setActiveSection('sectionA');
+    }
+  }, [id, canEditAllSections, canPrepareKyc]);
 
   function setSection(section: SectionKey, value: Record<string, any>) {
     setForm((current) => {
@@ -1020,7 +1048,14 @@ export function KycFormEditorPage() {
           </div>
           <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
             {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
-            {activeSection === 'sectionB' ? <SectionBForm data={form.sectionB} total={totalOwnership} onChange={(value) => setSection('sectionB', value)} /> : null}
+            {activeSection === 'sectionB' ? (
+              <SectionBForm
+                data={form.sectionB}
+                total={totalOwnership}
+                rootName={form.sectionA.legalName || kycCase.client.name}
+                onChange={(value) => setSection('sectionB', value)}
+              />
+            ) : null}
             {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
             {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
             {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
@@ -1091,30 +1126,382 @@ function SectionAForm({ data, onChange }: FormProps) {
   );
 }
 
-function SectionBForm({ data, total, onChange }: FormProps & { total: number }) {
+function createOwnershipRow(): Row {
+  return {
+    id: crypto.randomUUID(),
+    shareholderType: 'Individual',
+    parentRowId: '',
+    isUbo: false
+  };
+}
+
+function directOwnershipTotal(rows: Row[]) {
+  return rows.filter((row) => !row.parentRowId).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0);
+}
+
+function ownershipLayerTotals(rows: Row[]) {
+  const totals = new Map<string, number>();
+  rows.forEach((row) => {
+    const parentKey = row.parentRowId || 'ROOT';
+    totals.set(parentKey, (totals.get(parentKey) || 0) + Number(row.ownershipPercentage || 0));
+  });
+  return totals;
+}
+
+function effectiveUboRows(sectionB: Record<string, any>) {
+  const manualRows = sectionB.ubos || [];
+  if (manualRows.length) return manualRows;
+  return (sectionB.shareholders || []).filter((row: Row) => row.isUbo);
+}
+
+function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: number; rootName: string }) {
+  const shareholders = data.shareholders || [];
+  const totals = ownershipLayerTotals(shareholders);
+  const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
+  const hasUbo = shareholders.some((row: Row) => row.isUbo) || Boolean(data.ubos?.length);
+
   return (
     <div className="space-y-5">
-      <DynamicRows title="Shareholders" rows={data.shareholders || []} onChange={(rows) => onChange({ ...data, shareholders: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
-      ]} />
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">Total ownership percentage: {total.toFixed(2)}%</div>
+      <OwnershipRows rootName={rootName} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
+      <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+        Direct ownership percentage: {total.toFixed(2)}%
+        {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more ownership layers exceed 100%.</span> : null}
+      </div>
+      {!hasUbo ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+          No UBO is marked yet. You can save the draft, but mark the UBO before finalizing the KYC file.
+        </div>
+      ) : null}
+      <OwnershipStructureDiagram rootName={rootName} rows={shareholders} ubos={data.ubos || []} />
       <Choice label="UBO different from shareholders" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="UBO group structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="UBO rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
 }
 
+function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
+  const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
+  const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate shareholder ${index + 1}`]));
+
+  function rowId(row: Row, index: number) {
+    return row.id || String(index);
+  }
+
+  function patchRow(index: number, patch: Row) {
+    onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  function addOwner() {
+    const owner = createOwnershipRow();
+    setExpandedRows((current) => ({ ...current, [owner.id || String(rows.length)]: true }));
+    onChange([...rows, owner]);
+  }
+
+  function toggleRow(rowKey: string) {
+    setExpandedRows((current) => ({ ...current, [rowKey]: !current[rowKey] }));
+  }
+
+  function setAllExpanded(isExpanded: boolean) {
+    setExpandedRows(Object.fromEntries(rows.map((row, index) => [rowId(row, index), isExpanded])));
+  }
+
+  async function lookup(index: number) {
+    const row = rows[index];
+    const rowKey = rowId(row, index);
+    const identifier = String(row.identityNumber || '').trim();
+    if (!identifier) {
+      setLookupMessages((current) => ({ ...current, [rowKey]: 'Enter a CR, QID, or passport number first.' }));
+      return;
+    }
+
+    setLookupMessages((current) => ({ ...current, [rowKey]: 'Checking existing clients...' }));
+    try {
+      const response = await matchClientByIdentifier((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'corporate' : 'individual', identifier);
+      if (response.match) {
+        patchRow(index, { linkedClientId: response.match.id, linkedClientName: response.match.name });
+        setLookupMessages((current) => ({ ...current, [rowKey]: 'Linked to existing client.' }));
+      } else {
+        patchRow(index, { linkedClientId: '', linkedClientName: '' });
+        setLookupMessages((current) => ({ ...current, [rowKey]: 'No existing client match found.' }));
+      }
+    } catch {
+      setLookupMessages((current) => ({ ...current, [rowKey]: 'Unable to check existing clients right now.' }));
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-950">Ownership rows</p>
+          <p className="text-xs text-slate-500">Add each direct or layered owner. Corporate rows can be selected as a parent for the next layer.</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {rows.length ? (
+            <button type="button" onClick={() => setAllExpanded(false)} className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" title="Collapse all ownership rows">
+              Collapse
+            </button>
+          ) : null}
+          {rows.length ? (
+            <button type="button" onClick={() => setAllExpanded(true)} className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" title="Expand all ownership rows">
+              Expand
+            </button>
+          ) : null}
+          <button type="button" onClick={addOwner} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700">
+            <Plus className="h-4 w-4" />
+            Owner
+          </button>
+        </div>
+      </div>
+      {rows.map((row, index) => {
+        const rowKey = rowId(row, index);
+        const isExpanded = expandedRows[rowKey] ?? rows.length <= 2;
+        const parentText = row.parentRowId ? `Owned by ${parentLabels.get(row.parentRowId) || 'corporate shareholder'}` : `Direct shareholder of ${rootName || 'client company'}`;
+        const nationalityText = Array.isArray(row.nationality) ? row.nationality.join(', ') : row.nationality || '';
+        return (
+          <div key={rowKey} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+              <button type="button" onClick={() => toggleRow(rowKey)} className="inline-flex min-w-0 flex-1 items-center gap-3 text-left">
+                <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-950">{row.fullName || `Owner ${index + 1}`}</p>
+                  <p className="truncate text-xs text-slate-500">{parentText}</p>
+                </div>
+              </button>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700">{row.shareholderType || 'Individual'}</span>
+                {row.ownershipPercentage ? <span className="rounded-full bg-brand-50 px-2 py-1 font-semibold text-brand-700">{row.ownershipPercentage}%</span> : null}
+                {nationalityText ? <span className="max-w-[180px] truncate rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600">{nationalityText}</span> : null}
+                {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">UBO</span> : null}
+                {row.linkedClientId ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">Linked client</span> : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+                title="Remove owner"
+                aria-label={`Remove ${row.fullName || `owner ${index + 1}`}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            {isExpanded ? (
+              <div className="p-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Select label="Shareholder type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
+                  <label className="text-sm font-medium text-slate-700">
+                    Parent owner / owned entity
+                    <select
+                      value={row.parentRowId || ''}
+                      onChange={(event) => patchRow(index, { parentRowId: event.target.value })}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                    >
+                      <option value="">Direct shareholder of {rootName || 'client company'}</option>
+                      {corporateParents
+                        .filter((parent, parentIndex) => (parent.id || String(parentIndex)) !== rowKey)
+                        .map((parent, parentIndex) => {
+                          const parentId = parent.id || String(parentIndex);
+                          return (
+                            <option key={parentId} value={parentId}>
+                              {parent.fullName || `Corporate shareholder ${parentIndex + 1}`}
+                            </option>
+                          );
+                        })}
+                    </select>
+                  </label>
+                  <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+                  <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                  <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
+                  <div className="text-sm font-medium text-slate-700">
+                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
+                    <div className="mt-1 flex gap-2">
+                      <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Lookup
+                      </button>
+                    </div>
+                    {row.linkedClientId ? (
+                      <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
+                        Linked to existing client: {row.linkedClientName}
+                        <button type="button" onClick={() => patchRow(index, { linkedClientId: '', linkedClientName: '' })} className="text-brand-900">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : lookupMessages[rowKey] ? (
+                      <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
+                    ) : null}
+                  </div>
+                  <Field label="Ownership %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
+                  <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
+                  <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
+                    Mark as UBO
+                  </label>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      {!rows.length ? <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">No ownership rows added yet.</div> : null}
+    </div>
+  );
+}
+
+function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string; rows: Row[]; ubos: Row[] }) {
+  const hasRows = rows.length > 0;
+  const uboIds = new Set([
+    ...rows.filter((row) => row.isUbo).map((row, index) => row.id || String(index)),
+    ...ubos.map((row) => String(row.identityNumber || row.fullName || ''))
+  ]);
+  const normalizedRows: Row[] = rows.map((row, index) => ({ ...row, id: row.id || `ownership-${index + 1}` }));
+  const childrenByParent = new Map<string, Row[]>();
+  normalizedRows.forEach((row) => {
+    const parent = row.parentRowId || 'ROOT';
+    childrenByParent.set(parent, [...(childrenByParent.get(parent) || []), row]);
+  });
+  type DiagramNode = Row & { id: string; parentId: string; depth: number; x: number };
+  const diagramNodes: DiagramNode[] = [{ id: 'ROOT', parentId: '', depth: 0, x: 0.5, fullName: rootName || 'Client company', shareholderType: 'Client company' } as DiagramNode];
+  let leafIndex = 0;
+  let maxDepth = 0;
+  const walk = (parentId: string, depth: number): number => {
+    const children = childrenByParent.get(parentId) || [];
+    if (!children.length) return leafIndex++;
+    const childXs = children.map((row) => {
+      const childX = walk(row.id, depth + 1);
+      diagramNodes.push({ ...(row as Row), id: String(row.id), parentId, depth, x: childX } as DiagramNode);
+      maxDepth = Math.max(maxDepth, depth);
+      return childX;
+    });
+    return childXs.reduce((sum, value) => sum + value, 0) / childXs.length;
+  };
+  const rootX = walk('ROOT', 1);
+  const leafCount = Math.max(1, leafIndex);
+  diagramNodes.forEach((node) => {
+    node.x = ((node.id === 'ROOT' ? rootX : node.x) + 0.5) / leafCount;
+  });
+  const layerColors = ['bg-slate-950 text-white', 'bg-blue-50 text-slate-950 border-blue-300', 'bg-green-50 text-slate-950 border-green-300', 'bg-amber-50 text-slate-950 border-amber-300', 'bg-purple-50 text-slate-950 border-purple-300', 'bg-red-50 text-slate-950 border-red-300', 'bg-cyan-50 text-slate-950 border-cyan-300'];
+  const layerCount = Math.max(1, maxDepth + 1);
+  const diagramWidth = Math.max(920, leafCount * 250 + 170);
+  const rowHeight = 112;
+  const nodeWidth = 220;
+  const nodeHeight = 74;
+  const diagramHeight = 84 + layerCount * rowHeight;
+  const leftRail = 122;
+  const topOffset = 62;
+  const usableWidth = diagramWidth - leftRail - 55;
+  const nodeCenterX = (node: DiagramNode) => leftRail + 30 + node.x * usableWidth;
+  const nodeTop = (node: DiagramNode) => topOffset + node.depth * rowHeight;
+  const nodeDetail = (node: DiagramNode) => {
+    if (node.id === 'ROOT') return 'Layer 0';
+    if (Array.isArray(node.nationality)) return node.nationality.join(', ');
+    return node.nationality || node.residenceAddress || '';
+  };
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-semibold text-slate-950">Ownership Structure</p>
+      {!hasRows ? (
+        <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No ownership structure generated.</p>
+      ) : (
+        <div className="mt-4 overflow-x-auto rounded-md border-2 border-slate-800 bg-white p-3">
+          <div className="relative mx-auto" style={{ width: diagramWidth, height: diagramHeight }}>
+            <h4 className="absolute left-0 right-0 top-3 text-center text-lg font-bold uppercase tracking-wide text-slate-950">
+              {rootName || 'Client company'} - Ownership Structure
+            </h4>
+            {Array.from({ length: layerCount }).map((_, depth) => (
+              <div
+                key={depth}
+                className={`absolute left-3 flex h-12 w-24 items-center justify-center rounded-md border text-sm font-bold shadow-sm ${layerColors[depth] || 'border-slate-300 bg-slate-50 text-slate-950'}`}
+                style={{ top: topOffset + depth * rowHeight + 12 }}
+              >
+                Layer {depth}
+              </div>
+            ))}
+            <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${diagramWidth} ${diagramHeight}`} preserveAspectRatio="none">
+              {diagramNodes.filter((node) => node.parentId).map((node) => {
+                const parent = diagramNodes.find((candidate) => candidate.id === node.parentId);
+                if (!parent) return null;
+                const x1 = nodeCenterX(parent);
+                const y1 = nodeTop(parent) + nodeHeight;
+                const x2 = nodeCenterX(node);
+                const y2 = nodeTop(node);
+                const elbowY = (y1 + y2) / 2;
+                return (
+                  <g key={`${node.parentId}-${node.id}`}>
+                    <path d={`M ${x1} ${y1} V ${elbowY} H ${x2} V ${y2}`} fill="none" stroke="#111827" strokeWidth="2" />
+                    <path d={`M ${x2 - 5} ${y2 - 8} L ${x2} ${y2} L ${x2 + 5} ${y2 - 8}`} fill="none" stroke="#111827" strokeWidth="2" />
+                    <text x={x2 + 8} y={Math.max(y2 - 12, elbowY - 4)} className="fill-slate-950 text-[13px] font-bold">
+                      {node.ownershipPercentage ? `${node.ownershipPercentage}%` : ''}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+            {diagramNodes.map((node) => {
+              const isRoot = node.id === 'ROOT';
+              const isUbo = Boolean(node.isUbo) || uboIds.has(String(node.identityNumber || node.fullName || ''));
+              const top = nodeTop(node);
+              const left = nodeCenterX(node) - nodeWidth / 2;
+              return (
+                <div
+                  key={node.id}
+                  className={`absolute flex flex-col items-center justify-center rounded-md border px-3 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
+                  style={{ width: nodeWidth, height: nodeHeight, left, top }}
+                >
+                  <p className="line-clamp-2 font-bold uppercase leading-tight">{node.fullName || 'Unnamed owner'}</p>
+                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{node.shareholderType || 'Individual'}</p>
+                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{nodeDetail(node)}</p>
+                  {isUbo ? <span className="mt-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold text-cyan-800">UBO</span> : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'select', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'select', nationalityOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
 function SectionDComplianceForm({ data, onChange }: FormProps) {
+  const hasPepExposure = (data.pepQuestion || 'No') === 'Yes';
+  const hasSanctionExposure = (data.sanctionQuestion || 'No') === 'Yes';
   const hasDualCitizenship = (data.dualCitizenshipQuestion || 'No') === 'Yes';
+
+  function setPepQuestion(value: string) {
+    onChange({
+      ...data,
+      pepQuestion: value,
+      ...(value === 'No'
+        ? {
+            pepDocumentFileNames: []
+          }
+        : {})
+    });
+  }
+
+  function setSanctionQuestion(value: string) {
+    onChange({
+      ...data,
+      sanctionQuestion: value,
+      ...(value === 'No'
+        ? {
+            sanctionDocumentFileNames: []
+          }
+        : {})
+    });
+  }
 
   function setDualCitizenshipQuestion(value: string) {
     onChange({
@@ -1123,7 +1510,8 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
       ...(value === 'No'
         ? {
             dualCitizenshipDetails: '',
-            dualCitizenshipPassportFileName: ''
+            dualCitizenshipPassportFileName: '',
+            dualCitizenshipPassportFileNames: []
           }
         : {})
     });
@@ -1131,17 +1519,63 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
 
   return (
     <div className="space-y-5">
-      <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={(value) => onChange({ ...data, pepQuestion: value })} />
+      <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={setPepQuestion} />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
-      <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={(value) => onChange({ ...data, sanctionQuestion: value })} />
+      {hasPepExposure ? (
+        <SectionDSupportingDocuments label="PEP supporting documents" data={data} fieldKey="pepDocumentFileNames" onChange={onChange} />
+      ) : null}
+      <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={setSanctionQuestion} />
       <Field label="Sanction details" value={data.sanctionDetails} onChange={(value) => update(data, onChange, 'sanctionDetails', value)} textarea wide />
+      {hasSanctionExposure ? (
+        <SectionDSupportingDocuments label="Sanction supporting documents" data={data} fieldKey="sanctionDocumentFileNames" onChange={onChange} />
+      ) : null}
       <Choice label="Any dual citizenship?" value={data.dualCitizenshipQuestion || 'No'} onChange={setDualCitizenshipQuestion} />
       {hasDualCitizenship ? (
         <FormGrid>
           <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
-          <UploadField label="Passport copy" fileName={data.dualCitizenshipPassportFileName} onChange={(file) => update(data, onChange, 'dualCitizenshipPassportFileName', file.name)} />
+          <SectionDSupportingDocuments label="Passport copies" data={data} fieldKey="dualCitizenshipPassportFileNames" legacyFieldKey="dualCitizenshipPassportFileName" onChange={onChange} wide />
         </FormGrid>
       ) : null}
+    </div>
+  );
+}
+
+function SectionDSupportingDocuments({
+  label,
+  data,
+  fieldKey,
+  legacyFieldKey,
+  onChange,
+  wide = false
+}: {
+  label: string;
+  data: Record<string, any>;
+  fieldKey: string;
+  legacyFieldKey?: string;
+  onChange: (value: Record<string, any>) => void;
+  wide?: boolean;
+}) {
+  const names = sectionDFileNames(data, fieldKey, legacyFieldKey);
+
+  function setNames(nextNames: string[]) {
+    onChange({
+      ...data,
+      [fieldKey]: nextNames,
+      ...(legacyFieldKey ? { [legacyFieldKey]: nextNames[0] || '' } : {})
+    });
+  }
+
+  return (
+    <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
+      <span>{label}</span>
+      <div className="mt-1">
+        <MultiFileUploadControl
+          names={names}
+          onSelect={(files) => setNames([...names, ...files.map((file) => file.name)])}
+          onRemoveName={(index) => setNames(names.filter((_, itemIndex) => itemIndex !== index))}
+          placeholder="No file selected"
+        />
+      </div>
     </div>
   );
 }
@@ -1165,7 +1599,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
 
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <Select label="Nationality" value={data.nationality} otherValue={data.nationalityOther} options={nationalityOptions} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
     <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
@@ -1242,22 +1676,37 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
     <div className="space-y-5">
       {uploadError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p> : null}
       <div className="space-y-3">
-      {documents.map((document: Row, index: number) => (
-        <div key={`${document.documentType}-${index}`} className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_110px_minmax(180px,1fr)]">
-          <p className="text-sm font-medium text-slate-800">{document.documentType}</p>
-          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
-            Provided
-          </label>
-          <MultiFileUploadControl
-            names={fileNameList(document.fileName)}
-            disabled={uploadingKey === `required-${index}`}
-            buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload'}
-            onSelect={(files) => uploadDocument(index, files)}
-            onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
-          />
-        </div>
-      ))}
+        {documents.map((document: Row, index: number) => {
+          const names = fileNameList(document.fileName);
+          return (
+            <div key={`${document.documentType}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="grid gap-4 lg:grid-cols-[minmax(180px,1fr)_auto_minmax(280px,1.2fr)] lg:items-center">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">{document.documentType}</p>
+                  <p className="mt-1 text-xs text-slate-500">{names.length ? `${names.length} file${names.length === 1 ? '' : 's'} uploaded` : 'No files uploaded yet'}</p>
+                </div>
+                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+                  <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
+                  Provided
+                </label>
+                <MultiFileUploadControl
+                  names={names}
+                  disabled={uploadingKey === `required-${index}`}
+                  buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload files'}
+                  placeholder="Select one or more files"
+                  showFileList={false}
+                  onSelect={(files) => uploadDocument(index, files)}
+                  onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
+                />
+              </div>
+              <UploadedFilePills
+                names={names}
+                emptyText="Upload supporting files for this document type."
+                onRemove={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
+              />
+            </div>
+          );
+        })}
       </div>
       <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1276,24 +1725,33 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         </div>
         {additionalDocuments.length ? (
           additionalDocuments.map((document: Row, index: number) => (
-            <div key={document.id || index} className="grid items-end gap-3 rounded-md border border-slate-200 bg-white p-3 md:grid-cols-[minmax(220px,1fr)_auto]">
-              <MultiFileUploadControl
+            <div key={document.id || index} className="rounded-lg border border-slate-200 bg-white p-4">
+              <div className="grid items-center gap-3 md:grid-cols-[1fr_auto]">
+                <MultiFileUploadControl
+                  names={fileNameList(document.fileName)}
+                  disabled={uploadingKey === `additional-${index}`}
+                  buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload files / ZIP'}
+                  placeholder="Select one or more files"
+                  showFileList={false}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
+                  onSelect={(files) => uploadAdditionalDocument(index, files)}
+                  onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
+                  title="Remove additional document"
+                  aria-label={`Remove additional document ${index + 1}`}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+              <UploadedFilePills
                 names={fileNameList(document.fileName)}
-                disabled={uploadingKey === `additional-${index}`}
-                buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload file / ZIP'}
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
-                onSelect={(files) => uploadAdditionalDocument(index, files)}
-                onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                emptyText="No additional files uploaded yet."
+                onRemove={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
               />
-              <button
-                type="button"
-                onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
-                title="Remove additional document"
-                aria-label={`Remove additional document ${index + 1}`}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
             </div>
           ))
         ) : (
@@ -1301,6 +1759,35 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         )}
       </div>
       <Field label="Additional notes for KYC preparation documents" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
+    </div>
+  );
+}
+
+function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; emptyText: string; onRemove: (index: number) => void }) {
+  if (!names.length) {
+    return <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{emptyText}</p>;
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Uploaded files</p>
+      <div className="flex flex-wrap gap-2">
+        {names.map((name, index) => (
+          <span key={`${name}-${index}`} title={name} className="inline-flex max-w-full items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+            <span className="max-w-64 truncate">{name}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(index)}
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600"
+              aria-label={`Remove ${name}`}
+              title={`Remove ${name}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1417,20 +1904,31 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Ownership / Shareholders">
-          <PreviewTable headers={['Full name', 'Nationality', 'DOB', 'QID / Passport / CR', 'Ownership %', 'Address']} rows={(form.sectionB.shareholders || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Ownership %', 'Address', 'Linked client', 'UBO']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
           <p className="mt-2 font-semibold">Total ownership percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
           <p>UBO different from shareholders: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>UBO group structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
-          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={(form.sectionB.ubos || []).map((row) => [row.fullName, resolveOtherValue(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
+          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, resolveOtherValue(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, row.nationality || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
-          <PreviewGrid rows={[['Any PEP exposure?', form.sectionD.pepQuestion], ['PEP details', form.sectionD.pepDetails], ['Any sanction exposure?', form.sectionD.sanctionQuestion], ['Sanction details', form.sectionD.sanctionDetails], ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion], ['Dual citizenship details', form.sectionD.dualCitizenshipDetails], ['Dual citizenship passport copy', form.sectionD.dualCitizenshipPassportFileName]]} />
+          <PreviewGrid rows={[
+            ['Any PEP exposure?', form.sectionD.pepQuestion],
+            ['PEP details', form.sectionD.pepDetails],
+            ['PEP supporting documents', displayList(form.sectionD.pepDocumentFileNames)],
+            ['Any sanction exposure?', form.sectionD.sanctionQuestion],
+            ['Sanction details', form.sectionD.sanctionDetails],
+            ['Sanction supporting documents', displayList(form.sectionD.sanctionDocumentFileNames)],
+            ['Any dual citizenship?', form.sectionD.dualCitizenshipQuestion],
+            ['Dual citizenship details', form.sectionD.dualCitizenshipDetails],
+            ['Dual citizenship passport copies', displayList(sectionDFileNames(form.sectionD, 'dualCitizenshipPassportFileNames', 'dualCitizenshipPassportFileName'))]
+          ]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
-          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', resolveOtherValue(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
+          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Provided', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
@@ -1879,6 +2377,19 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
                 );
               }
 
+              if (type === 'multiselect') {
+                return (
+                  <MultiSelect
+                    key={key}
+                    label={label}
+                    value={row[key]}
+                    options={(options || ['']).filter(Boolean)}
+                    onChange={(value) => updateRow(rows, index, key, value, onChange)}
+                    placeholder={key === 'nationality' ? 'Select nationalities' : `Select ${label.toLowerCase()}`}
+                  />
+                );
+              }
+
               return <Field key={key} label={label} type={type || 'text'} value={row[key]} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
             })}
           </div>
@@ -1943,6 +2454,12 @@ function displayList(value: any) {
   return listValue(value).join(', ');
 }
 
+function sectionDFileNames(data: Record<string, any>, fieldKey: string, legacyFieldKey?: string) {
+  const names = listValue(data[fieldKey]);
+  const legacyName = legacyFieldKey ? String(data[legacyFieldKey] || '').trim() : '';
+  return legacyName && !names.includes(legacyName) ? [legacyName, ...names] : names;
+}
+
 function displayCodeLabel(value: any) {
   return value ? String(value).replace(/_/g, ' ') : '';
 }
@@ -1966,6 +2483,100 @@ function countryFromNationality(nationality: string) {
   return nationalityCountryMap[nationality] || '';
 }
 
+function normalizeSectionBNationality(value: any) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  return values.map((item) => countryFromNationality(item) || item).filter(Boolean);
+}
+
+function normalizeSectionBRows(rows: Row[] | undefined) {
+  return (rows || []).map((row, index) => ({
+    ...row,
+    id: row.id || `ownership-${index + 1}`,
+    shareholderType: row.shareholderType || 'Individual',
+    parentRowId: row.parentRowId || '',
+    linkedClientId: row.linkedClientId || '',
+    linkedClientName: row.linkedClientName || '',
+    isUbo: Boolean(row.isUbo),
+    nationality: normalizeSectionBNationality(row.nationality)
+  }));
+}
+
+function normalizeSectionCRows(rows: Row[] | undefined) {
+  return (rows || []).map((row) => ({
+    ...row,
+    position: listValue(row.position)
+  }));
+}
+
+function normalizeSectionD(sectionD: Record<string, any> | undefined) {
+  const data = {
+    ...emptyForm.sectionD,
+    ...(sectionD || {})
+  };
+
+  return {
+    ...data,
+    pepDocumentFileNames: listValue(data.pepDocumentFileNames),
+    sanctionDocumentFileNames: listValue(data.sanctionDocumentFileNames),
+    dualCitizenshipPassportFileNames: sectionDFileNames(data, 'dualCitizenshipPassportFileNames', 'dualCitizenshipPassportFileName')
+  };
+}
+
+function normalizeRequiredDocumentRows(rows: Row[] | undefined): Row[] {
+  const merged = new Map<string, Row>();
+
+  (rows || []).forEach((row) => {
+    const documentType = String(row.documentType || '').trim();
+    const key = documentKey(documentType);
+    if (!key) return;
+
+    const existing = merged.get(key);
+    const fileName = uniqueFileNameText([existing?.fileName, row.fileName].filter(Boolean).join(', '));
+
+    merged.set(key, {
+      ...(existing || {}),
+      ...row,
+      documentType: existing?.documentType || documentType,
+      isRequired: row.isRequired === undefined ? existing?.isRequired ?? true : row.isRequired,
+      isProvided: Boolean(existing?.isProvided) || Boolean(row.isProvided) || Boolean(fileName),
+      fileName,
+      storagePath: existing?.storagePath || row.storagePath,
+      mimeType: existing?.mimeType || row.mimeType,
+      size: existing?.size || row.size
+    });
+  });
+
+  return requiredDocuments.map((documentType) => {
+    const row = merged.get(documentKey(documentType));
+    return row || { documentType, isRequired: true, isProvided: false, fileName: '' };
+  });
+}
+
+function normalizeAdditionalDocumentRows(rows: Row[] | undefined): Row[] {
+  const seen = new Set<string>();
+
+  return (rows || [])
+    .map((row, index) => ({
+      ...row,
+      id: row.id || `${index + 1}`,
+      fileName: uniqueFileNameText(row.fileName)
+    }))
+    .filter((row) => {
+      const fileName = String(row.fileName || '').trim();
+      if (!fileName) return false;
+      const key = fileName.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function normalizeForm(form: KycFormData): KycFormData {
   const sectionA = {
     ...emptyForm.sectionA,
@@ -1976,16 +2587,28 @@ function normalizeForm(form: KycFormData): KycFormData {
     ...emptyForm.sectionE,
     ...(form.sectionE || {})
   };
+  sectionE.position = listValue(sectionE.position);
   sectionE.mobileNumber = applyCountryDialCode(sectionE.mobileNumber || '', countryFromNationality(sectionE.nationality || ''));
 
   return {
     ...emptyForm,
     ...form,
     sectionA,
-    sectionB: { ...emptyForm.sectionB, ...(form.sectionB || {}), shareholders: form.sectionB?.shareholders || [], ubos: form.sectionB?.ubos || [] },
-    sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: form.sectionC?.managers || [] },
+    sectionB: {
+      ...emptyForm.sectionB,
+      ...(form.sectionB || {}),
+      shareholders: normalizeSectionBRows(form.sectionB?.shareholders),
+      ubos: normalizeSectionBRows(form.sectionB?.ubos)
+    },
+    sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: normalizeSectionCRows(form.sectionC?.managers) },
+    sectionD: normalizeSectionD(form.sectionD),
     sectionE,
-    sectionF: { ...emptyForm.sectionF, ...(form.sectionF || {}), documents: form.sectionF?.documents?.length ? form.sectionF.documents : emptyForm.sectionF.documents },
+    sectionF: {
+      ...emptyForm.sectionF,
+      ...(form.sectionF || {}),
+      documents: normalizeRequiredDocumentRows(form.sectionF?.documents?.length ? form.sectionF.documents : emptyForm.sectionF.documents),
+      additionalDocuments: normalizeAdditionalDocumentRows(form.sectionF?.additionalDocuments)
+    },
     sectionH: form.sectionH || {}
   };
 }
