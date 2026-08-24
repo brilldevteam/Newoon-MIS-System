@@ -77,6 +77,10 @@ function uniqueFileNameText(value: unknown) {
     .join(', ');
 }
 
+function appendFileNameText(existing: unknown, incoming: unknown) {
+  return uniqueFileNameText([...fileNameList(existing), ...fileNameList(incoming)].join(', '));
+}
+
 function documentKey(value: unknown) {
   return String(value || '')
     .toLowerCase()
@@ -1388,9 +1392,9 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
   const layerColors = ['bg-slate-950 text-white', 'bg-blue-50 text-slate-950 border-blue-300', 'bg-green-50 text-slate-950 border-green-300', 'bg-amber-50 text-slate-950 border-amber-300', 'bg-purple-50 text-slate-950 border-purple-300', 'bg-red-50 text-slate-950 border-red-300', 'bg-cyan-50 text-slate-950 border-cyan-300'];
   const layerCount = Math.max(1, maxDepth + 1);
   const diagramWidth = Math.max(920, leafCount * 250 + 170);
-  const rowHeight = 112;
+  const rowHeight = 128;
   const nodeWidth = 220;
-  const nodeHeight = 74;
+  const nodeHeight = 92;
   const diagramHeight = 84 + layerCount * rowHeight;
   const leftRail = 122;
   const topOffset = 62;
@@ -1451,13 +1455,13 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
               return (
                 <div
                   key={node.id}
-                  className={`absolute flex flex-col items-center justify-center rounded-md border px-3 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
+                  className={`absolute flex flex-col items-center justify-center rounded-md border px-8 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
                   style={{ width: nodeWidth, height: nodeHeight, left, top }}
                 >
-                  <p className="line-clamp-2 font-bold uppercase leading-tight">{node.fullName || 'Unnamed owner'}</p>
-                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{node.shareholderType || 'Individual'}</p>
-                  <p className={isRoot ? 'text-slate-200' : 'text-slate-600'}>{nodeDetail(node)}</p>
-                  {isUbo ? <span className="mt-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold text-cyan-800">UBO</span> : null}
+                  <p className="line-clamp-2 min-h-[28px] font-bold uppercase leading-tight">{node.fullName || 'Unnamed owner'}</p>
+                  <p className={`mt-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{node.shareholderType || 'Individual'}</p>
+                  <p className={`mt-0.5 line-clamp-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{nodeDetail(node)}</p>
+                  {isUbo ? <span className="absolute right-2 top-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold leading-none text-cyan-800">UBO</span> : null}
                 </div>
               );
             })}
@@ -1629,7 +1633,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
             ? {
                 ...documentRow,
                 isProvided: true,
-                fileName: uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', '),
+                fileName: appendFileNameText(documentRow.fileName, uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', ')),
                 storagePath: uploaded[0]?.storagePath,
                 mimeType: files.length === 1 ? uploaded[0]?.mimeType || files[0].type || undefined : undefined,
                 size: files.length === 1 ? uploaded[0]?.size || files[0].size : undefined
@@ -1660,7 +1664,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
       const updatedCase = await uploadLegalDocumentFiles(caseId, { documentType, files });
       const uploaded = updatedCase?.legalDocuments.filter((document) => document.documentType === documentType && files.some((file) => file.name === document.fileName)) || [];
       updateAdditionalDocument(index, {
-        fileName: uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', '),
+        fileName: appendFileNameText(additionalDocuments[index]?.fileName, uploaded.length ? uploaded.map((document) => document.fileName).join(', ') : files.map((file) => file.name).join(', ')),
         storagePath: uploaded[0]?.storagePath,
         mimeType: files.length === 1 ? uploaded[0]?.mimeType || files[0].type || undefined : undefined,
         size: files.length === 1 ? uploaded[0]?.size || files[0].size : undefined

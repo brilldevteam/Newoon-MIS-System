@@ -753,23 +753,56 @@ function attachmentDocumentType(enquiryType: EnquiryType, attachment: Attachment
 }
 
 function attachmentDisplayNames(attachment: AttachmentDraft) {
-  if (attachment.files?.length) return attachment.files.map((file) => file.name);
-  return attachment.fileName ? attachment.fileName.split(',').map((name) => name.trim()).filter(Boolean) : [];
+  return uniqueNames([
+    ...attachmentFileNameList(attachment.fileName),
+    ...(attachment.files || []).map((file) => file.name)
+  ]);
 }
 
 function findAttachmentByType(attachments: AttachmentDraft[], documentType: string) {
   return attachments.find((attachment) => attachment.documentType === documentType) || { documentType, fileName: '' };
 }
 
+function attachmentFileNameList(value: string | undefined) {
+  return (value || '').split(',').map((name) => name.trim()).filter(Boolean);
+}
+
+function uniqueNames(names: string[]) {
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function mergeFiles(existingFiles: File[] | undefined, selectedFiles: File[]) {
+  const existing = existingFiles || [];
+  const seen = new Set(existing.map((file) => `${file.name}-${file.size}-${file.lastModified}`));
+  return [
+    ...existing,
+    ...selectedFiles.filter((file) => {
+      const key = `${file.name}-${file.size}-${file.lastModified}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+  ];
+}
+
 function setAttachmentFilesByType(attachments: AttachmentDraft[], documentType: string, files: File[]) {
+  const existingAttachment = findAttachmentByType(attachments, documentType);
+  const nextFiles = mergeFiles(existingAttachment.files, files);
+  const nextNames = uniqueNames([...attachmentDisplayNames(existingAttachment), ...files.map((file) => file.name)]);
   const nextAttachment: AttachmentDraft = {
-    ...findAttachmentByType(attachments, documentType),
+    ...existingAttachment,
     documentType,
-    fileName: files.map((file) => file.name).join(', '),
-    storagePath: files.length ? undefined : null,
-    mimeType: files.length === 1 ? files[0].type || undefined : undefined,
-    size: files.length === 1 ? files[0].size : undefined,
-    files: files.length ? files : undefined
+    fileName: nextNames.join(', '),
+    storagePath: nextNames.length ? undefined : null,
+    mimeType: nextFiles.length === 1 ? nextFiles[0].type || undefined : undefined,
+    size: nextFiles.length === 1 ? nextFiles[0].size : undefined,
+    files: nextFiles.length ? nextFiles : undefined
   };
 
   const found = attachments.some((attachment) => attachment.documentType === documentType);
@@ -781,25 +814,16 @@ function removeAttachmentFileByType(attachments: AttachmentDraft[], documentType
 }
 
 function removeAttachmentFile(attachment: AttachmentDraft, fileIndex: number): AttachmentDraft {
-  if (attachment.files?.length) {
-    const nextFiles = attachment.files.filter((_, index) => index !== fileIndex);
-    return {
-      ...attachment,
-      fileName: nextFiles.map((file) => file.name).join(', '),
-      storagePath: nextFiles.length ? undefined : null,
-      mimeType: nextFiles.length === 1 ? nextFiles[0].type || undefined : undefined,
-      size: nextFiles.length === 1 ? nextFiles[0].size : undefined,
-      files: nextFiles.length ? nextFiles : undefined
-    };
-  }
-
-  const nextNames = attachmentDisplayNames(attachment).filter((_, index) => index !== fileIndex);
+  const removeName = attachmentDisplayNames(attachment)[fileIndex];
+  const nextFiles = (attachment.files || []).filter((file) => file.name !== removeName);
+  const nextNames = attachmentFileNameList(attachment.fileName).filter((name) => name !== removeName);
   return {
     ...attachment,
     fileName: nextNames.join(', '),
     storagePath: nextNames.length ? attachment.storagePath : null,
-    mimeType: nextNames.length === 1 ? attachment.mimeType : undefined,
-    size: nextNames.length === 1 ? attachment.size : undefined
+    mimeType: nextFiles.length === 1 ? nextFiles[0].type || undefined : nextNames.length === 1 ? attachment.mimeType : undefined,
+    size: nextFiles.length === 1 ? nextFiles[0].size : nextNames.length === 1 ? attachment.size : undefined,
+    files: nextFiles.length ? nextFiles : undefined
   };
 }
 
@@ -807,10 +831,9 @@ function flattenAttachmentMetadata(enquiryType: EnquiryType, attachments: Attach
   const items: NonNullable<EnquiryPayload['attachments']> = [];
 
   attachments.forEach((attachment, index) => {
-    if (attachment.files?.length) return;
-
     const documentType = attachmentDocumentType(enquiryType, attachment, index);
-    const names = attachmentDisplayNames(attachment);
+    const pendingNames = new Set((attachment.files || []).map((file) => file.name.toLowerCase()));
+    const names = attachmentFileNameList(attachment.fileName).filter((name) => !pendingNames.has(name.toLowerCase()));
     names.forEach((fileName) => items.push({
       documentType,
       fileName,
@@ -838,14 +861,18 @@ function AttachmentRows({
     onChange(
       attachments.map((attachment, itemIndex) =>
         itemIndex === index
-          ? {
-              ...attachment,
-              fileName: files.map((file) => file.name).join(', '),
-              storagePath: files.length ? undefined : null,
-              mimeType: files.length === 1 ? files[0].type || undefined : undefined,
-              size: files.length === 1 ? files[0].size : undefined,
-              files: files.length ? files : undefined
-            }
+          ? (() => {
+              const nextFiles = mergeFiles(attachment.files, files);
+              const nextNames = uniqueNames([...attachmentDisplayNames(attachment), ...files.map((file) => file.name)]);
+              return {
+                ...attachment,
+                fileName: nextNames.join(', '),
+                storagePath: nextNames.length ? undefined : null,
+                mimeType: nextFiles.length === 1 ? nextFiles[0].type || undefined : undefined,
+                size: nextFiles.length === 1 ? nextFiles[0].size : undefined,
+                files: nextFiles.length ? nextFiles : undefined
+              };
+            })()
           : attachment
       )
     );
@@ -853,6 +880,23 @@ function AttachmentRows({
 
   function removeFile(index: number, fileIndex: number) {
     onChange(attachments.map((attachment, itemIndex) => (itemIndex === index ? removeAttachmentFile(attachment, fileIndex) : attachment)));
+  }
+
+  function clearFiles(index: number) {
+    onChange(
+      attachments.map((attachment, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...attachment,
+              fileName: '',
+              storagePath: null,
+              mimeType: undefined,
+              size: undefined,
+              files: undefined
+            }
+          : attachment
+      )
+    );
   }
 
   function addAdditionalUpload() {
@@ -907,7 +951,7 @@ function AttachmentRows({
             <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} onRemoveName={(fileIndex) => removeFile(index, fileIndex)} />
             <button
               type="button"
-              onClick={() => (additional ? removeAttachment(index) : setFiles(index, []))}
+              onClick={() => (additional ? removeAttachment(index) : clearFiles(index))}
               className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
               aria-label={`${additional ? 'Remove' : 'Clear'} ${attachment.documentType}`}
               title={additional ? 'Remove' : 'Clear'}
