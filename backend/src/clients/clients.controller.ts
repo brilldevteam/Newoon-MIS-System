@@ -25,8 +25,13 @@ export class ClientsController {
   }
 
   @Get('match')
-  match(@CurrentUser() user: RequestUser, @Query('type') type: string, @Query('identifier') identifier: string) {
-    return this.clientsService.matchByIdentifier(user, type, identifier);
+  match(
+    @CurrentUser() user: RequestUser,
+    @Query('type') type: string,
+    @Query('identifier') identifier: string,
+    @Query('excludeClientId') excludeClientId?: string
+  ) {
+    return this.clientsService.matchByIdentifier(user, type, identifier, excludeClientId);
   }
 
   @Get(':id')
