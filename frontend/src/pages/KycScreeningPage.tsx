@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, Eye, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableSelect } from '../components/SearchableSelect';
@@ -115,11 +115,18 @@ export function KycScreeningPage() {
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [busyDocumentId, setBusyDocumentId] = useState('');
+  const [expandedRecordIds, setExpandedRecordIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!id) return;
     getScreeningContext(id)
-      .then(setContext)
+      .then((screeningContext) => {
+        setContext(screeningContext);
+        setExpandedRecordIds((current) => {
+          if (current.size || !screeningContext.records[0]) return current;
+          return new Set([screeningContext.records[0].id]);
+        });
+      })
       .catch((requestError) => setError(errorMessage(requestError, 'Unable to load screening workspace.')));
   }, [id]);
 
@@ -173,7 +180,12 @@ export function KycScreeningPage() {
             identifier: manualIdentifier,
             country: manualCountry
           };
-      setContext(await createScreeningRecord(id, payload));
+      const nextContext = await createScreeningRecord(id, payload);
+      setContext(nextContext);
+      const newRecord = nextContext.records[0];
+      if (newRecord) {
+        setExpandedRecordIds((current) => new Set([...current, newRecord.id]));
+      }
       setSelectedEntityLabel('');
       setManualEntityName('');
       setManualIdentifier('');
@@ -228,19 +240,64 @@ export function KycScreeningPage() {
     }
   }
 
+  function mergeCurrentDraft(nextContext: ScreeningContext, currentRecord: ScreeningRecord) {
+    return {
+      ...nextContext,
+      records: nextContext.records.map((record) => {
+        if (record.id !== currentRecord.id) return record;
+        return {
+          ...record,
+          entityName: currentRecord.entityName,
+          identifier: currentRecord.identifier,
+          country: currentRecord.country,
+          remarks: currentRecord.remarks,
+          checks: record.checks.map((check) => {
+            const currentCheck = currentRecord.checks.find((item) => item.checkType === check.checkType);
+            return currentCheck
+              ? {
+                  ...check,
+                  resultStatus: currentCheck.resultStatus,
+                  notes: currentCheck.notes
+                }
+              : check;
+          })
+        };
+      })
+    };
+  }
+
   async function uploadFiles(recordId: string, checkType: ScreeningCheckType, files: File[], documentType?: string) {
     if (!id || !files.length) return;
+    const currentRecord = context?.records.find((record) => record.id === recordId);
     setError('');
     setMessage('');
     setBusyKey(`upload-${recordId}-${checkType}`);
     try {
-      setContext(await uploadScreeningDocuments(id, recordId, { checkType, documentType, files }));
+      const nextContext = await uploadScreeningDocuments(id, recordId, { checkType, documentType, files });
+      setContext(currentRecord ? mergeCurrentDraft(nextContext, currentRecord) : nextContext);
       setMessage('Screening document uploaded.');
     } catch (requestError: any) {
       setError(errorMessage(requestError, 'Unable to upload screening document.'));
     } finally {
       setBusyKey('');
     }
+  }
+
+  function toggleRecord(recordId: string) {
+    setExpandedRecordIds((current) => {
+      const next = new Set(current);
+      if (next.has(recordId)) next.delete(recordId);
+      else next.add(recordId);
+      return next;
+    });
+  }
+
+  function expandAllRecords() {
+    setExpandedRecordIds(new Set(context?.records.map((record) => record.id) || []));
+  }
+
+  function collapseAllRecords() {
+    setExpandedRecordIds(new Set());
   }
 
   async function removeDocument(documentId: string) {
@@ -333,16 +390,49 @@ export function KycScreeningPage() {
       </section>
 
       {context.records.length ? (
-        <div className="space-y-5">
+        <div className="space-y-3">
+          <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">Screening records</h2>
+              <p className="mt-1 text-sm text-slate-500">Open only the entity you are updating to keep the workspace compact.</p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={collapseAllRecords}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Collapse
+              </button>
+              <button
+                type="button"
+                onClick={expandAllRecords}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Expand
+              </button>
+            </div>
+          </div>
           {context.records.map((record) => {
             const checks = context.mandatoryChecks.map((checkType) => record.checks.find((check) => check.checkType === checkType) || emptyCheck(checkType));
+            const expanded = expandedRecordIds.has(record.id);
+            const completedChecks = checks.filter((check) => check.resultStatus !== 'NOT_CHECKED' && check.documents.length).length;
             return (
-              <section key={record.id} className="rounded-lg border border-slate-200 bg-white">
-                <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
+              <section key={record.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  onClick={() => toggleRecord(record.id)}
+                  className="flex w-full flex-col gap-3 bg-slate-50 px-5 py-4 text-left hover:bg-slate-100 lg:flex-row lg:items-center lg:justify-between"
+                >
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="mt-1 text-slate-500">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-base font-semibold text-slate-950">{record.entityName}</h2>
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{record.entityType.replace('_', ' ')}</span>
+                      <span className="rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
+                        {completedChecks}/{context.mandatoryChecks.length} evidence
+                      </span>
                       {record.status === 'COMPLETED' ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -350,11 +440,16 @@ export function KycScreeningPage() {
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-1 text-sm text-slate-500">
+                    <p className="mt-1 truncate text-sm text-slate-500">
                       {record.identifier || 'No identifier'} {record.country ? `| ${record.country}` : ''}
                     </p>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                </button>
+
+                {expanded ? (
+                  <>
+                    <div className="flex flex-wrap justify-end gap-2 border-b border-slate-200 px-5 py-3">
                     <button
                       type="button"
                       onClick={() => saveRecord(record)}
@@ -373,8 +468,7 @@ export function KycScreeningPage() {
                       <CheckCircle2 className="h-4 w-4" />
                       Finalize
                     </button>
-                  </div>
-                </div>
+                    </div>
 
                 <div className="space-y-5 p-5">
                   <div className="grid gap-4 md:grid-cols-3">
@@ -478,6 +572,8 @@ export function KycScreeningPage() {
                     />
                   </label>
                 </div>
+                  </>
+                ) : null}
               </section>
             );
           })}
