@@ -17,6 +17,7 @@ import { ApprovalsModule } from './approvals/approvals.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { ScreeningModule } from './screening/screening.module';
 
 @Module({
   imports: [
@@ -36,7 +37,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ApprovalsModule,
     NotificationsModule,
     AuditLogsModule,
-    DashboardModule
+    DashboardModule,
+    ScreeningModule
   ],
   controllers: [AppController]
 })

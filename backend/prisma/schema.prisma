@@ -58,6 +58,9 @@ model Tenant {
   riskReclassifications RiskReclassification[]
   clientActivationChecklists ClientActivationChecklist[]
   kycGeneratedDocuments KycGeneratedDocument[]
+  screeningRecords ScreeningRecord[]
+  screeningChecks ScreeningCheck[]
+  screeningDocuments ScreeningDocument[]
   statusHistory KycCaseStatusHistory[]
   auditLogs     AuditLog[]
   createdAt     DateTime       @default(now())
@@ -327,6 +330,37 @@ enum ReviewDecision {
   SEND_TO_SEF
 }
 
+enum ScreeningEntityType {
+  CLIENT_COMPANY
+  SHAREHOLDER
+  UBO
+  MANAGER
+  MANUAL
+}
+
+enum ScreeningCheckType {
+  NCTC
+  UN
+  OFAC
+  EU
+  PPO_LIST
+  WORLD_CHECK
+  GOOGLE
+  OTHER
+}
+
+enum ScreeningResultStatus {
+  NOT_CHECKED
+  CLEAR
+  POTENTIAL_MATCH
+  CONFIRMED_MATCH
+}
+
+enum ScreeningRecordStatus {
+  DRAFT
+  COMPLETED
+}
+
 enum RiskOverrideReason {
   PEP_IDENTIFIED
   SANCTIONS_FINDING
@@ -432,6 +466,7 @@ model Client {
   contacts           ClientContact[]
   enquiries          Enquiry[]
   kycCases           KycCase[]
+  screeningRecords   ScreeningRecord[]
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
@@ -504,6 +539,7 @@ model KycCase {
   riskReclassifications RiskReclassification[]
   activationChecklist ClientActivationChecklist?
   kycGeneratedDocuments KycGeneratedDocument[]
+  screeningRecords  ScreeningRecord[]
   submittedToAmlAt  DateTime?
   amlReviewStartedAt DateTime?
   createdAt         DateTime               @default(now())
@@ -975,6 +1011,74 @@ model LegalDocument {
 
   @@index([tenantId])
   @@index([kycCaseId])
+}
+
+model ScreeningRecord {
+  id             String                @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId      String
+  kycCase        KycCase               @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  clientId       String?
+  client         Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  entityType     ScreeningEntityType
+  entitySourceId String?
+  entityName     String
+  identifier     String?
+  country        String?
+  status         ScreeningRecordStatus @default(DRAFT)
+  remarks        String?
+  createdById    String?
+  updatedById    String?
+  checks         ScreeningCheck[]
+  documents      ScreeningDocument[]
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([clientId])
+  @@index([status])
+}
+
+model ScreeningCheck {
+  id                String                @id @default(uuid())
+  tenantId          String
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  screeningRecordId String
+  screeningRecord   ScreeningRecord       @relation(fields: [screeningRecordId], references: [id], onDelete: Cascade)
+  checkType         ScreeningCheckType
+  resultStatus      ScreeningResultStatus @default(NOT_CHECKED)
+  notes             String?
+  documents         ScreeningDocument[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@unique([screeningRecordId, checkType])
+  @@index([tenantId])
+  @@index([screeningRecordId])
+}
+
+model ScreeningDocument {
+  id                String           @id @default(uuid())
+  tenantId          String
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  screeningRecordId String
+  screeningRecord   ScreeningRecord  @relation(fields: [screeningRecordId], references: [id], onDelete: Cascade)
+  screeningCheckId  String?
+  screeningCheck    ScreeningCheck?  @relation(fields: [screeningCheckId], references: [id], onDelete: SetNull)
+  documentType      String
+  fileName          String
+  storagePath       String?
+  mimeType          String?
+  size              Int?
+  uploadedById      String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([tenantId])
+  @@index([screeningRecordId])
+  @@index([screeningCheckId])
 }
 
 model WorkflowComment {

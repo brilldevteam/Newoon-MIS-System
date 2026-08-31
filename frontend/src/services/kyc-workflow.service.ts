@@ -79,6 +79,81 @@ export type LegalDocument = {
   createdAt: string;
 };
 
+export type ScreeningEntityType = 'CLIENT_COMPANY' | 'SHAREHOLDER' | 'UBO' | 'MANAGER' | 'MANUAL';
+
+export type ScreeningCheckType = 'NCTC' | 'UN' | 'OFAC' | 'EU' | 'PPO_LIST' | 'WORLD_CHECK' | 'GOOGLE' | 'OTHER';
+
+export type ScreeningResultStatus = 'NOT_CHECKED' | 'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH';
+
+export type ScreeningRecordStatus = 'DRAFT' | 'COMPLETED';
+
+export type ScreeningDocument = {
+  id: string;
+  documentType: string;
+  fileName: string;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  createdAt: string;
+};
+
+export type ScreeningCheck = {
+  id: string;
+  checkType: ScreeningCheckType;
+  resultStatus: ScreeningResultStatus;
+  notes?: string | null;
+  documents: ScreeningDocument[];
+};
+
+export type ScreeningRecord = {
+  id: string;
+  entityType: ScreeningEntityType;
+  entitySourceId?: string | null;
+  entityName: string;
+  identifier?: string | null;
+  country?: string | null;
+  status: ScreeningRecordStatus;
+  remarks?: string | null;
+  checks: ScreeningCheck[];
+  documents: ScreeningDocument[];
+  createdAt: string;
+};
+
+export type ScreeningListItem = ScreeningRecord & {
+  kycCase: Pick<KycCase, 'id' | 'title' | 'status' | 'createdAt'> & {
+    client: Pick<Client, 'id' | 'name' | 'registrationNumber' | 'country'>;
+    service?: ClientService | null;
+  };
+  completedChecks: number;
+  totalChecks: number;
+  documentCount: number;
+};
+
+export type ScreeningEntityOption = {
+  sourceId: string;
+  entityType: ScreeningEntityType;
+  name: string;
+  identifier?: string | null;
+  country?: string | null;
+  role: string;
+  linkedClientId?: string | null;
+};
+
+export type ScreeningContext = {
+  clientInfo: {
+    caseId: string;
+    caseTitle: string;
+    clientId: string;
+    clientName: string;
+    clientCode?: string | null;
+    crNumber?: string | null;
+    serviceName?: string | null;
+  };
+  entities: ScreeningEntityOption[];
+  mandatoryChecks: ScreeningCheckType[];
+  records: ScreeningRecord[];
+};
+
 export type WorkflowComment = {
   id: string;
   body: string;
@@ -470,6 +545,70 @@ export async function viewLegalDocument(caseId: string, document: LegalDocument)
 
 export function deleteLegalDocument(caseId: string, documentId: string) {
   return api.delete<KycCase>(`/kyc/${caseId}/legal-documents/${documentId}`).then((response) => response.data);
+}
+
+export function getScreeningContext(caseId: string) {
+  return api.get<ScreeningContext>(`/kyc/${caseId}/screening/context`).then((response) => response.data);
+}
+
+export function listScreeningRecords() {
+  return api.get<ScreeningListItem[]>('/screening').then((response) => response.data);
+}
+
+export function createScreeningRecord(caseId: string, payload: Record<string, any>) {
+  return api.post<ScreeningContext>(`/kyc/${caseId}/screening/records`, payload).then((response) => response.data);
+}
+
+export function updateScreeningRecord(caseId: string, recordId: string, payload: Record<string, any>) {
+  return api.patch<ScreeningContext>(`/kyc/${caseId}/screening/records/${recordId}`, payload).then((response) => response.data);
+}
+
+export function completeScreeningRecord(caseId: string, recordId: string) {
+  return api.post<ScreeningContext>(`/kyc/${caseId}/screening/records/${recordId}/complete`).then((response) => response.data);
+}
+
+export function uploadScreeningDocuments(
+  caseId: string,
+  recordId: string,
+  payload: { checkType: ScreeningCheckType; documentType?: string; files: File[] }
+) {
+  const data = new FormData();
+  data.append('checkType', payload.checkType);
+  if (payload.documentType) data.append('documentType', payload.documentType);
+  payload.files.forEach((file) => data.append('files', file));
+
+  return api
+    .post<ScreeningContext>(`/kyc/${caseId}/screening/records/${recordId}/documents/upload`, data, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    .then((response) => response.data);
+}
+
+export async function viewScreeningDocument(caseId: string, document: ScreeningDocument) {
+  const response = await api.get(`/kyc/${caseId}/screening/documents/${document.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
+  const url = window.URL.createObjectURL(blob);
+  const canPreview = blob.type.toLowerCase().startsWith('image/') || blob.type.toLowerCase() === 'application/pdf' || blob.type.toLowerCase().startsWith('text/');
+
+  if (canPreview) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+
+  const link = window.document.createElement('a');
+  link.href = url;
+  link.download = document.fileName;
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export function deleteScreeningDocument(caseId: string, documentId: string) {
+  return api.delete<ScreeningContext>(`/kyc/${caseId}/screening/documents/${documentId}`).then((response) => response.data);
 }
 
 export function submitToAml(id: string) {
