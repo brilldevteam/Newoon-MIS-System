@@ -43,6 +43,44 @@ export class ScreeningController {
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Delete('records/:recordId')
+  deleteRecord(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string, @Param('recordId') recordId: string) {
+    return this.screeningService.deleteRecord(user, kycCaseId, recordId);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post('merged-documents/upload')
+  @UseInterceptors(FilesInterceptor('files', 20))
+  uploadMergedDocuments(
+    @CurrentUser() user: RequestUser,
+    @Param('kycCaseId') kycCaseId: string,
+    @Body() dto: Record<string, unknown>,
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size?: number; buffer: Buffer }>
+  ) {
+    return this.screeningService.uploadMergedDocuments(user, kycCaseId, dto, files || []);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get('merged-documents/:documentId/view')
+  async viewMergedDocument(
+    @CurrentUser() user: RequestUser,
+    @Param('kycCaseId') kycCaseId: string,
+    @Param('documentId') documentId: string,
+    @Res() response: Response
+  ) {
+    const document = await this.screeningService.getMergedDocumentFile(user, kycCaseId, documentId);
+    response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.fileName)}"`);
+    response.send(document.content);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Delete('merged-documents/:documentId')
+  deleteMergedDocument(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string, @Param('documentId') documentId: string) {
+    return this.screeningService.deleteMergedDocument(user, kycCaseId, documentId);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post('records/:recordId/documents/upload')
   @UseInterceptors(FilesInterceptor('files', 20))
   uploadDocuments(

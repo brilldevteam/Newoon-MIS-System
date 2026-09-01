@@ -85,11 +85,14 @@ export type ScreeningCheckType = 'NCTC' | 'UN' | 'OFAC' | 'EU' | 'PPO_LIST' | 'W
 
 export type ScreeningResultStatus = 'NOT_CHECKED' | 'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH';
 
+export type ScreeningConclusionStatus = 'CLEAR' | 'NOT_CLEAR' | 'NO_SANCTION_FOUND' | 'SANCTION_FOUND';
+
 export type ScreeningRecordStatus = 'DRAFT' | 'COMPLETED';
 
 export type ScreeningDocument = {
   id: string;
   documentType: string;
+  checkType?: ScreeningCheckType;
   fileName: string;
   storagePath?: string | null;
   mimeType?: string | null;
@@ -113,6 +116,7 @@ export type ScreeningRecord = {
   identifier?: string | null;
   country?: string | null;
   status: ScreeningRecordStatus;
+  conclusionStatus?: ScreeningConclusionStatus | null;
   remarks?: string | null;
   checks: ScreeningCheck[];
   documents: ScreeningDocument[];
@@ -151,6 +155,9 @@ export type ScreeningContext = {
   };
   entities: ScreeningEntityOption[];
   mandatoryChecks: ScreeningCheckType[];
+  mergedEvidenceChecks: ScreeningCheckType[];
+  individualEvidenceChecks: ScreeningCheckType[];
+  mergedDocuments: ScreeningDocument[];
   records: ScreeningRecord[];
 };
 
@@ -567,6 +574,22 @@ export function completeScreeningRecord(caseId: string, recordId: string) {
   return api.post<ScreeningContext>(`/kyc/${caseId}/screening/records/${recordId}/complete`).then((response) => response.data);
 }
 
+export function deleteScreeningRecord(caseId: string, recordId: string) {
+  return api.delete<ScreeningContext>(`/kyc/${caseId}/screening/records/${recordId}`).then((response) => response.data);
+}
+
+export function uploadMergedScreeningDocuments(caseId: string, payload: { checkType: ScreeningCheckType; files: File[] }) {
+  const data = new FormData();
+  data.append('checkType', payload.checkType);
+  payload.files.forEach((file) => data.append('files', file));
+
+  return api
+    .post<ScreeningContext>(`/kyc/${caseId}/screening/merged-documents/upload`, data, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    .then((response) => response.data);
+}
+
 export function uploadScreeningDocuments(
   caseId: string,
   recordId: string,
@@ -582,6 +605,16 @@ export function uploadScreeningDocuments(
       headers: { 'Content-Type': 'multipart/form-data' }
     })
     .then((response) => response.data);
+}
+
+export async function viewMergedScreeningDocument(caseId: string, document: ScreeningDocument) {
+  const response = await api.get(`/kyc/${caseId}/screening/merged-documents/${document.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/pdf' });
+  const url = window.URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
 }
 
 export async function viewScreeningDocument(caseId: string, document: ScreeningDocument) {
@@ -609,6 +642,10 @@ export async function viewScreeningDocument(caseId: string, document: ScreeningD
 
 export function deleteScreeningDocument(caseId: string, documentId: string) {
   return api.delete<ScreeningContext>(`/kyc/${caseId}/screening/documents/${documentId}`).then((response) => response.data);
+}
+
+export function deleteMergedScreeningDocument(caseId: string, documentId: string) {
+  return api.delete<ScreeningContext>(`/kyc/${caseId}/screening/merged-documents/${documentId}`).then((response) => response.data);
 }
 
 export function submitToAml(id: string) {
