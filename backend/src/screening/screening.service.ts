@@ -87,10 +87,8 @@ export class ScreeningService {
       },
       orderBy: { createdAt: 'desc' }
     });
-    const mergedDocuments = await this.prisma.screeningCaseDocument.findMany({
-      where: { kycCaseId, ...this.caseDocumentTenantWhere(user) },
-      orderBy: [{ checkType: 'asc' }, { createdAt: 'desc' }]
-    });
+    const mergedChecks = await this.ensureMergedCaseChecks(kycCase.tenantId, kycCaseId);
+    const mergedDocuments = mergedChecks.flatMap((check) => check.documents);
 
     return {
       clientInfo: this.clientInfo(kycCase, sections.sectionA),
@@ -98,9 +96,35 @@ export class ScreeningService {
       mandatoryChecks: MANDATORY_CHECKS,
       mergedEvidenceChecks: MERGED_EVIDENCE_CHECKS,
       individualEvidenceChecks: INDIVIDUAL_EVIDENCE_CHECKS,
+      mergedChecks,
       mergedDocuments,
       records
     };
+  }
+
+  async updateMergedCheck(user: RequestUser, kycCaseId: string, checkTypeValue: string, dto: JsonRecord) {
+    const kycCase = await this.findCase(user, kycCaseId);
+    const checkType = this.enumValue(ScreeningCheckType, checkTypeValue);
+    const resultStatus = this.enumValue(ScreeningResultStatus, dto.resultStatus);
+    if (!checkType || !MERGED_EVIDENCE_CHECKS.includes(checkType)) {
+      throw new BadRequestException('Select NCTC, UN, OFAC, EU, or PPO List for screening result.');
+    }
+    if (!resultStatus) {
+      throw new BadRequestException('Select a valid screening result.');
+    }
+
+    await this.prisma.screeningCaseCheck.upsert({
+      where: { kycCaseId_checkType: { kycCaseId, checkType } },
+      create: {
+        tenantId: kycCase.tenantId,
+        kycCaseId,
+        checkType,
+        resultStatus
+      },
+      update: { resultStatus }
+    });
+
+    return this.getContext(user, kycCaseId);
   }
 
   async createRecord(user: RequestUser, kycCaseId: string, dto: JsonRecord) {
@@ -194,14 +218,19 @@ export class ScreeningService {
     const mergedDocuments = await this.prisma.screeningCaseDocument.findMany({
       where: { kycCaseId, ...this.caseDocumentTenantWhere(user) }
     });
+    const mergedChecks = await this.ensureMergedCaseChecks(record.tenantId, kycCaseId);
     const missingMergedEvidence = MERGED_EVIDENCE_CHECKS.filter(
       (checkType) => !mergedDocuments.some((document) => document.checkType === checkType)
     );
+    const missingMergedResults = MERGED_EVIDENCE_CHECKS.filter((checkType) => {
+      const check = mergedChecks.find((item) => item.checkType === checkType);
+      return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED;
+    });
     const missingIndividualEvidence = INDIVIDUAL_EVIDENCE_CHECKS.filter((checkType) => {
       const check = record.checks.find((item) => item.checkType === checkType);
       return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED || check.documents.length === 0;
     });
-    const missingResults = MANDATORY_CHECKS.filter((checkType) => {
+    const missingIndividualResults = INDIVIDUAL_EVIDENCE_CHECKS.filter((checkType) => {
       const check = record.checks.find((item) => item.checkType === checkType);
       return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED;
     });
@@ -211,15 +240,19 @@ export class ScreeningService {
     }
 
     if (!record.conclusionStatus) {
-      throw new BadRequestException('Select the screening conclusion before finalizing.');
+      throw new BadRequestException('Select the individual screening result before finalizing.');
     }
 
     if (missingMergedEvidence.length) {
       throw new BadRequestException(`Upload merged PDF evidence for: ${missingMergedEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
     }
 
-    if (missingResults.length) {
-      throw new BadRequestException(`Select result status for: ${missingResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMergedResults.length) {
+      throw new BadRequestException(`Select merged screening result for: ${missingMergedResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    }
+
+    if (missingIndividualResults.length) {
+      throw new BadRequestException(`Select individual screening result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
     }
 
     if (missingIndividualEvidence.length) {
@@ -270,6 +303,16 @@ export class ScreeningService {
     const root = this.screeningUploadRoot();
     const folder = join(root, kycCase.tenantId, kycCaseId, 'merged');
     mkdirSync(folder, { recursive: true });
+    const caseCheck = await this.prisma.screeningCaseCheck.upsert({
+      where: { kycCaseId_checkType: { kycCaseId, checkType } },
+      create: {
+        tenantId: kycCase.tenantId,
+        kycCaseId,
+        checkType,
+        resultStatus: ScreeningResultStatus.NOT_CHECKED
+      },
+      update: {}
+    });
 
     for (const [index, file] of files.entries()) {
       const fileName = this.safeFileName(file.originalname);
@@ -279,6 +322,7 @@ export class ScreeningService {
         data: {
           tenantId: kycCase.tenantId,
           kycCaseId,
+          screeningCaseCheckId: caseCheck.id,
           checkType,
           documentType: `${this.checkLabel(checkType)} merged PDF evidence`,
           fileName,
@@ -556,6 +600,36 @@ export class ScreeningService {
     const fingerprint = `${entity.entityType}:${entity.name.toLowerCase()}:${(entity.identifier || '').toLowerCase()}`;
     const exists = entities.some((item) => `${item.entityType}:${item.name.toLowerCase()}:${(item.identifier || '').toLowerCase()}` === fingerprint);
     if (!exists) entities.push(entity);
+  }
+
+  private async ensureMergedCaseChecks(tenantId: string, kycCaseId: string) {
+    const existingChecks = await this.prisma.screeningCaseCheck.findMany({
+      where: { kycCaseId, checkType: { in: MERGED_EVIDENCE_CHECKS } },
+      include: { documents: { orderBy: { createdAt: 'desc' } } },
+      orderBy: { checkType: 'asc' }
+    });
+    const existingTypes = new Set(existingChecks.map((check) => check.checkType));
+    const missingTypes = MERGED_EVIDENCE_CHECKS.filter((checkType) => !existingTypes.has(checkType));
+
+    if (missingTypes.length) {
+      await this.prisma.screeningCaseCheck.createMany({
+        data: missingTypes.map((checkType) => ({
+          tenantId,
+          kycCaseId,
+          checkType,
+          resultStatus: ScreeningResultStatus.NOT_CHECKED
+        })),
+        skipDuplicates: true
+      });
+
+      return this.prisma.screeningCaseCheck.findMany({
+        where: { kycCaseId, checkType: { in: MERGED_EVIDENCE_CHECKS } },
+        include: { documents: { orderBy: { createdAt: 'desc' } } },
+        orderBy: { checkType: 'asc' }
+      });
+    }
+
+    return existingChecks;
   }
 
   private checkLabel(checkType: ScreeningCheckType) {

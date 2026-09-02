@@ -61,6 +61,17 @@ export class ScreeningController {
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Patch('merged-checks/:checkType')
+  updateMergedCheck(
+    @CurrentUser() user: RequestUser,
+    @Param('kycCaseId') kycCaseId: string,
+    @Param('checkType') checkType: string,
+    @Body() dto: Record<string, unknown>
+  ) {
+    return this.screeningService.updateMergedCheck(user, kycCaseId, checkType, dto);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('merged-documents/:documentId/view')
   async viewMergedDocument(
     @CurrentUser() user: RequestUser,

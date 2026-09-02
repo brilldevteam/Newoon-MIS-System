@@ -108,6 +108,13 @@ export type ScreeningCheck = {
   documents: ScreeningDocument[];
 };
 
+export type ScreeningCaseCheck = {
+  id: string;
+  checkType: ScreeningCheckType;
+  resultStatus: ScreeningResultStatus;
+  documents: ScreeningDocument[];
+};
+
 export type ScreeningRecord = {
   id: string;
   entityType: ScreeningEntityType;
@@ -157,6 +164,7 @@ export type ScreeningContext = {
   mandatoryChecks: ScreeningCheckType[];
   mergedEvidenceChecks: ScreeningCheckType[];
   individualEvidenceChecks: ScreeningCheckType[];
+  mergedChecks: ScreeningCaseCheck[];
   mergedDocuments: ScreeningDocument[];
   records: ScreeningRecord[];
 };
@@ -588,6 +596,10 @@ export function uploadMergedScreeningDocuments(caseId: string, payload: { checkT
       headers: { 'Content-Type': 'multipart/form-data' }
     })
     .then((response) => response.data);
+}
+
+export function updateMergedScreeningCheck(caseId: string, checkType: ScreeningCheckType, payload: { resultStatus: ScreeningResultStatus }) {
+  return api.patch<ScreeningContext>(`/kyc/${caseId}/screening/merged-checks/${checkType}`, payload).then((response) => response.data);
 }
 
 export function uploadScreeningDocuments(

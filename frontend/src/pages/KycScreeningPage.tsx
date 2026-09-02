@@ -18,6 +18,7 @@ import {
   ScreeningRecord,
   ScreeningResultStatus,
   updateScreeningRecord,
+  updateMergedScreeningCheck,
   uploadMergedScreeningDocuments,
   uploadScreeningDocuments,
   viewMergedScreeningDocument,
@@ -157,6 +158,11 @@ export function KycScreeningPage() {
     });
     return groups;
   }, [context?.mergedDocuments]);
+  const mergedChecksByType = useMemo(() => {
+    const groups = new Map<ScreeningCheckType, ScreeningResultStatus>();
+    context?.mergedChecks.forEach((check) => groups.set(check.checkType, check.resultStatus));
+    return groups;
+  }, [context?.mergedChecks]);
   const hasRequiredMergedEvidence = useMemo(
     () => Boolean(context?.mergedEvidenceChecks.every((checkType) => (mergedDocumentsByCheck.get(checkType) || []).length > 0)),
     [context?.mergedEvidenceChecks, mergedDocumentsByCheck]
@@ -338,6 +344,21 @@ export function KycScreeningPage() {
     }
   }
 
+  async function updateMergedResult(checkType: ScreeningCheckType, resultStatus: ScreeningResultStatus) {
+    if (!id) return;
+    setError('');
+    setMessage('');
+    setBusyKey(`result-merged-${checkType}`);
+    try {
+      setContext(await updateMergedScreeningCheck(id, checkType, { resultStatus }));
+      setMessage('Screening PDF result saved.');
+    } catch (requestError: any) {
+      setError(errorMessage(requestError, 'Unable to save screening PDF result.'));
+    } finally {
+      setBusyKey('');
+    }
+  }
+
   function toggleRecord(recordId: string) {
     setExpandedRecordIds((current) => {
       const next = new Set(current);
@@ -440,7 +461,7 @@ export function KycScreeningPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-950">Merged Screening PDF Files</h2>
+          <h2 className="text-base font-semibold text-slate-950">Screening PDF Files</h2>
           <p className="mt-1 text-sm text-slate-500">Upload combined evidence for the common screening lists before finalizing individual screening records.</p>
         </div>
         <div className="grid gap-3 p-5 xl:grid-cols-5">
@@ -454,6 +475,21 @@ export function KycScreeningPage() {
                     {documents.length ? `${documents.length} attached` : 'Required'}
                   </span>
                 </div>
+                <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Result
+                  <select
+                    value={mergedChecksByType.get(checkType) || 'NOT_CHECKED'}
+                    onChange={(event) => updateMergedResult(checkType, event.target.value as ScreeningResultStatus)}
+                    disabled={busyKey === `result-merged-${checkType}`}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-700"
+                  >
+                    {resultOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="mt-3 inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                   <Upload className={`h-4 w-4 ${busyKey === `upload-merged-${checkType}` ? 'animate-pulse' : ''}`} />
                   Upload PDF
@@ -575,7 +611,7 @@ export function KycScreeningPage() {
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
                         {requiredIndividualEvidenceCount}/{context.individualEvidenceChecks.length} individual PDFs
                       </span>
-                      {record.conclusionStatus ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Conclusion set</span> : null}
+                      {record.conclusionStatus ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Result set</span> : null}
                       {record.status === 'COMPLETED' ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -638,7 +674,7 @@ export function KycScreeningPage() {
                       <input value={record.country || ''} onChange={(event) => updateRecordLocally(record.id, { country: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                     </label>
                     <label className="text-sm font-medium text-slate-700">
-                      Conclusion <span className="text-red-600">*</span>
+                      Result <span className="text-red-600">*</span>
                       <select
                         value={record.conclusionStatus || ''}
                         onChange={(event) => updateRecordLocally(record.id, { conclusionStatus: event.target.value as ScreeningConclusionStatus })}
