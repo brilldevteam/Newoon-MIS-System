@@ -4,6 +4,8 @@ import { AccessDeniedPage } from '../pages/AccessDeniedPage';
 import { ClientDetailsPage } from '../pages/ClientDetailsPage';
 import { ClientListPage } from '../pages/ClientListPage';
 import { CreateKycCasePage } from '../pages/CreateKycCasePage';
+import { CrrfListPage } from '../pages/CrrfListPage';
+import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
@@ -105,6 +107,13 @@ export const router = createBrowserRouter([
             children: [
               { path: '/screening', element: <ScreeningListPage /> },
               { path: '/kyc/:id/screening', element: <KycScreeningPage /> }
+            ]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.crrf} />,
+            children: [
+              { path: '/crrf', element: <CrrfListPage /> },
+              { path: '/kyc/:id/crrf', element: <CrrfWorkspacePage /> }
             ]
           },
           {

@@ -63,6 +63,8 @@ model Tenant {
   screeningCaseDocuments ScreeningCaseDocument[]
   screeningChecks ScreeningCheck[]
   screeningDocuments ScreeningDocument[]
+  crrfRecords CrrfRecord[]
+  crrfDocuments CrrfDocument[]
   statusHistory KycCaseStatusHistory[]
   auditLogs     AuditLog[]
   createdAt     DateTime       @default(now())
@@ -288,6 +290,12 @@ enum KycGeneratedDocumentType {
 }
 
 enum RiskClassification {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum CrrfRiskRating {
   LOW
   MEDIUM
   HIGH
@@ -551,6 +559,7 @@ model KycCase {
   screeningRecords  ScreeningRecord[]
   screeningCaseChecks ScreeningCaseCheck[]
   screeningCaseDocuments ScreeningCaseDocument[]
+  crrfRecord       CrrfRecord?
   submittedToAmlAt  DateTime?
   amlReviewStartedAt DateTime?
   createdAt         DateTime               @default(now())
@@ -1132,6 +1141,44 @@ model ScreeningDocument {
   @@index([tenantId])
   @@index([screeningRecordId])
   @@index([screeningCheckId])
+}
+
+model CrrfRecord {
+  id           String         @id @default(uuid())
+  tenantId     String
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String         @unique
+  kycCase      KycCase        @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  riskRating   CrrfRiskRating?
+  dmlroComment String?
+  mlroComment  String?
+  createdById  String?
+  updatedById  String?
+  documents    CrrfDocument[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([riskRating])
+}
+
+model CrrfDocument {
+  id           String     @id @default(uuid())
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  crrfRecordId String
+  crrfRecord   CrrfRecord @relation(fields: [crrfRecordId], references: [id], onDelete: Cascade)
+  fileName     String
+  storagePath  String?
+  mimeType     String?
+  size         Int?
+  uploadedById String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([tenantId])
+  @@index([crrfRecordId])
 }
 
 model WorkflowComment {
