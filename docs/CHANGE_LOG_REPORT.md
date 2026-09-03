@@ -40,6 +40,42 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-09-03 - CRRF Internal Comments and Client Info Fallback
+
+Module:
+- CRRF workflow
+- CRRF reporting
+
+Summary:
+- Replaced separate DMLRO and MLRO comment entry in CRRF with one internal Comments field.
+- Kept CRRF comments visible and editable inside the system for internal reference.
+- Removed internal CRRF comments from Excel and PDF CRRF exports.
+- Improved CRRF Client Name, Client Code, CR Number, and Country display by reading linked KYC Section A data when the Client record does not contain those values.
+
+Changed Files:
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20260903100000_update_crrf_internal_comments/migration.sql`
+- `backend/src/crrf/crrf.service.ts`
+- `frontend/src/pages/CrrfListPage.tsx`
+- `frontend/src/pages/CrrfWorkspacePage.tsx`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- Added `CrrfRecord.internalComment`.
+- Migration: `20260903100000_update_crrf_internal_comments`
+
+Verification:
+- `node node_modules/prisma/build/index.js generate --schema backend/prisma/schema.prisma` passed.
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/crrf-workspace-reporting`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Run Prisma migration deploy and regenerate Prisma client before build.
+
 ## 2026-09-02 - CRRF Workspace, Uploads, and Export
 
 Module:
@@ -900,6 +936,8 @@ Deployment Notes:
 - `20260827110000_add_screening_module`
 - `20260901100000_add_screening_conclusion_and_case_documents`
 - `20260902100000_add_screening_case_results`
+- `20260902120000_add_crrf_module`
+- `20260903100000_update_crrf_internal_comments`
 
 ## Current Server Deployment Command Pattern
 

@@ -62,7 +62,7 @@ export function CrrfListPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-slate-950">CRRF</h1>
-        <p className="mt-1 text-sm text-slate-500">All client risk rating records, compliance comments, and uploaded CRRF files.</p>
+        <p className="mt-1 text-sm text-slate-500">All client risk rating records and uploaded CRRF files.</p>
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}

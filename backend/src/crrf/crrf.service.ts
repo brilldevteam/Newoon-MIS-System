@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { CrrfRiskRating, Prisma } from '@prisma/client';
+import { CrrfRiskRating, KycFormSectionKey, Prisma } from '@prisma/client';
 import PDFDocument from 'pdfkit';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
@@ -17,7 +17,13 @@ export class CrrfService {
       where: this.recordTenantWhere(user),
       include: {
         documents: { orderBy: { createdAt: 'desc' } },
-        kycCase: { include: { client: true, service: true } }
+        kycCase: {
+          include: {
+            client: true,
+            service: true,
+            kycSectionData: { where: { sectionKey: KycFormSectionKey.GENERAL_COMPANY } }
+          }
+        }
       },
       orderBy: { updatedAt: 'desc' }
     });
@@ -50,8 +56,7 @@ export class CrrfService {
       where: { id: record.id },
       data: {
         riskRating,
-        dmlroComment: this.stringValue(dto.dmlroComment),
-        mlroComment: this.stringValue(dto.mlroComment),
+        internalComment: this.internalCommentValue(dto),
         updatedById: user.id
       }
     });
@@ -143,8 +148,6 @@ export class CrrfService {
       ['Client Code', workspace.clientInfo.clientCode || '-'],
       ['CR Number', workspace.clientInfo.crNumber || '-'],
       ['Risk Rating', record.riskRating || '-'],
-      ['DMLRO Comment', record.dmlroComment || '-'],
-      ['MLRO Comment', record.mlroComment || '-'],
       ['Uploaded Documents', record.documents.map((document) => document.fileName).join(', ') || '-']
     ];
     const tableRows = rows.map(([label, value]) => `<tr><th>${this.escapeHtml(label)}</th><td>${this.escapeHtml(value)}</td></tr>`).join('');
@@ -173,11 +176,6 @@ export class CrrfService {
     this.pdfRow(document, 'CR Number', workspace.clientInfo.crNumber || '-');
     this.pdfRow(document, 'Risk Rating', record.riskRating || '-');
     document.moveDown();
-    document.fontSize(13).text('Compliance Officer Comments', { underline: true });
-    document.moveDown(0.5);
-    this.pdfRow(document, 'DMLRO Comment', record.dmlroComment || '-');
-    this.pdfRow(document, 'MLRO Comment', record.mlroComment || '-');
-    document.moveDown();
     document.fontSize(13).text('Uploaded Documents', { underline: true });
     document.moveDown(0.5);
     if (record.documents.length) {
@@ -197,7 +195,11 @@ export class CrrfService {
   private async findCase(user: RequestUser, kycCaseId: string) {
     const kycCase = await this.prisma.kycCase.findFirst({
       where: { id: kycCaseId, ...this.caseTenantWhere(user) },
-      include: { client: true, service: true }
+      include: {
+        client: true,
+        service: true,
+        kycSectionData: { where: { sectionKey: KycFormSectionKey.GENERAL_COMPANY } }
+      }
     });
     if (!kycCase) throw new NotFoundException('KYC case not found.');
     return kycCase;
@@ -221,17 +223,24 @@ export class CrrfService {
     });
   }
 
-  private clientInfo(kycCase: { id: string; title: string; client: { id: string; name: string; registrationNumber?: string | null; country?: string | null }; service?: { name: string } | null }) {
+  private clientInfo(kycCase: Awaited<ReturnType<CrrfService['findCase']>>) {
+    const sectionA = this.generalCompanySection(kycCase);
+    const crNumber = this.stringValue(sectionA.commercialRegistrationNo) || kycCase.client.registrationNumber || null;
     return {
       caseId: kycCase.id,
       caseTitle: kycCase.title,
       clientId: kycCase.client.id,
-      clientName: kycCase.client.name,
-      clientCode: kycCase.client.registrationNumber || kycCase.client.id,
-      crNumber: kycCase.client.registrationNumber || null,
-      country: kycCase.client.country || null,
+      clientName: this.stringValue(sectionA.legalName) || this.stringValue(sectionA.legalNameOfCompany) || kycCase.client.name,
+      clientCode: this.stringValue(sectionA.clientCode) || kycCase.client.registrationNumber || crNumber || kycCase.client.id,
+      crNumber,
+      country: this.stringValue(sectionA.countryOfIncorporation) || kycCase.client.country || null,
       serviceName: kycCase.service?.name || null
     };
+  }
+
+  private generalCompanySection(kycCase: Awaited<ReturnType<CrrfService['findCase']>>) {
+    const data = kycCase.kycSectionData[0]?.data;
+    return this.isRecord(data) ? data : {};
   }
 
   private pdfRow(document: PDFKit.PDFDocument, label: string, value: string) {
@@ -328,5 +337,15 @@ export class CrrfService {
 
   private stringValue(value: unknown) {
     return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private internalCommentValue(dto: JsonRecord) {
+    const internalComment = this.stringValue(dto.internalComment);
+    if (internalComment !== null) return internalComment;
+    return [this.stringValue(dto.dmlroComment), this.stringValue(dto.mlroComment)].filter(Boolean).join('\n\n') || null;
+  }
+
+  private isRecord(value: unknown): value is JsonRecord {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   }
 }

@@ -48,8 +48,7 @@ export function CrrfWorkspacePage() {
       setWorkspace(
         await saveCrrfWorkspace(id, {
           riskRating: workspace.record.riskRating || '',
-          dmlroComment: workspace.record.dmlroComment || '',
-          mlroComment: workspace.record.mlroComment || ''
+          internalComment: workspace.record.internalComment || ''
         })
       );
       setMessage('CRRF record saved.');
@@ -122,7 +121,7 @@ export function CrrfWorkspacePage() {
             Back to case
           </Link>
           <h1 className="mt-3 text-2xl font-semibold text-slate-950">CRRF Workspace</h1>
-          <p className="mt-1 text-sm text-slate-500">Capture client risk rating, compliance comments, supporting CRRF files, and exportable report data.</p>
+          <p className="mt-1 text-sm text-slate-500">Capture client risk rating, internal comments, supporting CRRF files, and exportable report data.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -157,7 +156,7 @@ export function CrrfWorkspacePage() {
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-950">Risk Rating and Compliance Comments</h2>
+          <h2 className="text-base font-semibold text-slate-950">Risk Rating and Internal Comments</h2>
           <p className="mt-1 text-sm text-slate-500">Risk rating is mandatory before saving the CRRF record.</p>
         </div>
         <div className="space-y-4 p-5">
@@ -176,10 +175,12 @@ export function CrrfWorkspacePage() {
               ))}
             </select>
           </label>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <CommentField label="DMLRO comment" value={workspace.record.dmlroComment || ''} onChange={(value) => patchRecord({ dmlroComment: value })} />
-            <CommentField label="MLRO comment" value={workspace.record.mlroComment || ''} onChange={(value) => patchRecord({ mlroComment: value })} />
-          </div>
+          <CommentField
+            label="Comments"
+            value={workspace.record.internalComment || ''}
+            onChange={(value) => patchRecord({ internalComment: value })}
+            helpText="Internal reference only. These comments are not included in CRRF Excel/PDF exports."
+          />
           <button
             type="button"
             onClick={save}
@@ -242,7 +243,17 @@ function InfoCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CommentField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function CommentField({
+  label,
+  value,
+  onChange,
+  helpText
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  helpText?: string;
+}) {
   return (
     <label className="block text-sm font-medium text-slate-700">
       {label}
@@ -252,6 +263,7 @@ function CommentField({ label, value, onChange }: { label: string; value: string
         rows={5}
         className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
       />
+      {helpText ? <span className="mt-1 block text-xs font-normal text-slate-500">{helpText}</span> : null}
     </label>
   );
 }

@@ -1150,6 +1150,7 @@ model CrrfRecord {
   kycCaseId    String         @unique
   kycCase      KycCase        @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
   riskRating   CrrfRiskRating?
+  internalComment String?
   dmlroComment String?
   mlroComment  String?
   createdById  String?

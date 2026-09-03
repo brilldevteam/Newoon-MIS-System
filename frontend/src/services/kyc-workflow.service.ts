@@ -155,6 +155,7 @@ export type CrrfRecord = {
   id: string;
   kycCaseId: string;
   riskRating?: CrrfRiskRating | null;
+  internalComment?: string | null;
   dmlroComment?: string | null;
   mlroComment?: string | null;
   documents: CrrfDocument[];
@@ -713,7 +714,7 @@ export function getCrrfWorkspace(caseId: string) {
   return api.get<CrrfWorkspace>(`/kyc/${caseId}/crrf`).then((response) => response.data);
 }
 
-export function saveCrrfWorkspace(caseId: string, payload: { riskRating?: CrrfRiskRating | ''; dmlroComment?: string; mlroComment?: string }) {
+export function saveCrrfWorkspace(caseId: string, payload: { riskRating?: CrrfRiskRating | ''; internalComment?: string; dmlroComment?: string; mlroComment?: string }) {
   return api.patch<CrrfWorkspace>(`/kyc/${caseId}/crrf`, payload).then((response) => response.data);
 }
 
