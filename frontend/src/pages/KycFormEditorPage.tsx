@@ -1,5 +1,5 @@
-import { Check, ChevronDown, Download, FileText, Plus, Save, Search, Send, Trash2, Upload, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X } from 'lucide-react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
@@ -7,18 +7,25 @@ import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { useAuth } from '../hooks/useAuth';
 import {
   autoSaveKycForm,
+  CrrfWorkspace,
   downloadGeneratedKycDocument,
   decideMlroReview,
   decideSefReview,
   generateKycDocument,
+  getCrrfWorkspace,
   getKycCase,
   getKycForm,
+  getScreeningContext,
   KycCase,
   KycFormData,
   matchClientByIdentifier,
   saveKycFormSection,
+  ScreeningContext,
   submitDmlroReview,
-  uploadLegalDocumentFiles
+  uploadLegalDocumentFiles,
+  viewCrrfDocument,
+  viewMergedScreeningDocument,
+  viewScreeningDocument
 } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
@@ -591,6 +598,226 @@ function sefDecisionErrorMessage(decision: string) {
   if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit SEF management approval with conditions.';
   return 'Unable to submit SEF management decision.';
 }
+
+function ReviewPackageButton({
+  active = false,
+  onClick,
+  icon,
+  title,
+  description
+}: {
+  active?: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-[76px] items-center gap-3 rounded-lg border p-3 text-left transition ${
+        active ? 'border-slate-400 bg-white text-slate-950 shadow-sm ring-2 ring-slate-100' : 'border-slate-200 bg-slate-50/80 text-slate-800 hover:border-slate-300 hover:bg-white'
+      }`}
+    >
+      <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border ${active ? 'border-slate-200 bg-slate-50 text-slate-800' : 'border-slate-100 bg-white text-slate-600'}`}>
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold">{title}</span>
+        <span className="mt-1 block text-xs text-slate-500">{description}</span>
+      </span>
+    </button>
+  );
+}
+
+function ScreeningPackageDetails({ context, loading }: { context: ScreeningContext | null; loading: boolean }) {
+  if (loading) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Loading Screening details...</p>;
+  if (!context) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Select Screening to load the prepared records and evidence.</p>;
+
+  const mergedEvidenceCount = context.mergedDocuments.length;
+  const recordEvidenceCount = context.records.reduce(
+    (sum, record) => sum + record.documents.length + record.checks.reduce((checkSum, check) => checkSum + check.documents.length, 0),
+    0
+  );
+
+  return (
+    <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="grid gap-3 md:grid-cols-4">
+        <ReviewMetric label="Client" value={context.clientInfo.clientName || '-'} />
+        <ReviewMetric label="CR number" value={context.clientInfo.crNumber || '-'} />
+        <ReviewMetric label="Screening records" value={String(context.records.length)} />
+        <ReviewMetric label="PDF evidence" value={String(mergedEvidenceCount + recordEvidenceCount)} />
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="flex flex-col gap-1 border-b border-slate-200 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-950">Screening records and individual evidence</p>
+            <p className="text-xs text-slate-500">Review each screened entity, its result, notes, and uploaded supporting files.</p>
+          </div>
+        </div>
+        <div className="mt-3 space-y-3">
+          {context.records.length ? (
+            context.records.map((record) => {
+              const evidenceCount = record.documents.length + record.checks.reduce((sum, check) => sum + check.documents.length, 0);
+              const recordDocuments = record.documents.filter((document) => document.documentType !== 'Other screening document' || !document.checkType);
+              return (
+                <div key={record.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 p-4 pb-0">
+                      <p className="truncate text-base font-semibold text-slate-950">{record.entityName}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {record.entityType.replace(/_/g, ' ')} {record.identifier ? `| ${record.identifier}` : ''} {record.country ? `| ${record.country}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 p-4 pb-0 text-xs font-semibold">
+                      <span className={resultBadgeClass(record.conclusionStatus || '')}>{screeningResultLabels[record.conclusionStatus || ''] || 'No result selected'}</span>
+                      <span className="rounded-full bg-brand-50 px-3 py-1 text-brand-700">{evidenceCount} files</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">{record.status}</span>
+                    </div>
+                  </div>
+                  <div className="m-4 grid gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 lg:grid-cols-[1fr_1.2fr]">
+                    <div>
+                      <p className="text-xs font-semibold uppercase text-slate-500">Observations / internal remarks</p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{record.remarks || 'No remarks added.'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase text-slate-500">Other record evidence</p>
+                      <PackageDocumentList documents={recordDocuments} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
+                    </div>
+                  </div>
+                  <div className="grid gap-3 border-t border-slate-100 bg-white p-4 lg:grid-cols-2">
+                    {record.checks.map((check) => (
+                      <div key={check.id} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{screeningCheckLabels[check.checkType] || check.checkType}</p>
+                            <span className={`mt-2 inline-flex ${resultBadgeClass(check.resultStatus)}`}>{screeningResultLabels[check.resultStatus] || check.resultStatus}</span>
+                          </div>
+                          <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-600">{check.documents.length} files</span>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap rounded-md bg-white p-2 text-xs leading-5 text-slate-600">{check.notes || 'No finding notes added.'}</p>
+                        <PackageDocumentList documents={check.documents} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <p className="rounded-md border border-slate-100 bg-slate-50 px-4 py-4 text-sm text-slate-500">No individual Screening records added yet.</p>
+          )}
+        </div>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="border-b border-slate-200 pb-3">
+          <p className="text-sm font-semibold text-slate-950">Screening PDF files</p>
+          <p className="mt-1 text-xs text-slate-500">Common evidence files uploaded before finalizing individual screening records.</p>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {context.mergedEvidenceChecks.map((checkType) => {
+            const check = context.mergedChecks.find((item) => item.checkType === checkType);
+            const documents = context.mergedDocuments.filter((document) => document.checkType === checkType);
+            return (
+              <div key={checkType} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-900">{screeningCheckLabels[checkType] || checkType}</p>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{documents.length}</span>
+                </div>
+                <span className={`mt-2 inline-flex ${resultBadgeClass(check?.resultStatus || '')}`}>{screeningResultLabels[check?.resultStatus || ''] || 'Not checked'}</span>
+                <PackageDocumentList documents={documents} caseId={context.clientInfo.caseId} onView={viewMergedScreeningDocument} emptyText="No PDF evidence uploaded." />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CrrfPackageDetails({ workspace, loading }: { workspace: CrrfWorkspace | null; loading: boolean }) {
+  if (loading) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Loading CRRF details...</p>;
+  if (!workspace) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Select CRRF to load the risk rating and uploaded files.</p>;
+
+  return (
+    <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="grid gap-3 md:grid-cols-4">
+        <ReviewMetric label="Client" value={workspace.clientInfo.clientName || '-'} />
+        <ReviewMetric label="Client code" value={workspace.clientInfo.clientCode || '-'} />
+        <ReviewMetric label="CR number" value={workspace.clientInfo.crNumber || '-'} />
+        <ReviewMetric label="Risk rating" value={crrfRiskLabels[workspace.record.riskRating || ''] || 'Not selected'} />
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <p className="text-sm font-semibold text-slate-950">CRRF files</p>
+        {workspace.record.documents.length ? (
+          <PackageDocumentList documents={workspace.record.documents} caseId={workspace.clientInfo.caseId} onView={viewCrrfDocument} />
+        ) : (
+          <p className="mt-2 text-sm text-slate-500">No CRRF files uploaded yet.</p>
+        )}
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        <p className="text-sm font-semibold text-slate-950">Internal comments</p>
+        <p className="mt-2 whitespace-pre-wrap rounded-lg border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+          {workspace.record.internalComment || workspace.record.dmlroComment || workspace.record.mlroComment || 'No internal comments added.'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PackageDocumentList({
+  documents,
+  caseId,
+  onView,
+  emptyText = 'No files attached.'
+}: {
+  documents: Array<{ id: string; fileName: string; documentType?: string | null; mimeType?: string | null; size?: number | null }>;
+  caseId: string;
+  onView: (caseId: string, document: any) => void;
+  emptyText?: string;
+}) {
+  if (!documents.length) return <p className="mt-2 text-xs text-slate-500">{emptyText}</p>;
+
+  return (
+    <div className="mt-2 grid gap-2">
+      {documents.map((document) => (
+        <button
+          key={document.id}
+          type="button"
+          onClick={() => onView(caseId, document)}
+          className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-xs font-semibold text-slate-700 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-800"
+          title={`View ${document.fileName}`}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <FileText className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{document.fileName}</span>
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-1 text-brand-700">
+            <Eye className="h-3.5 w-3.5" />
+            View
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function resultBadgeClass(value: string) {
+  if (value === 'CLEAR' || value === 'NO_SANCTION_FOUND') return 'rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700';
+  if (value === 'POTENTIAL_MATCH') return 'rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700';
+  if (value === 'CONFIRMED_MATCH' || value === 'NOT_CLEAR' || value === 'SANCTION_FOUND') return 'rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700';
+  return 'rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600';
+}
+
+function ReviewMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
 const riskClassificationOptions = ['', 'LOW', 'MEDIUM', 'HIGH'];
 const riskReasonCategoryOptions = [
   '',
@@ -631,6 +858,34 @@ type SectionKey = (typeof sections)[number]['key'];
 type SectionDefinition = (typeof sections)[number];
 type Row = Record<string, any>;
 type SectionHMode = 'AML' | 'DMLRO' | 'MLRO' | 'SEF' | 'ALL';
+type ReviewPackageTab = 'kyc' | 'screening' | 'crrf';
+
+const screeningCheckLabels: Record<string, string> = {
+  NCTC: 'NCTC',
+  UN: 'UN',
+  OFAC: 'OFAC',
+  EU: 'EU',
+  PPO_LIST: 'PPO List',
+  WORLD_CHECK: 'World-Check',
+  GOOGLE: 'Google',
+  OTHER: 'Other'
+};
+
+const screeningResultLabels: Record<string, string> = {
+  NOT_CHECKED: 'Not checked',
+  CLEAR: 'Clear',
+  POTENTIAL_MATCH: 'Potential match',
+  CONFIRMED_MATCH: 'Confirmed match',
+  NOT_CLEAR: 'Not clear',
+  NO_SANCTION_FOUND: 'No sanction found',
+  SANCTION_FOUND: 'Sanction found'
+};
+
+const crrfRiskLabels: Record<string, string> = {
+  LOW: 'Low',
+  MEDIUM: 'Medium',
+  HIGH: 'High'
+};
 
 export function KycFormEditorPage() {
   const { id } = useParams();
@@ -642,6 +897,11 @@ export function KycFormEditorPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [activeReviewPackage, setActiveReviewPackage] = useState<ReviewPackageTab>('kyc');
+  const [screeningContext, setScreeningContext] = useState<ScreeningContext | null>(null);
+  const [crrfWorkspace, setCrrfWorkspace] = useState<CrrfWorkspace | null>(null);
+  const [reviewPackageError, setReviewPackageError] = useState('');
+  const [loadingReviewPackage, setLoadingReviewPackage] = useState<ReviewPackageTab | ''>('');
 
   useEffect(() => {
     if (!id) return;
@@ -778,6 +1038,29 @@ export function KycFormEditorPage() {
       setError(getApiErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function openReviewPackage(tab: ReviewPackageTab) {
+    if (!id) return;
+    setActiveReviewPackage(tab);
+    setReviewPackageError('');
+    if (tab === 'kyc') return;
+
+    if (tab === 'screening' && screeningContext) return;
+    if (tab === 'crrf' && crrfWorkspace) return;
+
+    setLoadingReviewPackage(tab);
+    try {
+      if (tab === 'screening') {
+        setScreeningContext(await getScreeningContext(id));
+      } else {
+        setCrrfWorkspace(await getCrrfWorkspace(id));
+      }
+    } catch (requestError: any) {
+      setReviewPackageError(getApiErrorMessage(requestError, `Unable to load ${tab === 'screening' ? 'Screening' : 'CRRF'} details.`));
+    } finally {
+      setLoadingReviewPackage('');
     }
   }
 
@@ -955,6 +1238,9 @@ export function KycFormEditorPage() {
   }
 
   const isApproved = approvedStatuses.includes(kycCase.status as (typeof approvedStatuses)[number]);
+  const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
+  const canOpenCrrf = hasAnyRole(user, workflowRoles.crrf);
+  const showReviewPackage = sectionHMode !== 'AML' || hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']);
   const dmlroDecision = form.sectionH?.dmlroDecision || 'APPROVE';
   const dmlroSubmitLabel = dmlroDecision === 'APPROVE' || dmlroDecision === 'APPROVE_WITH_CONDITIONS' ? 'Submit to MLRO' : 'Send to AML Supervisor';
   const mlroDecision = form.sectionH?.mlroDecision || 'APPROVE';
@@ -1015,14 +1301,60 @@ export function KycFormEditorPage() {
         </div>
       </div>
 
-      {message ? <p className="rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-700">{message}</p> : null}
+      {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-      {isApproved ? (
-        <section className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+
+      {showReviewPackage ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">Review Package</h2>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">Use these sections together before submitting the next review decision. Select Screening or CRRF to review their details without leaving this screen.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[680px]">
+              <ReviewPackageButton
+                active={activeReviewPackage === 'kyc'}
+                onClick={() => openReviewPackage('kyc')}
+                icon={<FileText className="h-5 w-5" />}
+                title="KYC Form"
+                description="Current review screen"
+              />
+              {canOpenScreening ? (
+                <ReviewPackageButton
+                  active={activeReviewPackage === 'screening'}
+                  onClick={() => openReviewPackage('screening')}
+                  icon={<SearchCheck className="h-5 w-5" />}
+                  title="Screening"
+                  description="Results and evidence"
+                />
+              ) : null}
+              {canOpenCrrf ? (
+                <ReviewPackageButton
+                  active={activeReviewPackage === 'crrf'}
+                  onClick={() => openReviewPackage('crrf')}
+                  icon={<FileSpreadsheet className="h-5 w-5" />}
+                  title="CRRF"
+                  description="Risk rating and files"
+                />
+              ) : null}
+            </div>
+          </div>
+          {reviewPackageError ? <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{reviewPackageError}</p> : null}
+          {activeReviewPackage === 'screening' ? (
+            <ScreeningPackageDetails context={screeningContext} loading={loadingReviewPackage === 'screening'} />
+          ) : null}
+          {activeReviewPackage === 'crrf' ? (
+            <CrrfPackageDetails workspace={crrfWorkspace} loading={loadingReviewPackage === 'crrf'} />
+          ) : null}
+        </section>
+      ) : null}
+
+      {activeReviewPackage === 'kyc' && isApproved ? (
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-base font-semibold text-brand-900">KYC approval completed</p>
-              <p className="mt-1 text-sm text-brand-700">
+              <p className="text-base font-semibold text-emerald-900">KYC approval completed</p>
+              <p className="mt-1 text-sm text-emerald-700">
                 The client profile, KYC form sections, uploaded preparation documents, approval details, and generated downloads are stored against this KYC case.
               </p>
             </div>
@@ -1043,34 +1375,36 @@ export function KycFormEditorPage() {
         </section>
       ) : null}
 
-      <div className="grid gap-5 2xl:grid-cols-[220px_minmax(430px,0.85fr)_minmax(520px,1.15fr)]">
-        <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
-        <section className="rounded-lg border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-5 py-4">
-            <p className="text-sm font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</p>
-            <p className="text-xs text-slate-500">Changes update the preview immediately. Save each section when ready.</p>
-          </div>
-          <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
-            {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
-            {activeSection === 'sectionB' ? (
-              <SectionBForm
-                data={form.sectionB}
-                total={totalOwnership}
-                rootName={form.sectionA.legalName || kycCase.client.name}
-                currentClientId={kycCase.client.id}
-                onChange={(value) => setSection('sectionB', value)}
-              />
-            ) : null}
-            {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
-            {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
-            {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
-            {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
-            {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
-            {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
-          </div>
-        </section>
-        <LiveDocumentPreviewPanel form={{ ...form, sectionB: { ...form.sectionB, totalOwnershipPercentage: totalOwnership } }} />
-      </div>
+      {activeReviewPackage === 'kyc' ? (
+        <div className="grid gap-5 2xl:grid-cols-[220px_minmax(430px,0.85fr)_minmax(520px,1.15fr)]">
+          <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <p className="text-sm font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</p>
+              <p className="text-xs text-slate-500">Changes update the preview immediately. Save each section when ready.</p>
+            </div>
+            <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
+              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
+              {activeSection === 'sectionB' ? (
+                <SectionBForm
+                  data={form.sectionB}
+                  total={totalOwnership}
+                  rootName={form.sectionA.legalName || kycCase.client.name}
+                  currentClientId={kycCase.client.id}
+                  onChange={(value) => setSection('sectionB', value)}
+                />
+              ) : null}
+              {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
+              {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
+              {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
+              {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
+              {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
+              {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
+            </div>
+          </section>
+          <LiveDocumentPreviewPanel form={{ ...form, sectionB: { ...form.sectionB, totalOwnershipPercentage: totalOwnership } }} />
+        </div>
+      ) : null}
     </div>
   );
 }

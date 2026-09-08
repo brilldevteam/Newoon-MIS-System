@@ -273,7 +273,7 @@ function notificationLink(notification: AppNotification) {
       'MLRO_REJECTION'
     ].includes(notification.type)
   ) {
-    return `/kyc/${caseId}/internal-review`;
+    return `/kyc/${caseId}/form`;
   }
 
   if (['AML_CASE_SUBMITTED', 'SUPERVISOR_TASK_ASSIGNED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type)) {

@@ -35,3 +35,23 @@ const kycStatusLabels: Record<string, string> = {
 export function kycStatusLabel(value: string) {
   return kycStatusLabels[value] || value.split('_').join(' ');
 }
+
+export function kycStatusToneClass(value: string) {
+  if (['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'].includes(value)) {
+    return 'bg-emerald-50 text-emerald-700';
+  }
+
+  if (['MLRO_REJECTED', 'SEF_REJECTED', 'CLIENT_REJECTED'].includes(value)) {
+    return 'bg-red-50 text-red-700';
+  }
+
+  if (value.includes('ADDITIONAL_INFORMATION') || value.includes('DOCUMENTS_REQUIRED') || value.includes('PENDING')) {
+    return 'bg-amber-50 text-amber-700';
+  }
+
+  if (value.includes('IN_PROGRESS') || value.includes('SUBMITTED') || value.includes('UPLOADED') || value.includes('COMPLETED')) {
+    return 'bg-blue-50 text-blue-700';
+  }
+
+  return 'bg-slate-100 text-slate-700';
+}

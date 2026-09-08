@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getApiErrorMessage } from '../services/api';
 import { AmlNotification, getMyReviewTasks, ReviewTask, ReviewTaskDashboard } from '../services/kyc-workflow.service';
-import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -95,13 +95,13 @@ export function ReviewTasksPage() {
                   <div>
                     <p className="font-medium text-slate-950">{task.kycCase.title}</p>
                     <p className="text-sm text-slate-500">{caseSubtitle(task)}</p>
-                    <p className="mt-1 text-sm text-brand-700">{taskActionText(task.stage)}</p>
+                    <p className="mt-1 text-sm text-slate-600">{taskActionText(task.stage)}</p>
                     <p className="mt-1 text-xs text-slate-500">Assigned {formatDate(task.createdAt)}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <span className="w-fit rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">{stageLabel(task.stage)}</span>
                     <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{task.status.replace(/_/g, ' ')}</span>
-                    <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                    <span className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(task.kycCase.status)}`}>
                       {kycStatusLabel(task.kycCase.status)}
                     </span>
                   </div>
@@ -136,7 +136,7 @@ export function ReviewTasksPage() {
                     <p className="mt-1 text-xs text-slate-500">{formatDate(notification.createdAt)}</p>
                   </div>
                   {notification.kycCase ? (
-                    <span className="w-fit rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
+                    <span className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(notification.kycCase.status)}`}>
                       {kycStatusLabel(notification.kycCase.status)}
                     </span>
                   ) : null}

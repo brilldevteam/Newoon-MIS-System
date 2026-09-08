@@ -145,7 +145,7 @@ export function CrrfWorkspacePage() {
         </div>
       </div>
 
-      {message ? <div className="rounded-md border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">{message}</div> : null}
+      {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <section className="grid gap-3 md:grid-cols-3">

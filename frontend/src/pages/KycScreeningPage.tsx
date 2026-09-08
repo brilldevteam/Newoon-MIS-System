@@ -2,6 +2,7 @@ import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { useAuth } from '../hooks/useAuth';
 import {
   completeScreeningRecord,
   createScreeningRecord,
@@ -24,6 +25,7 @@ import {
   viewMergedScreeningDocument,
   viewScreeningDocument
 } from '../services/kyc-workflow.service';
+import { hasAnyRole } from '../utils/access-control';
 
 const checkLabels: Record<ScreeningCheckType, string> = {
   NCTC: 'NCTC',
@@ -75,13 +77,15 @@ function DocumentList({
   caseId,
   onDelete,
   busyDocumentId,
-  onView = viewScreeningDocument
+  onView = viewScreeningDocument,
+  canDelete = true
 }: {
   documents: ScreeningDocument[];
   caseId: string;
   onDelete: (documentId: string) => void;
   busyDocumentId: string;
   onView?: (caseId: string, document: ScreeningDocument) => void;
+  canDelete?: boolean;
 }) {
   if (!documents.length) {
     return <p className="text-xs text-slate-500">No files uploaded yet.</p>;
@@ -102,16 +106,18 @@ function DocumentList({
           >
             <Eye className="h-3.5 w-3.5" />
           </button>
-          <button
-            type="button"
-            onClick={() => onDelete(document.id)}
-            disabled={busyDocumentId === document.id}
-            className="text-red-500 hover:text-red-700 disabled:opacity-50"
-            title="Delete document"
-            aria-label={`Delete ${document.fileName}`}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {canDelete ? (
+            <button
+              type="button"
+              onClick={() => onDelete(document.id)}
+              disabled={busyDocumentId === document.id}
+              className="text-red-500 hover:text-red-700 disabled:opacity-50"
+              title="Delete document"
+              aria-label={`Delete ${document.fileName}`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       ))}
     </div>
@@ -120,6 +126,7 @@ function DocumentList({
 
 export function KycScreeningPage() {
   const { id = '' } = useParams();
+  const { user } = useAuth();
   const [context, setContext] = useState<ScreeningContext | null>(null);
   const [selectedEntityLabel, setSelectedEntityLabel] = useState('');
   const [manualEntityName, setManualEntityName] = useState('');
@@ -168,6 +175,7 @@ export function KycScreeningPage() {
     [context?.mergedEvidenceChecks, mergedDocumentsByCheck]
   );
   const isManualEntity = selectedEntityLabel === 'Manual screening entry';
+  const canEditScreening = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
 
   function updateRecordLocally(recordId: string, patch: Partial<ScreeningRecord>) {
     setContext((current) =>
@@ -441,7 +449,7 @@ export function KycScreeningPage() {
         <p className="mt-1 text-sm text-slate-500">Screen clients, shareholders, UBOs, managers, and manually added names before approval.</p>
       </div>
 
-      {message ? <div className="rounded-md border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">{message}</div> : null}
+      {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <section className="grid gap-3 md:grid-cols-3">
@@ -458,6 +466,12 @@ export function KycScreeningPage() {
           <p className="mt-2 font-semibold text-slate-950">{context.clientInfo.crNumber || '-'}</p>
         </div>
       </section>
+
+      {!canEditScreening ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Screening is read-only for this review stage. AML roles can update screening records and evidence.
+        </div>
+      ) : null}
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
@@ -480,7 +494,7 @@ export function KycScreeningPage() {
                   <select
                     value={mergedChecksByType.get(checkType) || 'NOT_CHECKED'}
                     onChange={(event) => updateMergedResult(checkType, event.target.value as ScreeningResultStatus)}
-                    disabled={busyKey === `result-merged-${checkType}`}
+                    disabled={!canEditScreening || busyKey === `result-merged-${checkType}`}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-700"
                   >
                     {resultOptions.map((option) => (
@@ -490,20 +504,22 @@ export function KycScreeningPage() {
                     ))}
                   </select>
                 </label>
-                <label className="mt-3 inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                  <Upload className={`h-4 w-4 ${busyKey === `upload-merged-${checkType}` ? 'animate-pulse' : ''}`} />
-                  Upload PDF
-                  <input
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    multiple
-                    className="hidden"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                      uploadMergedFiles(checkType, Array.from(event.target.files || []));
-                      event.currentTarget.value = '';
-                    }}
-                  />
-                </label>
+                {canEditScreening ? (
+                  <label className="mt-3 inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    <Upload className={`h-4 w-4 ${busyKey === `upload-merged-${checkType}` ? 'animate-pulse' : ''}`} />
+                    Upload PDF
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      multiple
+                      className="hidden"
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        uploadMergedFiles(checkType, Array.from(event.target.files || []));
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </label>
+                ) : null}
                 <div className="mt-3">
                   <DocumentList
                     documents={documents}
@@ -511,6 +527,7 @@ export function KycScreeningPage() {
                     onDelete={removeMergedDocument}
                     busyDocumentId={busyDocumentId}
                     onView={viewMergedScreeningDocument}
+                    canDelete={canEditScreening}
                   />
                 </div>
               </div>
@@ -519,6 +536,7 @@ export function KycScreeningPage() {
         </div>
       </section>
 
+      {canEditScreening ? (
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">Add Entity for Screening</h2>
@@ -562,6 +580,7 @@ export function KycScreeningPage() {
           </div>
         ) : null}
       </section>
+      ) : null}
 
       {context.records.length ? (
         <div className="space-y-3">
@@ -629,56 +648,61 @@ export function KycScreeningPage() {
                 {expanded ? (
                   <>
                     <div className="flex flex-wrap justify-end gap-2 border-b border-slate-200 px-5 py-3">
-                    <button
-                      type="button"
-                      onClick={() => removeRecord(record.id)}
-                      disabled={busyKey === `delete-${record.id}`}
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
-                      title="Delete screening entity"
-                      aria-label={`Delete screening entity ${record.entityName}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => saveRecord(record)}
-                      disabled={busyKey === `save-${record.id}`}
-                      className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      <Save className="h-4 w-4" />
-                      Save Draft
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => finalizeRecord(record)}
-                      disabled={busyKey === `finalize-${record.id}`}
-                      className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      Finalize
-                    </button>
+                    {canEditScreening ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => removeRecord(record.id)}
+                          disabled={busyKey === `delete-${record.id}`}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
+                          title="Delete screening entity"
+                          aria-label={`Delete screening entity ${record.entityName}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveRecord(record)}
+                          disabled={busyKey === `save-${record.id}`}
+                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          <Save className="h-4 w-4" />
+                          Save Draft
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => finalizeRecord(record)}
+                          disabled={busyKey === `finalize-${record.id}`}
+                          className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Finalize
+                        </button>
+                      </>
+                    ) : null}
                     </div>
 
                 <div className="space-y-5 p-5">
                   <div className="grid gap-4 md:grid-cols-3">
                     <label className="text-sm font-medium text-slate-700">
                       Screening name
-                      <input value={record.entityName} onChange={(event) => updateRecordLocally(record.id, { entityName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <input disabled={!canEditScreening} value={record.entityName} onChange={(event) => updateRecordLocally(record.id, { entityName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
                     </label>
                     <label className="text-sm font-medium text-slate-700">
                       Identifier
-                      <input value={record.identifier || ''} onChange={(event) => updateRecordLocally(record.id, { identifier: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <input disabled={!canEditScreening} value={record.identifier || ''} onChange={(event) => updateRecordLocally(record.id, { identifier: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
                     </label>
                     <label className="text-sm font-medium text-slate-700">
                       Country
-                      <input value={record.country || ''} onChange={(event) => updateRecordLocally(record.id, { country: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <input disabled={!canEditScreening} value={record.country || ''} onChange={(event) => updateRecordLocally(record.id, { country: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
                     </label>
                     <label className="text-sm font-medium text-slate-700">
                       Result <span className="text-red-600">*</span>
                       <select
                         value={record.conclusionStatus || ''}
                         onChange={(event) => updateRecordLocally(record.id, { conclusionStatus: event.target.value as ScreeningConclusionStatus })}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                        disabled={!canEditScreening}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                       >
                         <option value="">Select conclusion</option>
                         {conclusionOptions.map((option) => (
@@ -704,7 +728,8 @@ export function KycScreeningPage() {
                           <select
                             value={check.resultStatus}
                             onChange={(event) => updateCheckLocally(record.id, check.checkType, { resultStatus: event.target.value as ScreeningResultStatus })}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                            disabled={!canEditScreening}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                           >
                             {resultOptions.map((option) => (
                               <option key={option.value} value={option.value}>
@@ -716,66 +741,74 @@ export function KycScreeningPage() {
                             value={check.notes || ''}
                             onChange={(event) => updateCheckLocally(record.id, check.checkType, { notes: event.target.value })}
                             placeholder="Finding notes"
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                            disabled={!canEditScreening}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                           />
                           <div className="space-y-3">
-                            <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                              <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-${check.checkType}` ? 'animate-pulse' : ''}`} />
-                              Upload PDF
-                              <input
-                                type="file"
-                                accept="application/pdf,.pdf"
-                                multiple
-                                className="hidden"
-                                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                                  uploadFiles(record.id, check.checkType, Array.from(event.target.files || []));
-                                  event.currentTarget.value = '';
-                                }}
-                              />
-                            </label>
+                            {canEditScreening ? (
+                              <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                                <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-${check.checkType}` ? 'animate-pulse' : ''}`} />
+                                Upload PDF
+                                <input
+                                  type="file"
+                                  accept="application/pdf,.pdf"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                                    uploadFiles(record.id, check.checkType, Array.from(event.target.files || []));
+                                    event.currentTarget.value = '';
+                                  }}
+                                />
+                              </label>
+                            ) : null}
                             {!context.individualEvidenceChecks.includes(check.checkType) ? (
                               <p className="text-xs text-slate-500">Individual upload optional when merged PDF is attached.</p>
                             ) : null}
-                            <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} />
+                            <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                           </div>
                         </div>
                       ))}
                     </div>
                   </div>
 
+                  {canEditScreening || record.documents.length ? (
                   <div className="rounded-lg border border-slate-200 p-4">
                     <div className="grid gap-3 md:grid-cols-[1fr_220px] md:items-end">
                       <label className="text-sm font-medium text-slate-700">
                         Other relevant document type
-                        <input value={otherDocumentType} onChange={(event) => setOtherDocumentType(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                        <input disabled={!canEditScreening} value={otherDocumentType} onChange={(event) => setOtherDocumentType(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
                       </label>
-                      <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                        <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-OTHER` ? 'animate-pulse' : ''}`} />
-                        Upload documents
-                        <input
-                          type="file"
-                          multiple
-                          className="hidden"
-                          onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                            uploadFiles(record.id, 'OTHER', Array.from(event.target.files || []), otherDocumentType);
-                            event.currentTarget.value = '';
-                          }}
-                        />
-                      </label>
+                      {canEditScreening ? (
+                        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                          <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-OTHER` ? 'animate-pulse' : ''}`} />
+                          Upload documents
+                          <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                              uploadFiles(record.id, 'OTHER', Array.from(event.target.files || []), otherDocumentType);
+                              event.currentTarget.value = '';
+                            }}
+                          />
+                        </label>
+                      ) : null}
                     </div>
                     <div className="mt-3">
-                      <DocumentList documents={record.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} />
+                      <DocumentList documents={record.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                     </div>
                   </div>
+                  ) : null}
 
                   <label className="block text-sm font-medium text-slate-700">
                     Observation / remarks <span className="text-red-600">*</span>
                     <textarea
                       value={record.remarks || ''}
                       onChange={(event) => updateRecordLocally(record.id, { remarks: event.target.value })}
+                      disabled={!canEditScreening}
                       rows={4}
                       placeholder="Record screening observations, matches, and compliance remarks before finalizing."
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                     />
                   </label>
                 </div>
