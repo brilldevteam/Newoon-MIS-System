@@ -1,5 +1,6 @@
 import { FileText, Upload, X } from 'lucide-react';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import { STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT, validateStandardDocuments } from '../utils/upload-security';
 
 type MultiFileUploadControlProps = {
   names?: string[];
@@ -8,7 +9,9 @@ type MultiFileUploadControlProps = {
   accept?: string;
   buttonLabel?: string;
   placeholder?: string;
+  helperText?: string;
   showFileList?: boolean;
+  validateFiles?: (files: File[]) => string;
   onSelect: (files: File[]) => void;
   onRemoveName?: (index: number) => void;
 };
@@ -17,14 +20,17 @@ export function MultiFileUploadControl({
   names = [],
   disabled = false,
   multiple = true,
-  accept,
+  accept = STANDARD_DOCUMENT_ACCEPT,
   buttonLabel = 'Upload',
   placeholder = 'No file selected',
+  helperText = STANDARD_DOCUMENT_HINT,
   showFileList = true,
+  validateFiles = validateStandardDocuments,
   onSelect,
   onRemoveName
 }: MultiFileUploadControlProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [localError, setLocalError] = useState('');
   const visibleNames = names.filter(Boolean);
   const summary =
     visibleNames.length === 0
@@ -52,6 +58,8 @@ export function MultiFileUploadControl({
       >
         <span className="truncate">{summary}</span>
       </div>
+      <p className="text-xs leading-5 text-slate-500 sm:col-span-2">{helperText}</p>
+      {localError ? <p className="text-xs font-medium text-red-600 sm:col-span-2">{localError}</p> : null}
       {showFileList && visibleNames.length > 0 && onRemoveName ? (
         <div className="sm:col-start-2">
           <div className="max-h-24 overflow-y-auto rounded-md border border-slate-200 bg-white p-2">
@@ -89,7 +97,9 @@ export function MultiFileUploadControl({
         className="hidden"
         onChange={(event) => {
           const files = Array.from(event.target.files || []);
-          if (files.length) onSelect(files);
+          const validationError = files.length ? validateFiles(files) : '';
+          setLocalError(validationError);
+          if (files.length && !validationError) onSelect(files);
           event.currentTarget.value = '';
         }}
       />

@@ -5,6 +5,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { ScreeningService } from './screening.service';
 
@@ -50,7 +51,7 @@ export class ScreeningController {
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post('merged-documents/upload')
-  @UseInterceptors(FilesInterceptor('files', 20))
+  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions(['pdf'])))
   uploadMergedDocuments(
     @CurrentUser() user: RequestUser,
     @Param('kycCaseId') kycCaseId: string,
@@ -81,7 +82,8 @@ export class ScreeningController {
   ) {
     const document = await this.screeningService.getMergedDocumentFile(user, kycCaseId, documentId);
     response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
-    response.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.fileName)}"`);
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${safeResponseFileName(document.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(document.content);
   }
 
@@ -93,7 +95,7 @@ export class ScreeningController {
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post('records/:recordId/documents/upload')
-  @UseInterceptors(FilesInterceptor('files', 20))
+  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions()))
   uploadDocuments(
     @CurrentUser() user: RequestUser,
     @Param('kycCaseId') kycCaseId: string,
@@ -114,7 +116,8 @@ export class ScreeningController {
   ) {
     const document = await this.screeningService.getDocumentFile(user, kycCaseId, documentId);
     response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
-    response.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.fileName)}"`);
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${safeResponseFileName(document.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(document.content);
   }
 

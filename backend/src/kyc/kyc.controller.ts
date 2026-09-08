@@ -6,6 +6,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
 import { AssignServiceDto } from './dto/assign-service.dto';
@@ -180,7 +181,7 @@ export class KycController {
 
   @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/legal-documents/upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', uploadInterceptorOptions()))
   uploadLegalDocumentFile(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -199,7 +200,8 @@ export class KycController {
   ) {
     const document = await this.kycService.getLegalDocumentFile(user, id, documentId);
     response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
-    response.setHeader('Content-Disposition', `inline; filename="${document.fileName}"`);
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${safeResponseFileName(document.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(document.content);
   }
 
@@ -290,7 +292,7 @@ export class KycController {
 
   @Roles('DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/internal-reviews/signed-documents/upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', uploadInterceptorOptions(['pdf', 'word', 'image'])))
   uploadSignedKycDocumentFile(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,

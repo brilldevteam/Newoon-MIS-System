@@ -20,6 +20,7 @@ import {
 } from '../services/kyc-workflow.service';
 import { allowedReviewStages, hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { SIGNED_KYC_ACCEPT, SIGNED_KYC_HINT, validateSignedKycDocuments } from '../utils/upload-security';
 
 const stages: Array<{ id: ReviewStage; title: string; submitLabel: string }> = [
   { id: 'DMLRO', title: 'DMLRO Review', submitLabel: 'Submit to MLRO' },
@@ -375,9 +376,17 @@ export function InternalReviewWorkspacePage() {
                   disabled={!canUploadSignedDocuments}
                   type="file"
                   className="hidden"
-                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+                  accept={SIGNED_KYC_ACCEPT}
                   onChange={(event) => {
-                    setSignedFile(event.target.files?.[0] || null);
+                    const file = event.target.files?.[0] || null;
+                    const validationError = file ? validateSignedKycDocuments([file]) : '';
+                    if (validationError) {
+                      setError(validationError);
+                      setSignedFile(null);
+                    } else {
+                      setError('');
+                      setSignedFile(file);
+                    }
                     event.currentTarget.value = '';
                   }}
                 />
@@ -393,6 +402,7 @@ export function InternalReviewWorkspacePage() {
                 <FileUp className="h-4 w-4" /> Save
               </button>
             </div>
+            <p className="mt-2 text-xs text-slate-500">{SIGNED_KYC_HINT}</p>
             {!canUploadSignedDocuments ? <p className="mt-2 text-xs text-slate-500">Signed document metadata is managed by DMLRO, MLRO, or admin roles.</p> : null}
             <div className="mt-4 grid gap-2">
               <SignedStageStatus label="DMLRO signed KYC" done={signedStageSet.has('DMLRO_SIGNED_KYC')} />

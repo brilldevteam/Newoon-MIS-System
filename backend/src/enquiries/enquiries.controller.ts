@@ -5,6 +5,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
@@ -56,7 +57,7 @@ export class EnquiriesController {
 
   @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/attachments/upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', uploadInterceptorOptions()))
   uploadAttachmentFile(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -75,7 +76,8 @@ export class EnquiriesController {
   ) {
     const document = await this.enquiriesService.getAttachmentFile(user, id, attachmentId);
     response.setHeader('Content-Type', document.mimeType || 'application/octet-stream');
-    response.setHeader('Content-Disposition', `inline; filename="${document.fileName}"`);
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${safeResponseFileName(document.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(document.content);
   }
 

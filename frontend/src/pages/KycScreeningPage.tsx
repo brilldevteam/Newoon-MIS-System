@@ -26,6 +26,7 @@ import {
   viewScreeningDocument
 } from '../services/kyc-workflow.service';
 import { hasAnyRole } from '../utils/access-control';
+import { PDF_ONLY_ACCEPT, PDF_ONLY_HINT, STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT, validatePdfDocuments, validateStandardDocuments } from '../utils/upload-security';
 
 const checkLabels: Record<ScreeningCheckType, string> = {
   NCTC: 'NCTC',
@@ -322,6 +323,11 @@ export function KycScreeningPage() {
 
   async function uploadFiles(recordId: string, checkType: ScreeningCheckType, files: File[], documentType?: string) {
     if (!id || !files.length) return;
+    const validationError = checkType === 'OTHER' ? validateStandardDocuments(files) : validatePdfDocuments(files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     const currentRecord = context?.records.find((record) => record.id === recordId);
     setError('');
     setMessage('');
@@ -339,6 +345,11 @@ export function KycScreeningPage() {
 
   async function uploadMergedFiles(checkType: ScreeningCheckType, files: File[]) {
     if (!id || !files.length) return;
+    const validationError = validatePdfDocuments(files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     setError('');
     setMessage('');
     setBusyKey(`upload-merged-${checkType}`);
@@ -476,7 +487,7 @@ export function KycScreeningPage() {
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">Screening PDF Files</h2>
-          <p className="mt-1 text-sm text-slate-500">Upload combined evidence for the common screening lists before finalizing individual screening records.</p>
+          <p className="mt-1 text-sm text-slate-500">Upload combined evidence for the common screening lists before finalizing individual screening records. {PDF_ONLY_HINT}</p>
         </div>
         <div className="grid gap-3 p-5 xl:grid-cols-5">
           {context.mergedEvidenceChecks.map((checkType) => {
@@ -510,7 +521,7 @@ export function KycScreeningPage() {
                     Upload PDF
                     <input
                       type="file"
-                      accept="application/pdf,.pdf"
+                      accept={PDF_ONLY_ACCEPT}
                       multiple
                       className="hidden"
                       onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -751,7 +762,7 @@ export function KycScreeningPage() {
                                 Upload PDF
                                 <input
                                   type="file"
-                                  accept="application/pdf,.pdf"
+                                  accept={PDF_ONLY_ACCEPT}
                                   multiple
                                   className="hidden"
                                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -761,9 +772,11 @@ export function KycScreeningPage() {
                                 />
                               </label>
                             ) : null}
-                            {!context.individualEvidenceChecks.includes(check.checkType) ? (
-                              <p className="text-xs text-slate-500">Individual upload optional when merged PDF is attached.</p>
-                            ) : null}
+                            <p className="text-xs text-slate-500">
+                              {context.individualEvidenceChecks.includes(check.checkType)
+                                ? PDF_ONLY_HINT
+                                : `Individual upload optional when merged PDF is attached. ${PDF_ONLY_HINT}`}
+                            </p>
                             <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                           </div>
                         </div>
@@ -785,6 +798,7 @@ export function KycScreeningPage() {
                           <input
                             type="file"
                             multiple
+                            accept={STANDARD_DOCUMENT_ACCEPT}
                             className="hidden"
                             onChange={(event: ChangeEvent<HTMLInputElement>) => {
                               uploadFiles(record.id, 'OTHER', Array.from(event.target.files || []), otherDocumentType);
@@ -795,6 +809,7 @@ export function KycScreeningPage() {
                       ) : null}
                     </div>
                     <div className="mt-3">
+                      <p className="mb-2 text-xs text-slate-500">{STANDARD_DOCUMENT_HINT}</p>
                       <DocumentList documents={record.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                     </div>
                   </div>

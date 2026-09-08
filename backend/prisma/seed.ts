@@ -76,7 +76,7 @@ async function main() {
   const passwordHash = await bcrypt.hash('Admin@12345', 12);
   const admin = await prisma.user.upsert({
     where: { email: 'admin@newoon.com' },
-    update: {},
+    update: { passwordHash, status: 'ACTIVE' },
     create: {
       tenantId: null,
       email: 'admin@newoon.com',
@@ -95,6 +95,7 @@ async function main() {
     where: { email: 'company.admin@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {
@@ -115,6 +116,7 @@ async function main() {
     where: { email: 'operations@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {
@@ -135,6 +137,7 @@ async function main() {
     where: { email: 'aml.supervisor@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {
@@ -155,6 +158,7 @@ async function main() {
     where: { email: 'dmlro@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {
@@ -175,6 +179,7 @@ async function main() {
     where: { email: 'mlro@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {
@@ -195,6 +200,7 @@ async function main() {
     where: { email: 'sef@newoon.com' },
     update: {
       tenantId: tenant.id,
+      passwordHash,
       status: 'ACTIVE'
     },
     create: {

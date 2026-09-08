@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Log
 import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, NotificationType, Prisma } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { isPathInsideRoot, validateUploadFile } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
@@ -513,6 +514,8 @@ export class EnquiriesService {
       throw new BadRequestException('Upload an enquiry attachment file');
     }
 
+    validateUploadFile(file, ['pdf', 'word', 'excel', 'image'], 'enquiry attachment');
+
     const enquiry = await this.findOne(user, id);
     const uploadRoot = this.enquiryAttachmentUploadRoot();
     const enquiryDirectory = join(uploadRoot, enquiry.tenantId, enquiry.id);
@@ -738,7 +741,7 @@ export class EnquiriesService {
 
     return candidates
       .map((candidate) => normalize(candidate))
-      .find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
+      .find((candidate) => isPathInsideRoot(candidate, normalizedRoot) && existsSync(candidate)) || null;
   }
 
   private copyEnquiryAttachmentToLegalDocuments(
@@ -773,7 +776,7 @@ export class EnquiriesService {
     const normalizedRoot = normalize(uploadRoot);
     const enquiryDirectory = normalize(join(uploadRoot, tenantId, enquiryId));
 
-    if (!enquiryDirectory.startsWith(normalizedRoot)) return;
+    if (!isPathInsideRoot(enquiryDirectory, normalizedRoot)) return;
 
     rmSync(enquiryDirectory, { recursive: true, force: true });
   }

@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -295,10 +296,7 @@ export class ScreeningService {
       throw new BadRequestException('Select NCTC, UN, OFAC, EU, or PPO List for merged screening evidence.');
     }
 
-    const invalidFile = files.find((file) => !this.isPdf(file));
-    if (invalidFile) {
-      throw new BadRequestException(`${invalidFile.originalname} is not a PDF. Merged screening evidence must be uploaded as PDF.`);
-    }
+    validateUploadFiles(files, ['pdf'], 'merged screening PDF');
 
     const root = this.screeningUploadRoot();
     const folder = join(root, kycCase.tenantId, kycCaseId, 'merged');
@@ -359,12 +357,11 @@ export class ScreeningService {
       throw new BadRequestException('Screening check row not found for this upload.');
     }
 
-    if (checkType !== ScreeningCheckType.OTHER) {
-      const invalidFile = files.find((file) => !this.isPdf(file));
-      if (invalidFile) {
-        throw new BadRequestException(`${invalidFile.originalname} is not a PDF. Mandatory screening evidence must be uploaded as PDF.`);
-      }
-    }
+    validateUploadFiles(
+      files,
+      checkType === ScreeningCheckType.OTHER ? ['pdf', 'word', 'excel', 'image'] : ['pdf'],
+      'screening document'
+    );
 
     const root = this.screeningUploadRoot();
     const folder = join(root, record.tenantId, kycCaseId, recordId);
@@ -691,7 +688,7 @@ export class ScreeningService {
       candidates.push(join(uploadRoot, relative(legacyUploadPrefix, normalizedStoragePath)));
     }
 
-    return candidates.map((candidate) => normalize(candidate)).find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
+    return candidates.map((candidate) => normalize(candidate)).find((candidate) => isPathInsideRoot(candidate, normalizedRoot) && existsSync(candidate)) || null;
   }
 
   private safeFileName(fileName: string) {
@@ -700,10 +697,6 @@ export class ScreeningService {
       .replace(/\s+/g, ' ')
       .trim();
     return name || 'document';
-  }
-
-  private isPdf(file: { originalname: string; mimetype?: string }) {
-    return (file.mimetype || '').toLowerCase() === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf');
   }
 
   private enumValue<T extends Record<string, string>>(source: T, value: unknown): T[keyof T] | null {
