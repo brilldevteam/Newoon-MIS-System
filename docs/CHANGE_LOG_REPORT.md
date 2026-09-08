@@ -54,6 +54,7 @@ Summary:
 - Hid the KYC form editor and document preview while the Screening or CRRF package tab is selected, giving reviewers a cleaner focused view of the selected section.
 - Added file-level view actions, Screening result notes, record remarks, and CRRF internal comments to the in-page review package so reviewers can inspect evidence before approval.
 - Refined the in-page Review Package UI with softer grouping, clearer active states, readable evidence rows, and result badges so DMLRO/MLRO reviewers can scan the package more comfortably.
+- Added collapsible Screening record cards in the review package with Collapse all and Expand all controls so large Screening packages do not force excessive page scrolling.
 - Separated Newoon brand red from semantic UI states so success/approved statuses use green, pending/in-progress statuses use amber or blue, errors remain red, and selected review package tabs no longer look like warnings.
 - Updated DMLRO, MLRO, and SEF notification clicks to open the modern KYC Form Review Package screen instead of the older internal review workspace.
 - Allowed DMLRO, MLRO, and SEF users to view Screening records and screening evidence after AML prepares the screening section.

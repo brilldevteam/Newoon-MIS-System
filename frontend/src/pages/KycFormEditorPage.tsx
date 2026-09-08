@@ -632,6 +632,22 @@ function ReviewPackageButton({
 }
 
 function ScreeningPackageDetails({ context, loading }: { context: ScreeningContext | null; loading: boolean }) {
+  const [expandedRecordIds, setExpandedRecordIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!context?.records.length) {
+      setExpandedRecordIds(new Set());
+      return;
+    }
+
+    setExpandedRecordIds((current) => {
+      const availableIds = new Set(context.records.map((record) => record.id));
+      const next = new Set([...current].filter((id) => availableIds.has(id)));
+      if (!next.size && context.records[0]) next.add(context.records[0].id);
+      return next;
+    });
+  }, [context?.records]);
+
   if (loading) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Loading Screening details...</p>;
   if (!context) return <p className="mt-4 rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-500">Select Screening to load the prepared records and evidence.</p>;
 
@@ -640,6 +656,24 @@ function ScreeningPackageDetails({ context, loading }: { context: ScreeningConte
     (sum, record) => sum + record.documents.length + record.checks.reduce((checkSum, check) => checkSum + check.documents.length, 0),
     0
   );
+  const allExpanded = context.records.length > 0 && expandedRecordIds.size === context.records.length;
+
+  function toggleRecord(recordId: string) {
+    setExpandedRecordIds((current) => {
+      const next = new Set(current);
+      if (next.has(recordId)) next.delete(recordId);
+      else next.add(recordId);
+      return next;
+    });
+  }
+
+  function expandAll() {
+    setExpandedRecordIds(new Set((context?.records || []).map((record) => record.id)));
+  }
+
+  function collapseAll() {
+    setExpandedRecordIds(new Set());
+  }
 
   return (
     <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -655,52 +689,84 @@ function ScreeningPackageDetails({ context, loading }: { context: ScreeningConte
             <p className="text-sm font-semibold text-slate-950">Screening records and individual evidence</p>
             <p className="text-xs text-slate-500">Review each screened entity, its result, notes, and uploaded supporting files.</p>
           </div>
+          {context.records.length ? (
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={collapseAll}
+                disabled={!expandedRecordIds.size}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Collapse all
+              </button>
+              <button
+                type="button"
+                onClick={expandAll}
+                disabled={allExpanded}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Expand all
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="mt-3 space-y-3">
           {context.records.length ? (
             context.records.map((record) => {
               const evidenceCount = record.documents.length + record.checks.reduce((sum, check) => sum + check.documents.length, 0);
               const recordDocuments = record.documents.filter((document) => document.documentType !== 'Other screening document' || !document.checkType);
+              const isExpanded = expandedRecordIds.has(record.id);
               return (
                 <div key={record.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 p-4 pb-0">
-                      <p className="truncate text-base font-semibold text-slate-950">{record.entityName}</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {record.entityType.replace(/_/g, ' ')} {record.identifier ? `| ${record.identifier}` : ''} {record.country ? `| ${record.country}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2 p-4 pb-0 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => toggleRecord(record.id)}
+                    className="flex w-full flex-col gap-3 p-4 text-left transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <span className="flex min-w-0 items-start gap-3">
+                      <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-slate-500 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-base font-semibold text-slate-950">{record.entityName}</span>
+                        <span className="mt-1 block truncate text-sm text-slate-500">
+                          {record.entityType.replace(/_/g, ' ')} {record.identifier ? `| ${record.identifier}` : ''} {record.country ? `| ${record.country}` : ''}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 flex-wrap gap-2 text-xs font-semibold">
                       <span className={resultBadgeClass(record.conclusionStatus || '')}>{screeningResultLabels[record.conclusionStatus || ''] || 'No result selected'}</span>
                       <span className="rounded-full bg-brand-50 px-3 py-1 text-brand-700">{evidenceCount} files</span>
                       <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">{record.status}</span>
-                    </div>
-                  </div>
-                  <div className="m-4 grid gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 lg:grid-cols-[1fr_1.2fr]">
-                    <div>
-                      <p className="text-xs font-semibold uppercase text-slate-500">Observations / internal remarks</p>
-                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{record.remarks || 'No remarks added.'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold uppercase text-slate-500">Other record evidence</p>
-                      <PackageDocumentList documents={recordDocuments} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
-                    </div>
-                  </div>
-                  <div className="grid gap-3 border-t border-slate-100 bg-white p-4 lg:grid-cols-2">
-                    {record.checks.map((check) => (
-                      <div key={check.id} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-slate-900">{screeningCheckLabels[check.checkType] || check.checkType}</p>
-                            <span className={`mt-2 inline-flex ${resultBadgeClass(check.resultStatus)}`}>{screeningResultLabels[check.resultStatus] || check.resultStatus}</span>
-                          </div>
-                          <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-600">{check.documents.length} files</span>
+                    </span>
+                  </button>
+                  {isExpanded ? (
+                    <>
+                      <div className="mx-4 mb-4 grid gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 lg:grid-cols-[1fr_1.2fr]">
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-slate-500">Observations / internal remarks</p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-700">{record.remarks || 'No remarks added.'}</p>
                         </div>
-                        <p className="mt-3 whitespace-pre-wrap rounded-md bg-white p-2 text-xs leading-5 text-slate-600">{check.notes || 'No finding notes added.'}</p>
-                        <PackageDocumentList documents={check.documents} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-slate-500">Other record evidence</p>
+                          <PackageDocumentList documents={recordDocuments} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                      <div className="grid gap-3 border-t border-slate-100 bg-white p-4 lg:grid-cols-2">
+                        {record.checks.map((check) => (
+                          <div key={check.id} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">{screeningCheckLabels[check.checkType] || check.checkType}</p>
+                                <span className={`mt-2 inline-flex ${resultBadgeClass(check.resultStatus)}`}>{screeningResultLabels[check.resultStatus] || check.resultStatus}</span>
+                              </div>
+                              <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-600">{check.documents.length} files</span>
+                            </div>
+                            <p className="mt-3 whitespace-pre-wrap rounded-md bg-white p-2 text-xs leading-5 text-slate-600">{check.notes || 'No finding notes added.'}</p>
+                            <PackageDocumentList documents={check.documents} caseId={context.clientInfo.caseId} onView={viewScreeningDocument} />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               );
             })
