@@ -25,7 +25,7 @@ import { tmpdir } from 'os';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { promisify } from 'util';
 import { deflateSync } from 'zlib';
-import { isPathInsideRoot, validateUploadFile } from '../common/security/upload-security';
+import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -95,7 +95,7 @@ const REQUIRED_DOCUMENT_TYPES = [
   'Certificate of Incorporation',
   'Articles of Association',
   'QID / Passport copies',
-  'CR of legal entity shareholders',
+  'CR of legal entity parties',
   'National address certificates',
   'Latest Audited Financial Statements',
   'Tax Card'
@@ -105,14 +105,16 @@ const REQUIRED_DOCUMENT_TYPES = [
 export class KycService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll(user: RequestUser) {
+  async findAll(user: RequestUser) {
     const where: Prisma.KycCaseWhereInput = this.tenantWhere(user);
 
-    return this.prisma.kycCase.findMany({
+    const cases = await this.prisma.kycCase.findMany({
       where,
       include: this.caseInclude(),
       orderBy: { createdAt: 'desc' }
     });
+
+    return Promise.all(cases.map((kycCase) => this.withKycNumber(kycCase)));
   }
 
   async findOne(user: RequestUser, id: string) {
@@ -125,7 +127,7 @@ export class KycService {
       throw new NotFoundException('KYC case not found');
     }
 
-    return kycCase;
+    return this.withKycNumber(kycCase);
   }
 
   async create(user: RequestUser, dto: CreateKycCaseDto) {
@@ -150,12 +152,14 @@ export class KycService {
     const title = dto.title || `${client.name} KYC Intake`;
 
     return this.prisma.$transaction(async (tx) => {
+      const kycNumber = await this.nextKycNumber(tx, tenantId);
       const kycCase = await tx.kycCase.create({
         data: {
           tenantId,
           clientId: client.id,
           serviceId: service?.id,
           title,
+          kycNumber,
           status: service ? KycCaseStatus.LEGAL_DOCUMENTS_PENDING : KycCaseStatus.INQUIRY_RECEIVED,
           createdById: user.id
         }
@@ -326,33 +330,119 @@ export class KycService {
     documentType: string,
     file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
   ) {
+    return this.uploadLegalDocumentFiles(user, id, documentType, file ? [file] : []);
+  }
+
+  async uploadLegalDocumentFiles(
+    user: RequestUser,
+    id: string,
+    documentType: string,
+    files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }> = []
+  ) {
     if (!documentType?.trim()) {
       throw new BadRequestException('Document type is required');
     }
 
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('Upload a document file');
+    if (!files.length) {
+      throw new BadRequestException('Upload document files');
     }
-    validateUploadFile(file, ['pdf', 'word', 'excel', 'image'], 'document file');
+
+    validateUploadFiles(files, ['pdf', 'word', 'excel', 'image'], 'document file');
 
     const kycCase = await this.requireWritableCase(user, id);
+    const uploadableStatuses: KycCaseStatus[] = [
+        KycCaseStatus.INQUIRY_RECEIVED,
+        KycCaseStatus.PROPOSAL_OPTIONAL,
+        KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
+        KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+        KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+    ];
+    if (!uploadableStatuses.includes(kycCase.status)) {
+      throw new BadRequestException('Document uploads are disabled after submission unless the case is returned for additional information.');
+    }
+
     const uploadRoot = this.legalDocumentUploadRoot();
     const caseDirectory = join(uploadRoot, kycCase.tenantId, kycCase.id);
     mkdirSync(caseDirectory, { recursive: true });
 
-    const fileName = this.safeFileName(file.originalname);
-    const storedFileName = `${Date.now()}-${fileName}`;
-    const absolutePath = join(caseDirectory, storedFileName);
-    writeFileSync(absolutePath, file.buffer);
+    const documents = files.map((file, index) => {
+      const fileName = this.safeFileName(file.originalname);
+      const storedFileName = `${Date.now()}-${index}-${fileName}`;
+      const absolutePath = join(caseDirectory, storedFileName);
+      writeFileSync(absolutePath, file.buffer!);
 
-    const storagePath = join(kycCase.tenantId, kycCase.id, storedFileName);
+      return {
+        documentType: documentType.trim(),
+        fileName,
+        storagePath: join(kycCase.tenantId, kycCase.id, storedFileName),
+        mimeType: file.mimetype,
+        size: file.size
+      };
+    });
 
-    return this.uploadLegalDocument(user, id, {
-      documentType: documentType.trim(),
-      fileName,
-      storagePath,
-      mimeType: file.mimetype,
-      size: file.size
+    return this.prisma.$transaction(async (tx) => {
+      for (const document of documents) {
+        const existingMetadataOnly = await tx.legalDocument.findFirst({
+          where: {
+            tenantId: kycCase.tenantId,
+            kycCaseId: id,
+            documentType: document.documentType,
+            fileName: document.fileName,
+            OR: [{ storagePath: null }, { storagePath: '' }]
+          }
+        });
+
+        if (existingMetadataOnly) {
+          await tx.legalDocument.update({
+            where: { id: existingMetadataOnly.id },
+            data: {
+              storagePath: document.storagePath,
+              mimeType: document.mimeType,
+              size: document.size,
+              uploadedById: user.id
+            }
+          });
+        } else {
+          await tx.legalDocument.create({
+            data: {
+              tenantId: kycCase.tenantId,
+              kycCaseId: id,
+              documentType: document.documentType,
+              fileName: document.fileName,
+              storagePath: document.storagePath,
+              mimeType: document.mimeType,
+              size: document.size,
+              uploadedById: user.id
+            }
+          });
+        }
+      }
+
+      if (
+        kycCase.status === KycCaseStatus.INQUIRY_RECEIVED ||
+        kycCase.status === KycCaseStatus.PROPOSAL_OPTIONAL ||
+        kycCase.status === KycCaseStatus.LEGAL_DOCUMENTS_PENDING
+      ) {
+        await tx.kycCase.update({
+          where: { id },
+          data: { status: KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED }
+        });
+        await tx.kycCaseStatusHistory.create({
+          data: {
+            tenantId: kycCase.tenantId,
+            kycCaseId: id,
+            fromStatus: kycCase.status,
+            toStatus: KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+            changedById: user.id,
+            note: 'Documents required for KYC preparation uploaded'
+          }
+        });
+      }
+
+      return tx.kycCase.findUniqueOrThrow({
+        where: { id },
+        include: this.caseInclude()
+      });
     });
   }
 
@@ -378,6 +468,38 @@ export class KycService {
       fileName: document.fileName,
       mimeType: document.mimeType,
       content: readFileSync(absolutePath)
+    };
+  }
+
+  async getLegalDocumentGroupZip(user: RequestUser, id: string, documentType: string) {
+    if (!documentType?.trim()) {
+      throw new BadRequestException('Document type is required');
+    }
+
+    const kycCase = await this.findOne(user, id);
+    const documents = kycCase.legalDocuments.filter((item) => item.documentType === documentType && item.storagePath);
+
+    if (!documents.length) {
+      throw new NotFoundException('No uploaded files are available for this document group');
+    }
+
+    const zip = new PizZip();
+    const usedNames = new Set<string>();
+
+    for (const document of documents) {
+      const absolutePath = this.resolveLegalDocumentPath(document.storagePath!);
+      if (!absolutePath || !existsSync(absolutePath)) continue;
+
+      zip.file(this.uniqueArchiveFileName(document.fileName, usedNames), readFileSync(absolutePath));
+    }
+
+    if (!Object.keys(zip.files).length) {
+      throw new NotFoundException('Uploaded files are not available for this document group');
+    }
+
+    return {
+      fileName: `${this.safeFileName(documentType)}.zip`,
+      content: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
     };
   }
 
@@ -408,6 +530,17 @@ export class KycService {
 
   async submitToAml(user: RequestUser, id: string) {
     const kycCase = await this.requireWritableCase(user, id);
+    const submittableStatuses: KycCaseStatus[] = [
+        KycCaseStatus.INQUIRY_RECEIVED,
+        KycCaseStatus.PROPOSAL_OPTIONAL,
+        KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
+        KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+        KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+    ];
+    if (!submittableStatuses.includes(kycCase.status)) {
+      throw new BadRequestException('This case has already been submitted. It can be submitted again only after AML returns it for additional information.');
+    }
+
     const documentsCount = await this.prisma.legalDocument.count({
       where: { kycCaseId: id, tenantId: kycCase.tenantId }
     });
@@ -448,7 +581,20 @@ export class KycService {
         }
       });
 
+      await tx.internalReviewTask.upsert({
+        where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
+        update: { updatedBy: user.id },
+        create: {
+          tenantId: kycCase.tenantId,
+          kycCaseId: id,
+          stage: ReviewStage.MLRO,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+
       await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'DMLRO review task assigned', `${kycCase.title} is ready for DMLRO review.`);
+      await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'MLRO parallel review available', `${kycCase.title} is available for MLRO review while DMLRO review is pending.`);
 
       return tx.kycCase.findUniqueOrThrow({
         where: { id },
@@ -513,7 +659,9 @@ export class KycService {
   async startReviewStage(user: RequestUser, id: string, stage: ReviewStage) {
     this.assertStageRole(user, stage);
     const kycCase = await this.findOne(user, id);
-    await this.assertPreviousStageComplete(kycCase.id, stage);
+    if (stage !== ReviewStage.MLRO) {
+      await this.assertPreviousStageComplete(kycCase.id, stage);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const task = await tx.internalReviewTask.upsert({
@@ -571,14 +719,15 @@ export class KycService {
 
   async submitDmlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.DMLRO);
-    const decision = this.enumValue(dto.decision || 'APPROVE', ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision') as ReviewDecision;
+    const decision = this.enumValue(dto.decision || 'APPROVE', ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision') as ReviewDecision;
     const reason = this.optionalText(dto.reason);
     const conditions = this.optionalText(dto.conditions);
 
     const decisionsRequiringReason: ReviewDecision[] = [
       ReviewDecision.APPROVE_WITH_CONDITIONS,
       ReviewDecision.REQUEST_ADDITIONAL_INFORMATION,
-      ReviewDecision.RETURN_TO_SUPERVISOR
+      ReviewDecision.RETURN_TO_SUPERVISOR,
+      'DMLRO_FINAL_APPROVE' as ReviewDecision
     ];
     if (decisionsRequiringReason.includes(decision) && !reason && !conditions) {
       throw new BadRequestException('Provide DMLRO comments, reason, or conditions for this decision');
@@ -588,6 +737,23 @@ export class KycService {
       return this.submitReviewAndRoute(user, id, ReviewStage.DMLRO, { ...dto, decision }, ReviewStage.MLRO);
     }
 
+    if ((decision as string) === 'DMLRO_FINAL_APPROVE') {
+      const kycCase = await this.findOne(user, id);
+      await this.assertEditableReview(id, ReviewStage.DMLRO);
+      return this.prisma.$transaction(async (tx) => {
+        const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.DMLRO, dto);
+        await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_APPROVED, 'DMLRO final approval recorded during MLRO absence');
+        await tx.internalReviewTask.updateMany({
+          where: { tenantId: kycCase.tenantId, kycCaseId: id, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+          data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
+        });
+        await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'DMLRO_FINAL_APPROVAL_WITHOUT_MLRO', reason: reason || conditions });
+        await this.createNotification(tx, kycCase, NotificationType.MLRO_APPROVAL_COMPLETED, 'DMLRO final approval completed', `${kycCase.title} was approved by DMLRO during MLRO absence.`);
+        await this.upsertActivationChecklist(tx, user, kycCase);
+        return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+      });
+    }
+
     return this.returnDmlroReviewToSupervisor(user, id, { ...dto, decision });
   }
 
@@ -595,7 +761,10 @@ export class KycService {
     this.assertStageRole(user, ReviewStage.MLRO);
     const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO decision') as ReviewDecision;
     const kycCase = await this.findOne(user, id);
-    await this.assertPreviousStageComplete(id, ReviewStage.MLRO);
+    const dmlroSubmission = await this.prisma.internalReviewSubmission.findUnique({
+      where: { kycCaseId_stage: { kycCaseId: id, stage: ReviewStage.DMLRO } }
+    });
+    const bypassingDmlro = !dmlroSubmission?.isLocked;
 
     const decisionsRequiringReason: ReviewDecision[] = [
       ReviewDecision.REJECT,
@@ -608,14 +777,15 @@ export class KycService {
       throw new BadRequestException('Provide a reason or conditions for this MLRO decision');
     }
 
+    if (bypassingDmlro && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions) && !this.optionalText(dto.riskExplanation)) {
+      throw new BadRequestException('Provide the reason for approving or deciding this case before DMLRO review is completed');
+    }
+
     if (dto.finalRiskClassification && dto.finalRiskClassification !== dto.previousRiskClassification && !this.optionalText(dto.riskExplanation)) {
       throw new BadRequestException('Risk classification changes require an explanation');
     }
 
     const finalRiskClassification = this.optionalText(dto.finalRiskClassification);
-    if (decision === ReviewDecision.SEND_TO_SEF && finalRiskClassification !== RiskClassification.HIGH) {
-      throw new BadRequestException('SEF management approval is required only for high-risk KYC files. Select High as the final risk classification before sending to SEF.');
-    }
     if (
       finalRiskClassification === RiskClassification.HIGH &&
       (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)
@@ -651,6 +821,7 @@ export class KycService {
             updatedBy: user.id
           }
         });
+
         await this.createNotification(tx, kycCase, NotificationType.SEF_TASK_ASSIGNED, 'SEF decision requested', `${kycCase.title} requires SEF management decision.`);
       }
 
@@ -882,6 +1053,101 @@ export class KycService {
     return this.findOne(user, id);
   }
 
+  async completeEngagementDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const kycCase = await this.findOne(user, id);
+    const approvedStatuses: KycCaseStatus[] = [
+      KycCaseStatus.KYC_FINAL_APPROVED,
+      KycCaseStatus.CLIENT_ACTIVATION_PENDING
+    ];
+    if (!approvedStatuses.includes(kycCase.status)) {
+      throw new BadRequestException('The KYC file must receive final approval before the engagement decision.');
+    }
+    if (!kycCase.legalDocuments.some((document) => document.documentType === 'Signed Engagement Letter' && document.storagePath)) {
+      throw new BadRequestException('Upload the signed engagement letter before completing the engagement decision.');
+    }
+
+    const decision = this.enumValue(dto.decision, ['CONVERT_TO_CLIENT', 'REJECT', 'ON_HOLD'], 'engagement decision');
+    const reason = this.optionalText(dto.reason);
+    if (decision !== 'CONVERT_TO_CLIENT' && !reason) {
+      throw new BadRequestException('Provide a reason for rejecting or placing the engagement on hold.');
+    }
+    const targetStatus = decision === 'CONVERT_TO_CLIENT'
+      ? KycCaseStatus.CLIENT_ACTIVE
+      : decision === 'ON_HOLD'
+        ? KycCaseStatus.CLIENT_ON_HOLD
+        : KycCaseStatus.CLIENT_REJECTED;
+    await this.prisma.client.update({
+      where: { id: kycCase.clientId },
+      data: { status: decision === 'CONVERT_TO_CLIENT' ? 'ACTIVE' : decision === 'ON_HOLD' ? 'ON_HOLD' : 'REJECTED' }
+    });
+    const note = decision === 'CONVERT_TO_CLIENT'
+      ? 'Signed engagement accepted; inquiry converted and client activated'
+      : decision === 'ON_HOLD'
+        ? `Signed engagement placed on hold: ${reason}`
+        : `Signed engagement rejected: ${reason}`;
+    return this.updateStatus(user, id, targetStatus, note);
+  }
+
+  async completeFinalKycDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const decision = this.enumValue(dto.decision, ['SAME_KYC_FINAL', 'AMENDMENT_REQUIRED'], 'final KYC decision');
+
+    if (decision === 'AMENDMENT_REQUIRED') {
+      return this.startAmendment(user, id, dto);
+    }
+
+    const kycCase = await this.findOne(user, id);
+    this.assertFinalApprovalReceived(kycCase.status);
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.kycForm.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
+      });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'AML Team confirmed the approved KYC as the final KYC.');
+      await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'APPROVED_KYC_MARKED_FINAL' });
+      await this.createNotification(tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION, 'Final KYC completed', `${kycCase.title} was marked as the final KYC and is ready for the engagement decision.`);
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+    });
+  }
+
+  async startAmendment(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const kycCase = await this.findOne(user, id);
+    this.assertFinalApprovalReceived(kycCase.status);
+    const sections = Array.isArray(dto.sections) ? dto.sections.map((value) => this.optionalText(value)).filter(Boolean) as string[] : [];
+    const reason = this.optionalText(dto.reason);
+    if (!sections.length) throw new BadRequestException('Select at least one KYC section to amend.');
+    if (!reason) throw new BadRequestException('Provide the amendment reason.');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.kycForm.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        data: { isLocked: false, status: 'AMENDMENT_DRAFT', version: { increment: 1 }, updatedBy: user.id }
+      });
+      await tx.internalReviewSubmission.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id },
+        data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id }
+      });
+      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
+      await tx.workflowComment.create({
+        data: { tenantId: kycCase.tenantId, kycCaseId: id, authorId: user.id, body: `KYC amendment requested for ${sections.join(', ')}. Reason: ${reason}` }
+      });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.AML_REVIEW_STARTED, `KYC amendment started for: ${sections.join(', ')}`);
+      await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'KYC_AMENDMENT_STARTED', sections, reason });
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+    });
+  }
+
+  private assertFinalApprovalReceived(status: KycCaseStatus) {
+    const approvedStatuses: KycCaseStatus[] = [
+      KycCaseStatus.MLRO_APPROVED,
+      KycCaseStatus.MLRO_APPROVED_WITH_CONDITIONS,
+      KycCaseStatus.SEF_APPROVED
+    ];
+    if (!approvedStatuses.includes(status)) {
+      throw new BadRequestException('The final KYC decision is available only after all required approvals are completed.');
+    }
+  }
+
   async getTimeline(user: RequestUser, id: string) {
     const kycCase = await this.findOne(user, id);
 
@@ -920,11 +1186,11 @@ export class KycService {
     });
 
     if (form) {
-      return this.serializeForm(form);
+      return this.serializeForm(await this.ensureKycNumber(form));
     }
 
     const created = await this.createForm(user, id);
-    return this.serializeForm(created);
+    return this.serializeForm(await this.ensureKycNumber(created));
   }
 
   async autoSaveForm(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -972,7 +1238,7 @@ export class KycService {
     }, {});
 
     if (Object.values(layerTotals).some((layerTotal) => layerTotal > 100)) {
-      throw new BadRequestException('Ownership percentage cannot exceed 100% within the same ownership layer');
+      throw new BadRequestException('Interest percentage cannot exceed 100% within the same control layer');
     }
     const sectionData = {
       totalOwnershipPercentage: total,
@@ -1008,7 +1274,7 @@ export class KycService {
             tenantId: form.tenantId,
             kycCaseId: id,
             kycFormId: form.id,
-            fullName: this.requiredText(row.fullName, 'Shareholder full name'),
+            fullName: this.requiredText(row.fullName, 'Party full name'),
             nationality: this.optionText(row.nationality, row.nationalityOther),
             dateOfBirth: this.dateValue(row.dateOfBirth),
             identityNumber: this.optionalText(row.identityNumber),
@@ -1027,7 +1293,7 @@ export class KycService {
             tenantId: form.tenantId,
             kycCaseId: id,
             kycFormId: form.id,
-            fullName: this.requiredText(row.fullName, 'UBO full name'),
+            fullName: this.requiredText(row.fullName, 'Beneficial person full name'),
             nationality: this.optionalText(row.nationality),
             dateOfBirth: this.dateValue(row.dateOfBirth),
             identityNumber: this.optionalText(row.identityNumber),
@@ -1358,6 +1624,9 @@ export class KycService {
   }
 
   async getMyReviewTasks(user: RequestUser) {
+    if (this.hasAnyRole(user, ['MLRO'])) {
+      await this.ensureMlroParallelReviewQueue(user);
+    }
     const stages = this.reviewStagesForUser(user);
     const notificationTypes = this.reviewNotificationTypesForUser(user);
     const tenantWhere = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
@@ -1474,6 +1743,7 @@ export class KycService {
     const section = (key: KycFormSectionKey) =>
       (form.sections.find((item) => item.sectionKey === key)?.data || {}) as Record<string, unknown>;
     const ownershipSection = section(KycFormSectionKey.OWNERSHIP);
+    const sectionA = section(KycFormSectionKey.GENERAL_COMPANY);
 
     return {
       id: form.id,
@@ -1482,7 +1752,10 @@ export class KycService {
       status: form.status,
       isLocked: form.isLocked,
       version: form.version,
-      sectionA: section(KycFormSectionKey.GENERAL_COMPANY),
+      sectionA: {
+        ...sectionA,
+        reference: this.text(sectionA.reference)
+      },
       sectionB: {
         ...ownershipSection,
         shareholders: this.sectionRows(ownershipSection.shareholders, form.shareholders),
@@ -1711,7 +1984,7 @@ export class KycService {
       [this.documentMatchText('Certificate of Incorporation')]: ['certificate of incorporation', 'coi'],
       [this.documentMatchText('Articles of Association')]: ['articles of association', 'aoa'],
       [this.documentMatchText('QID / Passport copies')]: ['qid', 'passport', 'passport copy', 'passport copies'],
-      [this.documentMatchText('CR of legal entity shareholders')]: ['cr of legal entity shareholders', 'shareholder cr', 'shareholders cr'],
+      [this.documentMatchText('CR of legal entity parties')]: ['cr of legal entity parties', 'cr of legal entity shareholders', 'shareholder cr', 'shareholders cr'],
       [this.documentMatchText('National address certificates')]: ['national address', 'national address certificate', 'national address certificates'],
       [this.documentMatchText('Latest Audited Financial Statements')]: ['latest audited financial statements', 'audited financial statement', 'financial statements'],
       [this.documentMatchText('Tax Card')]: ['tax card']
@@ -1723,6 +1996,7 @@ export class KycService {
   private documentMatchText(value: string) {
     return (value || '')
       .toLowerCase()
+      .replace(/shareholders?/g, 'parties')
       .replace(/&/g, 'and')
       .replace(/[^a-z0-9]+/g, ' ')
       .replace(/\s+/g, ' ')
@@ -1812,6 +2086,58 @@ export class KycService {
 
   private tenantWhere(user: RequestUser): Prisma.KycCaseWhereInput {
     return user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
+  }
+
+  private async ensureMlroParallelReviewQueue(user: RequestUser) {
+    const tenantWhere = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
+    const cases = await this.prisma.kycCase.findMany({
+      where: {
+        ...tenantWhere,
+        status: { in: [KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_IN_PROGRESS] }
+      },
+      select: { id: true, tenantId: true, title: true }
+    });
+
+    for (const kycCase of cases) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.internalReviewTask.upsert({
+          where: { kycCaseId_stage_status: { kycCaseId: kycCase.id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
+          update: { updatedBy: user.id },
+          create: {
+            tenantId: kycCase.tenantId,
+            kycCaseId: kycCase.id,
+            stage: ReviewStage.MLRO,
+            createdBy: user.id,
+            updatedBy: user.id
+          }
+        });
+        const existingNotification = await tx.notification.findFirst({
+          where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, type: NotificationType.MLRO_TASK_ASSIGNED }
+        });
+        if (!existingNotification) {
+          await this.createNotification(
+            tx,
+            kycCase,
+            NotificationType.MLRO_TASK_ASSIGNED,
+            'MLRO parallel review available',
+            `${kycCase.title} is available for MLRO review while DMLRO review is pending.`
+          );
+        }
+      });
+    }
+  }
+
+  private async nextKycNumber(prisma: Prisma.TransactionClient, tenantId: string) {
+    const year = new Date().getFullYear();
+    const prefix = `KYC-${year}-`;
+    const count = await prisma.kycCase.count({
+      where: {
+        tenantId,
+        kycNumber: { startsWith: prefix }
+      }
+    });
+
+    return `${prefix}${String(count + 1).padStart(4, '0')}`;
   }
 
   private formTenantWhere(user: RequestUser): Prisma.KycFormWhereInput {
@@ -1964,6 +2290,27 @@ export class KycService {
             updatedBy: user.id
           }
         });
+
+        if (stage === ReviewStage.SUPERVISOR && nextStage === ReviewStage.DMLRO) {
+          await tx.internalReviewTask.upsert({
+            where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
+            update: { updatedBy: user.id },
+            create: {
+              tenantId: kycCase.tenantId,
+              kycCaseId: id,
+              stage: ReviewStage.MLRO,
+              createdBy: user.id,
+              updatedBy: user.id
+            }
+          });
+          await this.createNotification(
+            tx,
+            kycCase,
+            NotificationType.MLRO_TASK_ASSIGNED,
+            'MLRO parallel review available',
+            `${kycCase.title} is available for MLRO review while DMLRO review is pending.`
+          );
+        }
 
         await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
         await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);
@@ -2371,7 +2718,7 @@ export class KycService {
 
   private internalReviewData(dto: Record<string, unknown>): ReviewPatch {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
-    const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
+    const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
     const mlroDecision = this.enumValue(dto.mlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO final decision');
     const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF management decision');
     const mlroFinalRiskClassification = this.enumValue(dto.mlroFinalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification');
@@ -2730,7 +3077,7 @@ export class KycService {
       communicationIdentityNumber: this.text(sectionE.identityNumber),
       communicationMobile: this.text(sectionE.mobileNumber),
       communicationEmail: this.text(sectionE.email),
-      requiredDocumentsText: this.rowsText(sectionF.documents, ['documentType', 'isProvided', 'fileName']),
+      requiredDocumentsText: this.requiredDocumentsText(sectionF.documents),
       additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['fileName']) || '-',
       uploadedFilesNote: this.text(sectionF.uploadedFilesNote) || '-',
       docCommercialRegistration: this.requiredDocumentMark(sectionF.documents, 'Commercial Registration'),
@@ -2738,7 +3085,7 @@ export class KycService {
       docCertificateOfIncorporation: this.requiredDocumentMark(sectionF.documents, 'Certificate of Incorporation'),
       docArticlesOfAssociation: this.requiredDocumentMark(sectionF.documents, 'Articles of Association'),
       docIdentityCopies: this.requiredDocumentMark(sectionF.documents, 'QID / Passport copies'),
-      docLegalEntityShareholderCr: this.requiredDocumentMark(sectionF.documents, 'CR of legal entity shareholders'),
+      docLegalEntityShareholderCr: this.requiredDocumentMark(sectionF.documents, 'CR of legal entity parties'),
       docNationalAddressCertificates: this.requiredDocumentMark(sectionF.documents, 'National address certificates'),
       docAuditedFinancialStatements: this.requiredDocumentMark(sectionF.documents, 'Latest Audited Financial Statements'),
       docTaxCard: this.requiredDocumentMark(sectionF.documents, 'Tax Card'),
@@ -2763,8 +3110,6 @@ export class KycService {
       amlSignatureFileName: this.signatureDisplay('amlSignature', sectionH.amlSignatureFileName, sectionH.amlSignatureDataUrl),
       amlDate: this.text(sectionH.amlDate),
       amlComments: this.reviewConclusionText([
-        ['Accuracy checked', sectionH.amlAccuracyChecked ? 'Yes' : 'No'],
-        ['Clarification / findings', this.text(sectionH.amlClarificationFindings)],
         ['Risk classification', this.text(sectionH.riskClassification)],
         ['Due diligence type', this.text(sectionH.dueDiligenceType)]
       ]),
@@ -2938,6 +3283,17 @@ export class KycService {
       .join('\n');
   }
 
+  private requiredDocumentsText(rows: RowPayload[] | undefined) {
+    if (!rows?.length) return '';
+    return rows
+      .map((row, index) => {
+        const received = row.isProvided ? 'Received' : 'Not received';
+        const fileName = this.text(row.fileName) || '-';
+        return `${index + 1}. ${this.text(row.documentType)} | ${received} | ${fileName}`;
+      })
+      .join('\n');
+  }
+
   private ownershipStructureText(rootName: string, rows: RowPayload[]) {
     if (!rows.length) return 'No ownership structure generated';
 
@@ -2951,10 +3307,10 @@ export class KycService {
     const lines = [rootName || 'Client company'];
     const render = (parentId: string, depth: number) => {
       for (const row of childrenByParent[parentId] || []) {
-        const marker = row.isUbo ? ' [UBO]' : '';
+        const marker = row.isUbo ? ' [Beneficial]' : '';
         const linked = this.text(row.linkedClientName) ? ` | Linked client: ${this.text(row.linkedClientName)}` : '';
         lines.push(
-          `${'  '.repeat(depth)}- ${this.text(row.fullName) || 'Unnamed owner'} (${this.text(row.shareholderType || 'Individual')}, ${this.text(row.ownershipPercentage) || '0'}%)${marker}${linked}`
+          `${'  '.repeat(depth)}- ${this.text(row.fullName) || 'Unnamed party'} (${this.text(row.shareholderType || 'Individual')}, ${this.text(row.ownershipPercentage) || '0'}%)${marker}${linked}`
         );
         render(this.text(row.id), depth + 1);
       }
@@ -3019,7 +3375,7 @@ export class KycService {
       const stroke = isRoot ? '#0f172a' : item.isUbo ? '#0891b2' : '#64748b';
       this.drawRect(image, x + 4, y + 5, nodeWidth, nodeHeight, '#e2e8f0', '#e2e8f0');
       this.drawRect(image, x, y, nodeWidth, nodeHeight, fill, stroke);
-      const name = this.textLines(item.name || 'Unnamed owner', 24);
+      const name = this.textLines(item.name || 'Unnamed party', 24);
       const primaryText = isRoot ? '#ffffff' : '#0f172a';
       const secondaryText = isRoot ? '#ccfbf1' : '#475569';
       this.drawText(image, name[0], x + 12, y + 11, primaryText, 1);
@@ -3028,7 +3384,7 @@ export class KycService {
       if (item.detail) this.drawText(image, this.textLines(item.detail, 24)[0], x + 12, y + 52, secondaryText, 1);
       if (item.isUbo) {
         this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 18, 42, 13, '#ccfbf1', '#67e8f9');
-        this.drawText(image, 'UBO', x + nodeWidth - 46, y + nodeHeight - 16, '#155e75', 1);
+        this.drawText(image, 'Beneficial', x + nodeWidth - 74, y + nodeHeight - 16, '#155e75', 1);
       }
     }
 
@@ -3070,7 +3426,7 @@ export class KycService {
         items.push({
           id: rowId,
           parentId,
-          name: this.text(row.fullName) || 'Unnamed owner',
+          name: this.text(row.fullName) || 'Unnamed party',
           type: this.text(row.shareholderType || 'Individual'),
           ownership: this.text(row.ownershipPercentage || '0'),
           detail: this.optionText(row.nationality, row.nationalityOther) || this.text(row.residenceAddress),
@@ -3323,7 +3679,7 @@ export class KycService {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
 ${this.docxParagraph('NEWOON KYC FORM')}
 ${this.docxParagraph('A. General Company Information')}
-${this.docxParagraph('Date: {date} | Reference: {reference}')}
+${this.docxParagraph('Date: {date} | KYC Number: {reference}')}
 ${this.docxParagraph('Legal Name of Company: {legalName}')}
 ${this.docxParagraph('Commercial Registration No.: {commercialRegistrationNo} | Tax Identification No.: {taxIdentificationNo}')}
 ${this.docxParagraph('Date/Country of Incorporation: {dateOfIncorporation} / {countryOfIncorporation} | Legal Form: {legalForm}')}
@@ -3332,12 +3688,12 @@ ${this.docxParagraph('Telephone: {telephone} | Email: {email} | Website: {websit
 ${this.docxParagraph('Business Nature: {businessNature}')}
 ${this.docxParagraph('License Activities: {licenseActivities} | Related Industry: {relatedIndustry}')}
 ${this.docxParagraph('Nature of prospective service from Newoon: {prospectiveService}')}
-${this.docxParagraph('B. Ownership / Shareholders')}
-${this.docxParagraph('Shareholders:\\n{shareholdersText}')}
-${this.docxParagraph('Total Ownership: {totalOwnershipPercentage}% | UBO different: {uboDifferentFromShareholders}')}
-${this.docxParagraph('UBO Group Structure Notes: {uboGroupStructureNotes}')}
-${this.docxParagraph('Ownership Structure:\\n{ownershipStructureText}')}
-${this.docxParagraph('UBOs:\\n{ubosText}')}
+${this.docxParagraph('B. Control / Interest Details')}
+${this.docxParagraph('Listed parties:\\n{shareholdersText}')}
+${this.docxParagraph('Total interest percentage: {totalOwnershipPercentage}% | Beneficial person different from listed parties: {uboDifferentFromShareholders}')}
+${this.docxParagraph('Beneficial structure notes: {uboGroupStructureNotes}')}
+${this.docxParagraph('Control structure:\\n{ownershipStructureText}')}
+${this.docxParagraph('Beneficial persons:\\n{ubosText}')}
 ${this.docxParagraph('C. Manager / Authorized Signatory / Directors / Secretary')}
 ${this.docxParagraph('{managersText}')}
 ${this.docxParagraph('D. Compliance and Risk Information')}
@@ -3358,7 +3714,6 @@ ${this.docxParagraph('Additional notes for KYC preparation documents: {uploadedF
 ${this.docxParagraph('G. Client Declaration')}
 ${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
 ${this.docxParagraph('H. Internal Use Only')}
-${this.docxParagraph('Accuracy checked: {amlAccuracyChecked} | Findings: {amlClarificationFindings}')}
 ${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML Supervisor date: {amlDate}')}
 ${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Decision: {dmlroDecision} | Conditions: {dmlroConditions} | Reason: {dmlroReason} | Comments: {dmlroComments}')}
 ${this.docxParagraph('MLRO: {mlroName} | Signature: {mlroSignatureFileName} | Date: {mlroDate} | Final decision: {mlroDecision} | Final risk: {mlroFinalRiskClassification} | Risk reason: {mlroRiskReasonCategory} | Risk explanation: {mlroRiskExplanation} | Conditions: {mlroConditions} | Comments: {mlroComments}')}
@@ -3425,6 +3780,59 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
       .find((candidate) => isPathInsideRoot(candidate, normalizedRoot) && existsSync(candidate)) || null;
   }
 
+  private async ensureKycNumber(form: Prisma.KycFormGetPayload<{ include: ReturnType<KycService['formInclude']> }>) {
+    const section = form.sections.find((item) => item.sectionKey === KycFormSectionKey.GENERAL_COMPANY);
+    const data = (section?.data || {}) as Record<string, unknown>;
+    if (typeof data.reference === 'string' && data.reference.trim()) return form;
+
+    const kycNumber = form.kycCase.kycNumber || (await this.generatedKycNumber(form.kycCase.tenantId, form.kycCase.id, form.kycCase.createdAt));
+    const nextData = this.jsonValue({ ...data, reference: kycNumber });
+
+    if (section) {
+      await this.prisma.kycSectionData.update({
+        where: { id: section.id },
+        data: { data: nextData, updatedBy: form.updatedBy }
+      });
+    } else {
+      await this.prisma.kycSectionData.create({
+        data: {
+          tenantId: form.tenantId,
+          kycCaseId: form.kycCaseId,
+          kycFormId: form.id,
+          sectionKey: KycFormSectionKey.GENERAL_COMPANY,
+          data: nextData,
+          createdBy: form.createdBy,
+          updatedBy: form.updatedBy
+        }
+      });
+    }
+
+    return this.prisma.kycForm.findUniqueOrThrow({ where: { id: form.id }, include: this.formInclude() });
+  }
+
+  private async generatedKycNumber(tenantId: string, caseId: string, createdAt: Date) {
+    const year = createdAt.getFullYear();
+    const yearStart = new Date(Date.UTC(year, 0, 1));
+    const nextYearStart = new Date(Date.UTC(year + 1, 0, 1));
+    const cases = await this.prisma.kycCase.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: yearStart, lt: nextYearStart }
+      },
+      select: { id: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }]
+    });
+    const index = Math.max(0, cases.findIndex((item) => item.id === caseId));
+    return `KYC-${year}-${String(index + 1).padStart(4, '0')}`;
+  }
+
+  private async withKycNumber<T extends { tenantId: string; id: string; createdAt: Date; kycNumber?: string | null }>(kycCase: T) {
+    return {
+      ...kycCase,
+      kycNumber: kycCase.kycNumber || (await this.generatedKycNumber(kycCase.tenantId, kycCase.id, kycCase.createdAt))
+    };
+  }
+
   private safeFileName(fileName: string) {
     const name = basename(fileName || 'document')
       .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
@@ -3432,6 +3840,28 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
       .trim();
 
     return name || 'document';
+  }
+
+  private uniqueArchiveFileName(fileName: string, usedNames: Set<string>) {
+    const baseName = this.safeFileName(fileName);
+    if (!usedNames.has(baseName)) {
+      usedNames.add(baseName);
+      return baseName;
+    }
+
+    const dotIndex = baseName.lastIndexOf('.');
+    const name = dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName;
+    const extension = dotIndex > 0 ? baseName.slice(dotIndex) : '';
+    let counter = 2;
+    let candidate = `${name} (${counter})${extension}`;
+
+    while (usedNames.has(candidate)) {
+      counter += 1;
+      candidate = `${name} (${counter})${extension}`;
+    }
+
+    usedNames.add(candidate);
+    return candidate;
   }
 
   private legalDocumentSyncKey(documentType: string, fileName: string) {

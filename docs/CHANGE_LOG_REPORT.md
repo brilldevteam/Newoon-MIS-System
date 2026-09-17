@@ -40,6 +40,533 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-09-17 - AML Team Final KYC and Amendment Decision
+
+Module:
+- Post-approval KYC finalization and amendment workflow
+
+Summary:
+- Added an AML Team post-approval dropdown to either use the approved KYC as the final KYC or require an amendment.
+- Final confirmation locks the approved form and moves the case to `KYC_FINAL_APPROVED`.
+- Amendment selection requires affected sections and a reason, increments the existing populated form version, reopens it for editing, and restarts review.
+- Made this decision available to AML Team, AML Supervisor, and administrative roles, and prevented Operations from completing engagement activation before the final KYC decision.
+- Improved final-decision failures so the UI displays the backend validation or connection error instead of a generic message.
+
+Changed Files:
+- backend/src/kyc/kyc.controller.ts
+- backend/src/kyc/kyc.service.ts
+- frontend/src/pages/KycCaseDetailsPage.tsx
+- frontend/src/services/kyc-workflow.service.ts
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build`
+- Backend and frontend production builds completed successfully.
+
+Git:
+- Branch: feat/kyc-workflow-finalization
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Deploy the latest backend and frontend build. No additional migration is required for this workflow change.
+
+## 2026-09-17 - Prevent Repeated Enquiry-to-KYC Conversion
+
+Module:
+- Enquiry status actions and KYC case creation
+
+Summary:
+- Made `CONVERTED_TO_KYC` terminal so an enquiry cannot be marked ready and converted repeatedly.
+- Added a unique source-enquiry link to generated KYC cases and an atomic conversion claim to prevent duplicate cases from repeated or concurrent requests.
+- Replaced conversion controls with an Open KYC Case action after conversion.
+- Backfilled the earliest generated KYC case for previously converted enquiries.
+
+Changed Files:
+- backend/prisma/schema.prisma
+- backend/prisma/migrations/20260917140000_link_enquiry_to_kyc_case/migration.sql
+- backend/src/enquiries/enquiries.service.ts
+- frontend/src/pages/EnquiryDetailsPage.tsx
+- frontend/src/services/kyc-workflow.service.ts
+
+Database Changes:
+- Added nullable unique `KycCase.sourceEnquiryId` with an enquiry foreign key and existing-data backfill.
+
+Verification:
+- Prisma schema validation passed.
+- Prisma Client type generation passed with `--no-engine` because the running Windows server locks the local engine DLL.
+- Production backend and frontend build passed.
+
+Git:
+- Branch: feat/kyc-workflow-finalization
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Apply Prisma migrations before restarting the deployed application.
+
+## 2026-09-17 - MLRO Parallel Review Queue Repair
+
+Module:
+- KYC review routing, review tasks, and role notifications
+
+Summary:
+- Corrected the direct AML Supervisor submission path so sending a case to DMLRO also creates the parallel MLRO review task and MLRO notification.
+- Added tenant-scoped recovery when an MLRO loads My Review Tasks, restoring missing MLRO tasks and notifications for cases already pending with DMLRO.
+
+Changed Files:
+- backend/src/kyc/kyc.service.ts
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build`
+- Backend and frontend production builds completed successfully.
+
+Git:
+- Branch: feat/kyc-workflow-finalization
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Deploy the latest backend build and restart the application. Existing DMLRO-pending cases are repaired when the MLRO opens My Review Tasks.
+
+## 2026-09-17 - SEF Routing, Parallel Review, and Client Activation Corrections
+
+Module:
+- Internal review workflow
+- Engagement decision
+- Client register
+
+Summary:
+- Kept `Send to SEF` visible for MLRO at every risk level while continuing to require SEF routing for High-risk files.
+- Allowed MLRO to start and complete a reason-controlled review while DMLRO review is pending, including a parallel MLRO review task and notification.
+- Added `Final approval during MLRO absence` to both DMLRO review interfaces and required a reason or conditions.
+- Added Convert and activate, Reject, and On hold outcomes after the signed engagement letter is uploaded by Operations/BD.
+- Restricted the Clients list to activated clients; enquiry-generated prospect records remain hidden until conversion and activation.
+- Marked directly created client records as Active and included migration backfill for existing direct clients and already activated KYC clients.
+
+Changed Files:
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20260917130000_add_dmlro_final_approval_decision/migration.sql`
+- `backend/src/clients/clients.service.ts`
+- `backend/src/kyc/kyc.service.ts`
+- `frontend/src/pages/InternalReviewWorkspacePage.tsx`
+- `frontend/src/pages/KycCaseDetailsPage.tsx`
+- `frontend/src/pages/KycFormEditorPage.tsx`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- Migration: `20260917130000_add_dmlro_final_approval_decision`
+
+Verification:
+- Prisma schema validation passed.
+- Prisma Client generation passed.
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/kyc-workflow-finalization`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Run `npx prisma migrate deploy --schema backend/prisma/schema.prisma` before restarting the application.
+
+## 2026-09-17 - Compact Screening Record Header
+
+Module:
+- Individual screening records
+
+Summary:
+- Arranged Screening name, Identifier, Country, and Result in one four-column row on desktop screens.
+- Retained responsive wrapping for tablet and mobile widths.
+
+Changed Files:
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build`
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- No database migration is required.
+
+## 2026-09-17 - Unified CRRF Form Layout
+
+Module:
+- CRRF workspace
+
+Summary:
+- Moved the optional CRRF document uploader and uploaded-file list into the Risk Rating and Internal Comments form.
+- Placed the Save CRRF action below the complete record so rating, comments, evidence, and save action read as one workflow.
+
+Changed Files:
+- `frontend/src/pages/CrrfWorkspacePage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- No database migration is required for this layout update.
+
+## 2026-09-17 - Screening Other-Document and Country Field Correction
+
+Module:
+- Individual screening records
+
+Summary:
+- Removed the legacy `Other relevant document type` upload block that duplicated the selectable `Other screening document` tool.
+- Replaced manual-entry and screening-record country text inputs with the shared searchable country dropdown used elsewhere in the application.
+
+Changed Files:
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- No additional migration is required for this correction.
+
+## 2026-09-17 - Required Common Screening and Selective Individual Tools
+
+Module:
+- Screening workspace
+- KYC case details
+
+Summary:
+- Added World-Check and Google to the required common Screening PDF Files section alongside NCTC, UN, OFAC, EU, and PPO List.
+- Added a persistent individual screening-tool selector for NCTC, UN, OFAC, and Other.
+- Individual screening records now render only selected tools, avoiding empty unused screening rows.
+- Required a result and evidence for every selected individual tool, with comments required for potential or confirmed matches.
+- Removed the Workflow Progress panel from KYC case details.
+
+Changed Files:
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20260917120000_add_screening_check_selection/migration.sql`
+- `backend/src/screening/screening.service.ts`
+- `frontend/src/pages/KycCaseDetailsPage.tsx`
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- Migration: `20260917120000_add_screening_check_selection`
+
+Verification:
+- `npx.cmd prisma validate --schema backend/prisma/schema.prisma` passed with a temporary validation URL.
+- `npx.cmd prisma generate --schema backend/prisma/schema.prisma --no-engine` passed.
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Run `npx prisma migrate deploy --schema backend/prisma/schema.prisma` before restarting the application.
+
+## 2026-09-17 - Screening, Review Bypass, Activation, and Amendment Workflow
+
+Module:
+- Screening
+- CRRF
+- Internal review
+- Client activation
+- KYC amendment
+
+Summary:
+- Removed the AML Supervisor accuracy-check field from the visible KYC review and generated documents.
+- Exposed separate AML Supervisor, DMLRO, MLRO, and SEF review stages in the internal review workspace.
+- Changed individual screening so World-Check and Google require results but no individual uploads; match comments are required for potential or confirmed matches.
+- Added optional NCTC, UN, OFAC, and Other individual filters, with evidence required only when a filter is selected.
+- Added the KYC number to Screening and CRRF client summaries.
+- Kept CRRF supporting documents optional while retaining mandatory risk rating validation.
+- Allowed MLRO review before DMLRO completion when a bypass reason is recorded, and added reason-controlled DMLRO final approval for MLRO absence.
+- Made Send to SEF available for any risk level while keeping SEF mandatory for High-risk approval.
+- Added the post-approval Operations workflow to upload a signed engagement letter and either activate the client or reject the engagement.
+- Added an AML KYC amendment action for selecting affected sections, recording a reason, opening a new form version, and restarting review.
+
+Changed Files:
+- `backend/src/crrf/crrf.service.ts`
+- `backend/src/kyc/kyc.controller.ts`
+- `backend/src/kyc/kyc.service.ts`
+- `backend/src/screening/screening.service.ts`
+- `frontend/src/pages/CrrfWorkspacePage.tsx`
+- `frontend/src/pages/InternalReviewWorkspacePage.tsx`
+- `frontend/src/pages/KycCaseDetailsPage.tsx`
+- `frontend/src/pages/KycFormEditorPage.tsx`
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- No database migration is required.
+
+## 2026-09-17 - KYC Control Details and Received Document Wording
+
+Module:
+- KYC Form Builder
+- Generated KYC DOCX and PDF documents
+
+Summary:
+- Replaced user-visible `Owner`, `Shareholder`, and `UBO` terminology in Section B with neutral `Party`, `Control / Interest`, and `Beneficial person` wording.
+- Renamed the required-document checklist status from `Provided` to `Received` in the generated KYC document.
+- Renamed `CR of legal entity shareholders` to `CR of legal entity parties` while retaining aliases for previously saved records.
+- Updated percentage, structure diagram, validation, and generated-document labels to use the revised terminology consistently.
+
+Changed Files:
+- `backend/src/kyc/kyc.service.ts`
+- `frontend/src/pages/KycFormEditorPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build`
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- No database migration is required for this wording update.
+
+## 2026-09-16 - KYC Number, Review Links, and Key Contact Identity Updates
+
+Module:
+- Enquiry workflow
+- KYC Form Builder
+- Review workspace
+- Key contact identity capture
+
+Summary:
+- Updated KYC form entry links from review areas so the KYC form opens in a new browser tab.
+- Replaced visible `Converted to KYC` enquiry wording with responsible-stage wording showing pending AML Supervisor handoff.
+- Renamed the KYC workflow table `Case` header to `KYC Number` and displayed the generated KYC number in that column.
+- Added a stored KYC case number field, migration backfill, and automatic generation in the `KYC-YYYY-0001` sequence format for both direct KYC creation and enquiry-to-KYC conversion.
+- Renamed the KYC form `Reference` field to `KYC Number` and auto-populated it from the stored KYC number for both the workflow list and Section A form field.
+- Marked KYC forms generated from proposed-company enquiries as preliminary proposed-company forms so they are visually distinguishable from standard KYC forms.
+- Reworked key contact identity capture to support Passport and/or QID, with separate expiry dates and validation requiring either Passport or QID instead of making QID mandatory.
+
+Changed Files:
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20260916110000_add_kyc_case_number/migration.sql`
+- `backend/src/enquiries/enquiries.service.ts`
+- `backend/src/kyc/kyc.service.ts`
+- `frontend/src/pages/AddEnquiryPage.tsx`
+- `frontend/src/pages/EnquiryDetailsPage.tsx`
+- `frontend/src/pages/EnquiryListPage.tsx`
+- `frontend/src/pages/InternalReviewWorkspacePage.tsx`
+- `frontend/src/pages/KycCaseDetailsPage.tsx`
+- `frontend/src/pages/KycFormEditorPage.tsx`
+- `frontend/src/pages/ReviewTasksPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- Migration: `20260916110000_add_kyc_case_number`
+
+Verification:
+- `npm.cmd run build` passed.
+- `npx.cmd prisma generate --schema backend/prisma/schema.prisma --no-engine` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Run Prisma migration deploy/generate, then backend restart and frontend rebuild.
+
+## 2026-09-16 - Multi-File Edit Preservation Fix
+
+Module:
+- Enquiry attachments
+- Multi-file upload persistence
+
+Summary:
+- Fixed enquiry edit reload so multiple uploaded files under the same attachment heading are preserved and displayed together.
+- Updated attachment draft state to track saved files separately from newly selected files, preventing save/update from collapsing a multi-file group into one metadata row.
+- Ensured saved attachment metadata preserves each file's storage path, MIME type, and size when editing an existing enquiry.
+
+Changed Files:
+- `frontend/src/pages/AddEnquiryPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Frontend rebuild required.
+
+## 2026-09-16 - Submission Lock and Document Group Downloads
+
+Module:
+- Enquiry workflow
+- KYC preparation documents
+- Attachment downloads
+
+Summary:
+- Locked Operations enquiry editing, attachment uploading, and submit-to-AML actions after submission until AML returns the enquiry to BD.
+- Hid AML-only enquiry actions from Operations users, including `Return to BD`, `Mark Ready for KYC`, and KYC creation actions.
+- Added status-based KYC preparation document upload/submit locks so documents cannot be re-submitted after workflow submission unless the case is returned for additional information.
+- Added multi-file KYC preparation upload support so files selected under one document heading are persisted together.
+- Grouped KYC preparation documents by heading on the case details page, with individual view/download actions and ZIP download for groups with multiple files.
+- Added explicit legal-document download actions to avoid using preview behavior for files that should be downloaded.
+
+Changed Files:
+- `backend/src/enquiries/enquiries.service.ts`
+- `backend/src/kyc/kyc.controller.ts`
+- `backend/src/kyc/kyc.service.ts`
+- `frontend/src/pages/EnquiryDetailsPage.tsx`
+- `frontend/src/pages/KycCaseDetailsPage.tsx`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Backend restart and frontend rebuild required.
+
+## 2026-09-16 - Enquiry Attachment ZIP Download
+
+Module:
+- Enquiry attachment review
+
+Summary:
+- Added a backend ZIP download endpoint for enquiry attachment groups.
+- Updated the enquiry details page so grouped attachment download uses a normal single-file download when one file is available and a ZIP archive when multiple files are available.
+
+Changed Files:
+- `backend/src/enquiries/enquiries.controller.ts`
+- `backend/src/enquiries/enquiries.service.ts`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `frontend/src/pages/EnquiryDetailsPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Backend restart and frontend rebuild required.
+
+## 2026-09-16 - Enquiry Notification and Attachment Review Corrections
+
+Module:
+- Enquiry workflow
+- Enquiry notifications
+- Enquiry attachment uploads and review
+
+Summary:
+- Routed new enquiry notifications to SEF users in addition to existing review roles.
+- Changed AML return notification wording from Operations to BD.
+- Added a real multi-file enquiry attachment upload endpoint so files selected together persist together instead of relying on repeated single-file uploads.
+- Restricted enquiry deletion to Super Admin users only and hid the delete action for other users.
+- Grouped enquiry attachments by document heading on the details page and added a Download all action per group while keeping individual view/download actions.
+
+Changed Files:
+- `backend/src/enquiries/enquiries.controller.ts`
+- `backend/src/enquiries/enquiries.service.ts`
+- `frontend/src/services/kyc-workflow.service.ts`
+- `frontend/src/pages/EnquiryDetailsPage.tsx`
+- `frontend/src/pages/EnquiryListPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Backend restart and frontend rebuild required.
+
+## 2026-09-16 - Enquiry Form Client Corrections
+
+Module:
+- Enquiry intake
+- Enquiry attachments
+
+Summary:
+- Added `QFC LLC` as an available Proposed Legal Form option.
+- Added an `Other` option to Requested Services with a details field that saves the typed service into the existing requested services list.
+- Removed the Key Contact passport/QID upload block from the Contact tab so the attachment is captured only in the Attachments tab.
+- Renamed the proposed-company attachment requirement from `Identity Proof - Director UBO` to `Identity Proof - Proposed Director`.
+
+Changed Files:
+- `frontend/src/pages/AddEnquiryPage.tsx`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/production-upload-security`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Frontend rebuild required.
+
 ## 2026-09-08 - Production Security Hardening Review
 
 Module:
@@ -1046,6 +1573,7 @@ Deployment Notes:
 - `20260902100000_add_screening_case_results`
 - `20260902120000_add_crrf_module`
 - `20260903100000_update_crrf_internal_comments`
+- `20260916110000_add_kyc_case_number`
 
 ## Current Server Deployment Command Pattern
 

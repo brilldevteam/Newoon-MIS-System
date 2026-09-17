@@ -18,10 +18,16 @@ const MANDATORY_CHECKS: ScreeningCheckType[] = [
   ScreeningCheckType.NCTC,
   ScreeningCheckType.UN,
   ScreeningCheckType.OFAC,
-  ScreeningCheckType.EU,
-  ScreeningCheckType.PPO_LIST,
-  ScreeningCheckType.WORLD_CHECK,
-  ScreeningCheckType.GOOGLE
+  ScreeningCheckType.OTHER
+];
+
+const RESULT_REQUIRED_CHECKS: ScreeningCheckType[] = [];
+
+const INDIVIDUAL_FILTER_CHECKS: ScreeningCheckType[] = [
+  ScreeningCheckType.NCTC,
+  ScreeningCheckType.UN,
+  ScreeningCheckType.OFAC,
+  ScreeningCheckType.OTHER
 ];
 
 const MERGED_EVIDENCE_CHECKS: ScreeningCheckType[] = [
@@ -29,10 +35,12 @@ const MERGED_EVIDENCE_CHECKS: ScreeningCheckType[] = [
   ScreeningCheckType.UN,
   ScreeningCheckType.OFAC,
   ScreeningCheckType.EU,
-  ScreeningCheckType.PPO_LIST
+  ScreeningCheckType.PPO_LIST,
+  ScreeningCheckType.WORLD_CHECK,
+  ScreeningCheckType.GOOGLE
 ];
 
-const INDIVIDUAL_EVIDENCE_CHECKS: ScreeningCheckType[] = [ScreeningCheckType.WORLD_CHECK, ScreeningCheckType.GOOGLE];
+const INDIVIDUAL_EVIDENCE_CHECKS: ScreeningCheckType[] = INDIVIDUAL_FILTER_CHECKS;
 
 type ScreeningEntityOption = {
   sourceId: string;
@@ -68,8 +76,8 @@ export class ScreeningService {
 
     return records.map((record) => ({
       ...record,
-      completedChecks: record.checks.filter((check) => check.resultStatus !== ScreeningResultStatus.NOT_CHECKED && check.documents.length > 0).length,
-      totalChecks: MANDATORY_CHECKS.length,
+      completedChecks: record.checks.filter((check) => check.isSelected && check.resultStatus !== ScreeningResultStatus.NOT_CHECKED && check.documents.length > 0).length,
+      totalChecks: record.checks.filter((check) => check.isSelected).length,
       documentCount: record.documents.length + record.checks.reduce((sum, check) => sum + check.documents.length, 0)
     }));
   }
@@ -95,6 +103,8 @@ export class ScreeningService {
       clientInfo: this.clientInfo(kycCase, sections.sectionA),
       entities: this.extractEntities(kycCase, sections),
       mandatoryChecks: MANDATORY_CHECKS,
+      resultRequiredChecks: RESULT_REQUIRED_CHECKS,
+      individualFilterChecks: INDIVIDUAL_FILTER_CHECKS,
       mergedEvidenceChecks: MERGED_EVIDENCE_CHECKS,
       individualEvidenceChecks: INDIVIDUAL_EVIDENCE_CHECKS,
       mergedChecks,
@@ -108,7 +118,7 @@ export class ScreeningService {
     const checkType = this.enumValue(ScreeningCheckType, checkTypeValue);
     const resultStatus = this.enumValue(ScreeningResultStatus, dto.resultStatus);
     if (!checkType || !MERGED_EVIDENCE_CHECKS.includes(checkType)) {
-      throw new BadRequestException('Select NCTC, UN, OFAC, EU, or PPO List for screening result.');
+      throw new BadRequestException('Select NCTC, UN, OFAC, EU, PPO List, World-Check, or Google for the common screening result.');
     }
     if (!resultStatus) {
       throw new BadRequestException('Select a valid screening result.');
@@ -192,7 +202,7 @@ export class ScreeningService {
       for (const item of checks) {
         if (!this.isRecord(item)) continue;
         const checkType = this.enumValue(ScreeningCheckType, item.checkType);
-        if (!checkType || checkType === ScreeningCheckType.OTHER) continue;
+        if (!checkType) continue;
         await tx.screeningCheck.upsert({
           where: { screeningRecordId_checkType: { screeningRecordId: recordId, checkType } },
           create: {
@@ -200,10 +210,12 @@ export class ScreeningService {
             screeningRecordId: recordId,
             checkType,
             resultStatus: this.enumValue(ScreeningResultStatus, item.resultStatus) || ScreeningResultStatus.NOT_CHECKED,
+            isSelected: Boolean(item.isSelected),
             notes: this.stringValue(item.notes)
           },
           update: {
             resultStatus: this.enumValue(ScreeningResultStatus, item.resultStatus) || ScreeningResultStatus.NOT_CHECKED,
+            isSelected: Boolean(item.isSelected),
             notes: this.stringValue(item.notes)
           }
         });
@@ -227,14 +239,19 @@ export class ScreeningService {
       const check = mergedChecks.find((item) => item.checkType === checkType);
       return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED;
     });
-    const missingIndividualEvidence = INDIVIDUAL_EVIDENCE_CHECKS.filter((checkType) => {
+    const missingIndividualEvidence = INDIVIDUAL_FILTER_CHECKS.filter((checkType) => {
       const check = record.checks.find((item) => item.checkType === checkType);
-      return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED || check.documents.length === 0;
+      return Boolean(check?.isSelected && check.documents.length === 0);
     });
-    const missingIndividualResults = INDIVIDUAL_EVIDENCE_CHECKS.filter((checkType) => {
-      const check = record.checks.find((item) => item.checkType === checkType);
-      return !check || check.resultStatus === ScreeningResultStatus.NOT_CHECKED;
-    });
+    const missingIndividualResults = record.checks
+      .filter((check) => check.isSelected && INDIVIDUAL_FILTER_CHECKS.includes(check.checkType) && check.resultStatus === ScreeningResultStatus.NOT_CHECKED)
+      .map((check) => check.checkType);
+    const missingMatchComments = record.checks.filter((check) => check.isSelected).filter((check) => {
+      return Boolean(
+        (check.resultStatus === ScreeningResultStatus.POTENTIAL_MATCH || check.resultStatus === ScreeningResultStatus.CONFIRMED_MATCH) &&
+        !(check.notes || '').trim()
+      );
+    }).map((check) => check.checkType);
 
     if (!remarks) {
       throw new BadRequestException('Observation and remarks are required before finalizing screening.');
@@ -253,11 +270,15 @@ export class ScreeningService {
     }
 
     if (missingIndividualResults.length) {
-      throw new BadRequestException(`Select individual screening result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+      throw new BadRequestException(`Select a result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
     }
 
     if (missingIndividualEvidence.length) {
-      throw new BadRequestException(`Upload individual PDF evidence for: ${missingIndividualEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
+      throw new BadRequestException(`Upload PDF evidence for each selected filter: ${missingIndividualEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
+    }
+
+    if (missingMatchComments.length) {
+      throw new BadRequestException(`Add comments for potential or confirmed matches in: ${missingMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
     }
 
     await this.prisma.screeningRecord.update({
@@ -293,7 +314,7 @@ export class ScreeningService {
 
     const checkType = this.enumValue(ScreeningCheckType, dto.checkType);
     if (!checkType || !MERGED_EVIDENCE_CHECKS.includes(checkType)) {
-      throw new BadRequestException('Select NCTC, UN, OFAC, EU, or PPO List for merged screening evidence.');
+      throw new BadRequestException('Select NCTC, UN, OFAC, EU, PPO List, World-Check, or Google for common screening evidence.');
     }
 
     validateUploadFiles(files, ['pdf'], 'merged screening PDF');
@@ -352,9 +373,25 @@ export class ScreeningService {
       throw new BadRequestException('Select the screening check type before uploading.');
     }
 
-    const check = checkType === ScreeningCheckType.OTHER ? null : record.checks.find((item) => item.checkType === checkType);
-    if (checkType !== ScreeningCheckType.OTHER && !check) {
-      throw new BadRequestException('Screening check row not found for this upload.');
+    let check = record.checks.find((item) => item.checkType === checkType);
+    if (!check) {
+      check = await this.prisma.screeningCheck.create({
+        data: {
+          tenantId: record.tenantId,
+          screeningRecordId: record.id,
+          checkType,
+          resultStatus: ScreeningResultStatus.NOT_CHECKED,
+          isSelected: true
+        },
+        include: { documents: true }
+      });
+    }
+    if (!check.isSelected) {
+      check = await this.prisma.screeningCheck.update({
+        where: { id: check.id },
+        data: { isSelected: true },
+        include: { documents: true }
+      });
     }
 
     validateUploadFiles(
@@ -375,7 +412,7 @@ export class ScreeningService {
         data: {
           tenantId: record.tenantId,
           screeningRecordId: record.id,
-          screeningCheckId: check?.id || null,
+          screeningCheckId: check.id,
           documentType: checkType === ScreeningCheckType.OTHER ? this.stringValue(dto.documentType) || 'Other screening document' : this.checkLabel(checkType),
           fileName,
           storagePath: `${record.tenantId}/${kycCaseId}/${recordId}/${storedFileName}`,
@@ -568,6 +605,7 @@ export class ScreeningService {
     return {
       caseId: kycCase.id,
       caseTitle: kycCase.title,
+      kycNumber: kycCase.kycNumber,
       clientId: kycCase.clientId,
       clientName: this.stringValue(sectionA.legalName) || this.stringValue(sectionA.legalNameOfCompany) || kycCase.client.name,
       clientCode: kycCase.client.registrationNumber || crNumber || kycCase.clientId,

@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -67,6 +67,18 @@ export class EnquiriesController {
     return this.enquiriesService.uploadAttachmentFile(user, id, documentType, file);
   }
 
+  @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/attachments/upload-many')
+  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions()))
+  uploadAttachmentFiles(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('documentType') documentType: string,
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }>
+  ) {
+    return this.enquiriesService.uploadAttachmentFiles(user, id, documentType, files);
+  }
+
   @Get(':id/attachments/:attachmentId/view')
   async viewAttachment(
     @CurrentUser() user: RequestUser,
@@ -81,7 +93,21 @@ export class EnquiriesController {
     response.send(document.content);
   }
 
-  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/attachments/download-group')
+  async downloadAttachmentGroup(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Query('documentType') documentType: string,
+    @Res() response: Response
+  ) {
+    const archive = await this.enquiriesService.getAttachmentGroupZip(user, id, documentType);
+    response.setHeader('Content-Type', 'application/zip');
+    response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeResponseFileName(archive.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.send(archive.content);
+  }
+
+  @Roles('SUPER_ADMIN')
   @Delete(':id')
   remove(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.enquiriesService.remove(user, id);

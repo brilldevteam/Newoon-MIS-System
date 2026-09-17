@@ -15,6 +15,7 @@ export class ClientsService {
       data: {
         tenantId,
         name: dto.name,
+        status: 'ACTIVE',
         registrationNumber: dto.registrationNumber,
         industry: dto.industry,
         country: dto.country,
@@ -36,7 +37,7 @@ export class ClientsService {
 
   findAll(user: RequestUser) {
     return this.prisma.client.findMany({
-      where: this.tenantWhere(user),
+      where: { ...this.tenantWhere(user), status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
       include: {
         contacts: true,

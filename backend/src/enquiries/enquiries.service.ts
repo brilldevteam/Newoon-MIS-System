@@ -2,7 +2,8 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Log
 import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, NotificationType, Prisma } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
-import { isPathInsideRoot, validateUploadFile } from '../common/security/upload-security';
+import PizZip from 'pizzip';
+import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
@@ -82,7 +83,7 @@ export class EnquiriesService {
             tenantId,
             roles: {
               some: {
-                role: { name: { in: ['DMLRO', 'MLRO'] } }
+                role: { name: { in: ['DMLRO', 'MLRO', 'SEF'] } }
               }
             }
           },
@@ -138,6 +139,7 @@ export class EnquiriesService {
       where: { id, ...this.tenantWhere(user) },
       include: {
         client: { include: { contacts: true, kycCases: true } },
+        generatedKycCases: { select: { id: true, kycNumber: true, title: true, status: true }, orderBy: { createdAt: 'asc' } },
         attachments: { orderBy: { createdAt: 'desc' } },
         comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
         statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } },
@@ -154,6 +156,10 @@ export class EnquiriesService {
 
   async update(user: RequestUser, id: string, dto: UpdateEnquiryDto) {
     const existing = await this.findOne(user, id);
+    if (!this.canModifyEnquiry(user, existing.status)) {
+      throw new BadRequestException('This enquiry has already been submitted. It can be edited again only after AML returns it to BD.');
+    }
+
     await this.assertClientTenant(user, dto.clientId || undefined);
     const nextClientId =
       dto.enquiryType && dto.enquiryType !== EnquiryType.CURRENT_CLIENT_NEW_SERVICES
@@ -211,6 +217,10 @@ export class EnquiriesService {
   async updateStatus(user: RequestUser, id: string, dto: UpdateEnquiryStatusDto) {
     const existing = await this.findOne(user, id);
 
+    if (existing.status === EnquiryStatus.CONVERTED_TO_KYC) {
+      throw new BadRequestException('This enquiry has already been converted to KYC and its status cannot be changed.');
+    }
+
     await this.prisma.$transaction(async (prisma) => {
       await prisma.enquiry.update({
         where: { id: existing.id },
@@ -229,6 +239,11 @@ export class EnquiriesService {
       });
 
       if (dto.status === EnquiryStatus.SUBMITTED_TO_AML_SUPERVISOR) {
+        const submittableStatuses: EnquiryStatus[] = [EnquiryStatus.DRAFT, EnquiryStatus.RETURNED_TO_BD];
+        if (!submittableStatuses.includes(existing.status)) {
+          throw new BadRequestException('This enquiry has already been submitted to AML Supervisor.');
+        }
+
         const recipients = await prisma.user.findMany({
           where: {
             tenantId: existing.tenantId,
@@ -253,6 +268,10 @@ export class EnquiriesService {
       }
 
       if (dto.status === EnquiryStatus.RETURNED_TO_BD) {
+        if (!this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+          throw new ForbiddenException('Only AML reviewers can return an enquiry to BD.');
+        }
+
         const recipients = await prisma.user.findMany({
           where: {
             tenantId: existing.tenantId,
@@ -270,10 +289,14 @@ export class EnquiriesService {
             tenantId: existing.tenantId,
             recipientId: recipient.id,
             type: NotificationType.ADDITIONAL_INFORMATION_REQUESTED,
-            title: 'Enquiry returned to Operations',
-            message: `${this.enquiryDisplayName(existing)} was returned by AML for additional documents or information.`
+            title: 'Enquiry returned to BD',
+            message: `${this.enquiryDisplayName(existing)} was returned to BD by AML for additional documents or information.`
           }))
         });
+      }
+
+      if (dto.status === EnquiryStatus.READY_FOR_KYC && !this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+        throw new ForbiddenException('Only AML reviewers can mark an enquiry ready for KYC.');
       }
     });
 
@@ -327,6 +350,20 @@ export class EnquiriesService {
     const details = this.objectValue(enquiry.details);
 
     return this.prisma.$transaction(async (prisma) => {
+      const claimed = await prisma.enquiry.updateMany({
+        where: {
+          id: enquiry.id,
+          tenantId,
+          status: EnquiryStatus.READY_FOR_KYC,
+          generatedKycCases: { none: {} }
+        },
+        data: { status: EnquiryStatus.CONVERTED_TO_KYC }
+      });
+
+      if (claimed.count !== 1) {
+        throw new BadRequestException('This enquiry has already been converted to a KYC case.');
+      }
+
       let clientId = enquiry.clientId;
 
       if (!clientId) {
@@ -362,12 +399,15 @@ export class EnquiriesService {
           })
         : null;
 
+      const kycNumber = await this.nextKycNumber(prisma, tenantId);
       const createdCase = await prisma.kycCase.create({
         data: {
           tenantId,
+          sourceEnquiryId: enquiry.id,
           clientId,
           serviceId: service?.id,
           title: `${displayName} KYC`,
+          kycNumber,
           status: enquiry.attachments.length ? KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED : KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
           createdById: user.id
         }
@@ -472,7 +512,7 @@ export class EnquiriesService {
 
       await prisma.enquiry.update({
         where: { id: enquiry.id },
-        data: { status: EnquiryStatus.CONVERTED_TO_KYC, clientId }
+        data: { clientId }
       });
 
       await prisma.enquiryStatusHistory.create({
@@ -506,27 +546,41 @@ export class EnquiriesService {
     documentType: string,
     file?: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
   ) {
+    const updated = await this.uploadAttachmentFiles(user, id, documentType, file ? [file] : []);
+    return updated;
+  }
+
+  async uploadAttachmentFiles(
+    user: RequestUser,
+    id: string,
+    documentType: string,
+    files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }> = []
+  ) {
     if (!documentType?.trim()) {
       throw new BadRequestException('Document type is required');
     }
 
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('Upload an enquiry attachment file');
+    if (!files.length) {
+      throw new BadRequestException('Upload enquiry attachment files');
     }
 
-    validateUploadFile(file, ['pdf', 'word', 'excel', 'image'], 'enquiry attachment');
+    validateUploadFiles(files, ['pdf', 'word', 'excel', 'image'], 'enquiry attachment');
 
     const enquiry = await this.findOne(user, id);
+    if (!this.canModifyEnquiry(user, enquiry.status)) {
+      throw new BadRequestException('This enquiry has already been submitted. Uploads are enabled again only after AML returns it to BD.');
+    }
+
     const uploadRoot = this.enquiryAttachmentUploadRoot();
     const enquiryDirectory = join(uploadRoot, enquiry.tenantId, enquiry.id);
     mkdirSync(enquiryDirectory, { recursive: true });
 
-    const fileName = this.safeFileName(file.originalname);
-    const storedFileName = `${Date.now()}-${fileName}`;
-    writeFileSync(join(enquiryDirectory, storedFileName), file.buffer);
+    const attachments = files.map((file, index) => {
+      const fileName = this.safeFileName(file.originalname);
+      const storedFileName = `${Date.now()}-${index}-${fileName}`;
+      writeFileSync(join(enquiryDirectory, storedFileName), file.buffer!);
 
-    await this.prisma.enquiryAttachment.create({
-      data: {
+      return {
         tenantId: enquiry.tenantId,
         enquiryId: enquiry.id,
         documentType: documentType.trim(),
@@ -535,8 +589,10 @@ export class EnquiriesService {
         mimeType: file.mimetype,
         size: file.size,
         createdBy: user.id
-      }
+      };
     });
+
+    await this.prisma.enquiryAttachment.createMany({ data: attachments });
 
     return this.findOne(user, id);
   }
@@ -566,6 +622,39 @@ export class EnquiriesService {
     };
   }
 
+  async getAttachmentGroupZip(user: RequestUser, id: string, documentType: string) {
+    if (!documentType?.trim()) {
+      throw new BadRequestException('Document type is required');
+    }
+
+    const enquiry = await this.findOne(user, id);
+    const attachments = enquiry.attachments.filter((item) => item.documentType === documentType && item.storagePath);
+
+    if (!attachments.length) {
+      throw new NotFoundException('No uploaded files are available for this attachment group');
+    }
+
+    const zip = new PizZip();
+    const usedNames = new Set<string>();
+
+    for (const attachment of attachments) {
+      const absolutePath = this.resolveEnquiryAttachmentPath(attachment.storagePath!);
+      if (!absolutePath || !existsSync(absolutePath)) continue;
+
+      const fileName = this.uniqueArchiveFileName(this.safeFileName(attachment.fileName), usedNames);
+      zip.file(fileName, readFileSync(absolutePath));
+    }
+
+    if (!Object.keys(zip.files).length) {
+      throw new NotFoundException('Uploaded files are not available for this attachment group');
+    }
+
+    return {
+      fileName: `${this.safeFileName(documentType)}.zip`,
+      content: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' })
+    };
+  }
+
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
 
@@ -585,6 +674,19 @@ export class EnquiriesService {
       where: {
         tenantId,
         enquiryCode: { startsWith: prefix }
+      }
+    });
+
+    return `${prefix}${String(count + 1).padStart(4, '0')}`;
+  }
+
+  private async nextKycNumber(prisma: Prisma.TransactionClient, tenantId: string) {
+    const year = new Date().getFullYear();
+    const prefix = `KYC-${year}-`;
+    const count = await prisma.kycCase.count({
+      where: {
+        tenantId,
+        kycNumber: { startsWith: prefix }
       }
     });
 
@@ -624,6 +726,19 @@ export class EnquiriesService {
     }
 
     return user.tenantId;
+  }
+
+  private canModifyEnquiry(user: RequestUser, status: EnquiryStatus) {
+    if (!this.hasAnyRole(user, ['OPERATING_TEAM']) || this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM'])) {
+      return true;
+    }
+
+    const editableStatuses: EnquiryStatus[] = [EnquiryStatus.DRAFT, EnquiryStatus.RETURNED_TO_BD];
+    return editableStatuses.includes(status);
+  }
+
+  private hasAnyRole(user: RequestUser, roles: string[]) {
+    return user.roles.some((role) => roles.includes(role));
   }
 
   private enquiryAttachmentUploadRoot() {
@@ -681,7 +796,8 @@ export class EnquiriesService {
       businessNature: this.optionalText(details.proposedBusinessActivity) || '',
       licenseActivities: this.optionalText(details.proposedBusinessActivity) || '',
       relatedIndustry: this.optionalText(details.relatedIndustry) || '',
-      prospectiveService: enquiry.requestedServices || []
+      prospectiveService: enquiry.requestedServices || [],
+      formVariant: enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? 'PRELIMINARY_PROPOSED_COMPANY' : 'STANDARD'
     };
   }
 
@@ -769,6 +885,28 @@ export class EnquiriesService {
       .trim();
 
     return name || 'document';
+  }
+
+  private uniqueArchiveFileName(fileName: string, usedNames: Set<string>) {
+    const baseName = this.safeFileName(fileName);
+    if (!usedNames.has(baseName)) {
+      usedNames.add(baseName);
+      return baseName;
+    }
+
+    const dotIndex = baseName.lastIndexOf('.');
+    const name = dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName;
+    const extension = dotIndex > 0 ? baseName.slice(dotIndex) : '';
+    let counter = 2;
+    let candidate = `${name} (${counter})${extension}`;
+
+    while (usedNames.has(candidate)) {
+      counter += 1;
+      candidate = `${name} (${counter})${extension}`;
+    }
+
+    usedNames.add(candidate);
+    return candidate;
   }
 
   private removeEnquiryAttachmentDirectory(tenantId: string, enquiryId: string) {

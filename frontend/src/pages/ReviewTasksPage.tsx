@@ -30,6 +30,10 @@ function reviewLink(caseId?: string, stage?: string) {
   return `/kyc/${caseId}/form`;
 }
 
+function opensKycForm(url: string) {
+  return /\/kyc\/[^/]+\/form$/.test(url);
+}
+
 function taskActionText(stage: string) {
   if (stage === 'DMLRO') return 'Action required: review the returned or submitted file and send the next decision.';
   if (stage === 'MLRO') return 'Action required: complete MLRO final review, return to DMLRO, or send to SEF if management decision is needed.';
@@ -89,8 +93,10 @@ export function ReviewTasksPage() {
           {loading ? (
             <p className="px-5 py-6 text-sm text-slate-500">Loading review tasks...</p>
           ) : tasks.length ? (
-            tasks.map((task) => (
-              <Link key={task.id} to={reviewLink(task.kycCase.id, task.stage)} className="block px-5 py-4 hover:bg-slate-50">
+            tasks.map((task) => {
+              const url = reviewLink(task.kycCase.id, task.stage);
+              return (
+              <Link key={task.id} to={url} target={opensKycForm(url) ? '_blank' : undefined} rel={opensKycForm(url) ? 'noopener noreferrer' : undefined} className="block px-5 py-4 hover:bg-slate-50">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="font-medium text-slate-950">{task.kycCase.title}</p>
@@ -107,7 +113,8 @@ export function ReviewTasksPage() {
                   </div>
                 </div>
               </Link>
-            ))
+              );
+            })
           ) : (
             <p className="px-5 py-6 text-sm text-slate-500">No pending review tasks for this login.</p>
           )}
@@ -123,10 +130,14 @@ export function ReviewTasksPage() {
           {loading ? (
             <p className="px-5 py-6 text-sm text-slate-500">Loading notifications...</p>
           ) : notifications.length ? (
-            notifications.map((notification) => (
+            notifications.map((notification) => {
+              const url = reviewLink(notification.kycCase?.id, notification.type === 'SEF_TASK_ASSIGNED' ? 'SEF' : undefined);
+              return (
               <Link
                 key={notification.id}
-                to={reviewLink(notification.kycCase?.id, notification.type === 'SEF_TASK_ASSIGNED' ? 'SEF' : undefined)}
+                to={url}
+                target={opensKycForm(url) ? '_blank' : undefined}
+                rel={opensKycForm(url) ? 'noopener noreferrer' : undefined}
                 className="block px-5 py-4 hover:bg-slate-50"
               >
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -142,7 +153,8 @@ export function ReviewTasksPage() {
                   ) : null}
                 </div>
               </Link>
-            ))
+              );
+            })
           ) : (
             <p className="px-5 py-6 text-sm text-slate-500">No unread role notifications.</p>
           )}

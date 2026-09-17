@@ -102,7 +102,7 @@ export function KycWorkflowPage() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-3">Case</th>
+                <th className="px-4 py-3">KYC Number</th>
                 <th className="px-4 py-3">Client</th>
                 <th className="px-4 py-3">Service</th>
                 <th className="px-4 py-3">Documents</th>
@@ -122,7 +122,7 @@ export function KycWorkflowPage() {
                   <tr key={kycCase.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
                       <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/kyc/${kycCase.id}`}>
-                        {kycCase.title}
+                        {kycCase.kycNumber || '-'}
                       </Link>
                     </td>
                     <td className="px-4 py-3 text-slate-600">{kycCase.client.name}</td>
