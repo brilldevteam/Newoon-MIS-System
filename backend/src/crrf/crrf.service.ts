@@ -52,6 +52,9 @@ export class CrrfService {
     if (!riskRating) {
       throw new BadRequestException('Risk rating is required before saving the CRRF record.');
     }
+    if (!record.documents.length) {
+      throw new BadRequestException('Upload at least one supporting CRRF document before saving the record.');
+    }
 
     await this.prisma.crrfRecord.update({
       where: { id: record.id },

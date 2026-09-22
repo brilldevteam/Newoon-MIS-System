@@ -1101,6 +1101,7 @@ model ScreeningCaseCheck {
   kycCase      KycCase               @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
   checkType    ScreeningCheckType
   resultStatus ScreeningResultStatus @default(NOT_CHECKED)
+  notes        String?
   documents    ScreeningCaseDocument[]
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt

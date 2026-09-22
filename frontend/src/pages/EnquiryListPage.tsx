@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.service';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole } from '../utils/access-control';
+import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -114,9 +115,15 @@ export function EnquiryListPage() {
                     <td className="px-4 py-3 text-slate-600">{enquiryTypeLabels[enquiry.enquiryType] || enquiry.enquiryType}</td>
                     <td className="max-w-md truncate px-4 py-3 text-slate-600">{enquiry.requestedServices?.join(', ') || 'Not selected'}</td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${enquiryStatusToneClass(enquiry.status)}`}>
-                        {enquiryStatusLabels[enquiry.status] || enquiry.status}
-                      </span>
+                      {enquiry.generatedKycCases?.[0] ? (
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(enquiry.generatedKycCases[0].status)}`}>
+                          {kycStatusLabel(enquiry.generatedKycCases[0].status)}
+                        </span>
+                      ) : (
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${enquiryStatusToneClass(enquiry.status)}`}>
+                          {enquiryStatusLabels[enquiry.status] || enquiry.status}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">

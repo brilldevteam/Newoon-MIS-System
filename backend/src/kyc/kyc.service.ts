@@ -355,6 +355,7 @@ export class KycService {
         KycCaseStatus.PROPOSAL_OPTIONAL,
         KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
         KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+        KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
         KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
     ];
     if (!uploadableStatuses.includes(kycCase.status)) {
@@ -535,10 +536,11 @@ export class KycService {
         KycCaseStatus.PROPOSAL_OPTIONAL,
         KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
         KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+        KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
         KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
     ];
     if (!submittableStatuses.includes(kycCase.status)) {
-      throw new BadRequestException('This case has already been submitted. It can be submitted again only after AML returns it for additional information.');
+      throw new BadRequestException('This case has already been submitted. It can be resubmitted only after DMLRO returns it to the AML Supervisor.');
     }
 
     const documentsCount = await this.prisma.legalDocument.count({
@@ -1097,13 +1099,17 @@ export class KycService {
 
     const kycCase = await this.findOne(user, id);
     this.assertFinalApprovalReceived(kycCase.status);
+    const approvalOwnerRoles = kycCase.status === KycCaseStatus.SEF_APPROVED ? ['SEF'] : ['MLRO'];
+    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.kycForm.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id },
         data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
       });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'AML Team confirmed the approved KYC as the final KYC.');
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Approving review role confirmed the KYC as the final KYC.');
       await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'APPROVED_KYC_MARKED_FINAL' });
       await this.createNotification(tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION, 'Final KYC completed', `${kycCase.title} was marked as the final KYC and is ready for the engagement decision.`);
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
@@ -1113,6 +1119,10 @@ export class KycService {
   async startAmendment(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const kycCase = await this.findOne(user, id);
     this.assertFinalApprovalReceived(kycCase.status);
+    const approvalOwnerRoles = kycCase.status === KycCaseStatus.SEF_APPROVED ? ['SEF'] : ['MLRO'];
+    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
+    }
     const sections = Array.isArray(dto.sections) ? dto.sections.map((value) => this.optionalText(value)).filter(Boolean) as string[] : [];
     const reason = this.optionalText(dto.reason);
     if (!sections.length) throw new BadRequestException('Select at least one KYC section to amend.');
@@ -1230,10 +1240,12 @@ export class KycService {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
     const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row));
     const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row));
-    const total = rows.filter((row) => !this.text(row.parentRowId)).reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+    const shareholderPercentage = (row: RowPayload) => this.numberValue(row.shareholderPercentage ?? row.ownershipPercentage);
+    const uboInterestPercentage = (row: RowPayload) => this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage);
+    const total = rows.filter((row) => !this.text(row.parentRowId)).reduce((sum, row) => sum + shareholderPercentage(row), 0);
     const layerTotals = rows.reduce<Record<string, number>>((totals, row) => {
       const parentKey = this.text(row.parentRowId) || 'ROOT';
-      totals[parentKey] = (totals[parentKey] || 0) + this.numberValue(row.ownershipPercentage);
+      totals[parentKey] = (totals[parentKey] || 0) + shareholderPercentage(row);
       return totals;
     }, {});
 
@@ -1242,6 +1254,7 @@ export class KycService {
     }
     const sectionData = {
       totalOwnershipPercentage: total,
+      totalUboPercentage: (ubos.length ? ubos : rows.filter((row) => Boolean(row.isUbo))).reduce((sum, row) => sum + uboInterestPercentage(row), 0),
       uboDifferentFromShareholders: dto.uboDifferentFromShareholders || 'No',
       uboGroupStructureNotes: dto.uboGroupStructureNotes || '',
       shareholders: rows,
@@ -1278,7 +1291,7 @@ export class KycService {
             nationality: this.optionText(row.nationality, row.nationalityOther),
             dateOfBirth: this.dateValue(row.dateOfBirth),
             identityNumber: this.optionalText(row.identityNumber),
-            ownershipPercentage: this.decimalValue(row.ownershipPercentage),
+            ownershipPercentage: this.decimalValue(row.shareholderPercentage ?? row.ownershipPercentage),
             residenceAddress: this.optionalText(row.residenceAddress),
             sortOrder: index,
             createdBy: user.id,
@@ -1297,7 +1310,7 @@ export class KycService {
             nationality: this.optionalText(row.nationality),
             dateOfBirth: this.dateValue(row.dateOfBirth),
             identityNumber: this.optionalText(row.identityNumber),
-            ownershipPercentage: this.decimalValue(row.ownershipPercentage),
+            ownershipPercentage: this.decimalValue(row.uboInterestPercentage ?? row.ownershipPercentage),
             residenceAddress: this.optionalText(row.residenceAddress),
             notes: this.optionalText(row.notes),
             sortOrder: index,
@@ -1706,6 +1719,21 @@ export class KycService {
       throw new ForbiddenException('You do not have permission to edit this KYC form section');
     }
 
+    const kycCase = await this.prisma.kycCase.findFirst({
+      where: { id, ...this.tenantWhere(user) },
+      select: { status: true }
+    });
+    if (!kycCase) {
+      throw new NotFoundException('KYC case not found');
+    }
+    if (
+      this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR']) &&
+      !this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']) &&
+      !this.isPreparationEditableStatus(kycCase.status)
+    ) {
+      throw new BadRequestException('KYC preparation is locked while the case is under review. It can be edited again only after DMLRO returns it to the AML Supervisor.');
+    }
+
     const form = await this.prisma.kycForm.findFirst({
       where: { kycCaseId: id, ...this.formTenantWhere(user) }
     });
@@ -2012,7 +2040,23 @@ export class KycService {
       throw new NotFoundException('KYC case not found');
     }
 
+    if (!this.isPreparationEditableStatus(kycCase.status)) {
+      throw new BadRequestException('KYC preparation is locked while the case is under DMLRO, MLRO, or SEF review. It can be edited again only after DMLRO returns it to the AML Supervisor.');
+    }
+
     return kycCase;
+  }
+
+  private isPreparationEditableStatus(status: KycCaseStatus) {
+    const editableStatuses: KycCaseStatus[] = [
+      KycCaseStatus.INQUIRY_RECEIVED,
+      KycCaseStatus.PROPOSAL_OPTIONAL,
+      KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
+      KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+      KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
+      KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+    ];
+    return editableStatuses.includes(status);
   }
 
   private async resolveService(tenantId: string, dto: AssignServiceDto) {
@@ -2995,7 +3039,7 @@ export class KycService {
       shareholderNationality: this.optionText(row.nationality, row.nationalityOther),
       shareholderDateOfBirth: this.text(row.dateOfBirth),
       shareholderIdentityNumber: this.text(row.identityNumber),
-      shareholderOwnershipPercentage: this.text(row.ownershipPercentage),
+      shareholderOwnershipPercentage: this.text(row.shareholderPercentage ?? row.ownershipPercentage),
       shareholderResidenceAddress: this.text(row.residenceAddress),
       shareholderLinkedClient: this.text(row.linkedClientName),
       shareholderIsUbo: row.isUbo ? 'Yes' : 'No'
@@ -3006,7 +3050,7 @@ export class KycService {
       uboNationality: this.optionText(row.nationality, row.nationalityOther),
       uboDateOfBirth: this.text(row.dateOfBirth),
       uboIdentityNumber: this.text(row.identityNumber),
-      uboOwnershipPercentage: this.text(row.ownershipPercentage),
+      uboOwnershipPercentage: this.text(row.uboInterestPercentage ?? row.ownershipPercentage),
       uboResidenceAddress: this.text(row.residenceAddress)
     }));
     const managers = this.templateRows(sectionC.managers, (row, index) => ({
@@ -3021,7 +3065,7 @@ export class KycService {
       managerPosition: this.optionText(row.position, row.positionOther),
       managerAuthorizedSignatory: row.isAuthorizedSignatory ? 'Yes' : 'No'
     }));
-    const totalUboPercentage = effectiveUbos.reduce((sum, row) => sum + this.numberValue(row.ownershipPercentage), 0);
+    const totalUboPercentage = effectiveUbos.reduce((sum, row) => sum + this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage), 0);
 
     const ownershipRootName = this.text(sectionA.legalName) || 'Client company';
     const ownershipStructureText = this.ownershipStructureText(ownershipRootName, ownershipRows);
@@ -3053,8 +3097,8 @@ export class KycService {
       managers,
       totalUboPercentage: this.text(totalUboPercentage),
       ownershipStructureText: this.imageToken('ownershipStructure'),
-      shareholdersText: this.rowsText(ownershipRows, ['shareholderType', 'fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
-      ubosText: this.rowsText(effectiveUbos, ['fullName', 'nationality', 'identityNumber', 'ownershipPercentage']),
+      shareholdersText: this.rowsText(ownershipRows, ['shareholderType', 'fullName', 'nationality', 'identityNumber', 'shareholderPercentage']),
+      ubosText: this.rowsText(effectiveUbos, ['fullName', 'nationality', 'identityNumber', 'uboInterestPercentage']),
       managersText: this.rowsText(sectionC.managers, ['fullName', 'entityName', 'position', 'isAuthorizedSignatory']),
       pepQuestion: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'Yes'),
       pepNo: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'No'),
@@ -3690,7 +3734,7 @@ ${this.docxParagraph('License Activities: {licenseActivities} | Related Industry
 ${this.docxParagraph('Nature of prospective service from Newoon: {prospectiveService}')}
 ${this.docxParagraph('B. Control / Interest Details')}
 ${this.docxParagraph('Listed parties:\\n{shareholdersText}')}
-${this.docxParagraph('Total interest percentage: {totalOwnershipPercentage}% | Beneficial person different from listed parties: {uboDifferentFromShareholders}')}
+${this.docxParagraph('Total shareholder percentage: {totalOwnershipPercentage}% | Total UBO percentage: {totalUboPercentage}% | Beneficial person different from listed parties: {uboDifferentFromShareholders}')}
 ${this.docxParagraph('Beneficial structure notes: {uboGroupStructureNotes}')}
 ${this.docxParagraph('Control structure:\\n{ownershipStructureText}')}
 ${this.docxParagraph('Beneficial persons:\\n{ubosText}')}

@@ -30,7 +30,8 @@ export function KycWorkflowPage() {
   const [deletingId, setDeletingId] = useState('');
   const [generatingKey, setGeneratingKey] = useState('');
   const [error, setError] = useState('');
-  const canManageCases = hasAnyRole(user, workflowRoles.caseCreation);
+  const canCreateCases = hasAnyRole(user, workflowRoles.caseCreation);
+  const canEditOrDeleteCases = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
 
   useEffect(() => {
     loadCases();
@@ -84,7 +85,7 @@ export function KycWorkflowPage() {
           <h1 className="text-2xl font-semibold text-slate-950">KYC Workflow</h1>
           <p className="mt-1 text-sm text-slate-500">Client intake cases from inquiry through AML handoff.</p>
         </div>
-        {canManageCases ? (
+        {canCreateCases ? (
           <Link
             to="/kyc/new"
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
@@ -167,7 +168,7 @@ export function KycWorkflowPage() {
                             </button>
                           </>
                         ) : null}
-                        {canManageCases ? (
+                        {canEditOrDeleteCases ? (
                           <>
                             <Link
                               to={`/kyc/${kycCase.id}/edit`}

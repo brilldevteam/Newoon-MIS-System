@@ -136,6 +136,7 @@ export class EnquiriesService {
       orderBy: { createdAt: 'desc' },
       include: {
         client: true,
+        generatedKycCases: { select: { id: true, kycNumber: true, title: true, status: true }, orderBy: { createdAt: 'desc' }, take: 1 },
         attachments: true,
         comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
         statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } }

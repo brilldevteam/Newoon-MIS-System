@@ -27,11 +27,12 @@ export function SubmitToAmlPage() {
   }
 
   const canSubmit = kycCase.legalDocuments.length > 0;
+  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-950">Submit to DMLRO</h1>
+        <h1 className="text-2xl font-semibold text-slate-950">{isResubmission ? 'Resubmit to DMLRO' : 'Submit to DMLRO'}</h1>
         <p className="mt-1 text-sm text-slate-500">{kycCase.title}</p>
       </div>
 
@@ -66,7 +67,7 @@ export function SubmitToAmlPage() {
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
           >
             <Send className="h-4 w-4" />
-            {saving ? 'Submitting...' : 'Submit KYC File to DMLRO'}
+            {saving ? 'Submitting...' : isResubmission ? 'Resubmit KYC File to DMLRO' : 'Submit KYC File to DMLRO'}
           </button>
         ) : null}
         <Link

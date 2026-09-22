@@ -990,8 +990,10 @@ export function KycFormEditorPage() {
     [form.sectionB.shareholders]
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
-  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase?.status || '');
+  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';
+  const canEditVisibleForm = canEditAllSections || canPrepareKyc || sectionHMode !== 'AML';
   const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY';
   const visibleSections = useMemo(
     () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
@@ -1332,10 +1334,10 @@ export function KycFormEditorPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={saveDraft} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          {canEditVisibleForm ? <button onClick={saveDraft} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
-          </button>
+          </button> : null}
           {sectionHMode === 'DMLRO' ? (
             <button onClick={submitDmlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
@@ -1367,6 +1369,7 @@ export function KycFormEditorPage() {
 
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {!canEditVisibleForm ? <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">KYC preparation is locked while this case is under review. Only the assigned review role can record its decision.</p> : null}
 
       {showReviewPackage ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1447,7 +1450,7 @@ export function KycFormEditorPage() {
               <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
       <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready.'}</p>
             </div>
-            <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
+            <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] overflow-auto p-5 disabled:opacity-75">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
@@ -1464,7 +1467,7 @@ export function KycFormEditorPage() {
               {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
               {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
               {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
-            </div>
+            </fieldset>
           </section>
           <LiveDocumentPreviewPanel form={{ ...form, sectionB: { ...form.sectionB, totalOwnershipPercentage: totalOwnership } }} />
         </div>
@@ -1539,14 +1542,14 @@ function createOwnershipRow(): Row {
 }
 
 function directOwnershipTotal(rows: Row[]) {
-  return rows.filter((row) => !row.parentRowId).reduce((sum, row) => sum + Number(row.ownershipPercentage || 0), 0);
+  return rows.filter((row) => !row.parentRowId).reduce((sum, row) => sum + Number(row.shareholderPercentage ?? row.ownershipPercentage ?? 0), 0);
 }
 
 function ownershipLayerTotals(rows: Row[]) {
   const totals = new Map<string, number>();
   rows.forEach((row) => {
     const parentKey = row.parentRowId || 'ROOT';
-    totals.set(parentKey, (totals.get(parentKey) || 0) + Number(row.ownershipPercentage || 0));
+    totals.set(parentKey, (totals.get(parentKey) || 0) + Number(row.shareholderPercentage ?? row.ownershipPercentage ?? 0));
   });
   return totals;
 }
@@ -1557,17 +1560,22 @@ function effectiveUboRows(sectionB: Record<string, any>) {
   return (sectionB.shareholders || []).filter((row: Row) => row.isUbo);
 }
 
+function uboInterestTotal(sectionB: Record<string, any>) {
+  return effectiveUboRows(sectionB).reduce((sum: number, row: Row) => sum + Number(row.uboInterestPercentage ?? row.ownershipPercentage ?? 0), 0);
+}
+
 function SectionBForm({ data, total, rootName, currentClientId, onChange }: FormProps & { total: number; rootName: string; currentClientId: string }) {
   const shareholders = data.shareholders || [];
   const totals = ownershipLayerTotals(shareholders);
   const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
   const hasUbo = shareholders.some((row: Row) => row.isUbo) || Boolean(data.ubos?.length);
+  const totalUboPercentage = uboInterestTotal(data);
 
   return (
     <div className="space-y-5">
       <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
       <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
-        Direct interest percentage: {total.toFixed(2)}%
+        Total shareholder %: {total.toFixed(2)}% | Total UBO %: {totalUboPercentage.toFixed(2)}%
         {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more control layers exceed 100%.</span> : null}
       </div>
       {!hasUbo ? (
@@ -1579,7 +1587,7 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Interest %', 'number'], ['residenceAddress', 'Residence address']
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -1678,7 +1686,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
               </button>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-full border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700">{row.shareholderType || 'Individual'}</span>
-                {row.ownershipPercentage ? <span className="rounded-full bg-brand-50 px-2 py-1 font-semibold text-brand-700">{row.ownershipPercentage}%</span> : null}
+                {row.shareholderPercentage ?? row.ownershipPercentage ? <span className="rounded-full bg-brand-50 px-2 py-1 font-semibold text-brand-700">{row.shareholderPercentage ?? row.ownershipPercentage}% shareholder</span> : null}
                 {nationalityText ? <span className="max-w-[180px] truncate rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600">{nationalityText}</span> : null}
                 {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">Beneficial</span> : null}
                 {row.linkedClientId ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">Linked client</span> : null}
@@ -1739,12 +1747,13 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
                   </div>
-                  <Field label="Interest %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
+                  <Field label="Shareholder %" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
                   <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
                   <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
+                    <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked, uboInterestPercentage: event.target.checked && !row.uboInterestPercentage ? (row.shareholderPercentage ?? row.ownershipPercentage) : row.uboInterestPercentage })} />
                     Mark as beneficial person
                   </label>
+                  {row.isUbo ? <Field label="UBO Interest %" type="number" value={row.uboInterestPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { uboInterestPercentage: value })} /> : null}
                 </div>
               </div>
             ) : null}
@@ -2305,12 +2314,12 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Control / Interest Details">
-          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Interest %', 'Address', 'Linked client', 'Beneficial person']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
-          <p className="mt-2 font-semibold">Total interest percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
+          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Shareholder %', 'Address', 'Linked client', 'Beneficial person']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.shareholderPercentage ?? row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
+          <p className="mt-2 font-semibold">Total shareholder %: {form.sectionB.totalOwnershipPercentage || 0}% | Total UBO %: {form.sectionB.totalUboPercentage || 0}%</p>
           <p>Beneficial person different from listed parties: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>Beneficial structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
           <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
-          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'Interest %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
           <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />

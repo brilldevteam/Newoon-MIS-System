@@ -16,6 +16,7 @@ import {
 import { getApiErrorMessage } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -188,7 +189,7 @@ export function EnquiryDetailsPage() {
         <div>
           <p className="text-sm font-medium text-slate-500">{enquiry.enquiryCode}</p>
           <h1 className="mt-1 text-2xl font-semibold text-slate-950">{title}</h1>
-          <p className="mt-1 text-sm text-slate-500">{enquiryTypeLabels[enquiry.enquiryType]} | {enquiryStatusLabels[enquiry.status]}</p>
+          <p className="mt-1 text-sm text-slate-500">{enquiryTypeLabels[enquiry.enquiryType]} | {generatedKycCase ? kycStatusLabel(generatedKycCase.status) : enquiryStatusLabels[enquiry.status]}</p>
         </div>
         {canEditEnquiry ? (
           <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -203,7 +204,7 @@ export function EnquiryDetailsPage() {
       <section className="grid gap-4 md:grid-cols-3">
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</p>
-          <p className="mt-2 text-sm font-medium text-slate-950">{enquiryStatusLabels[enquiry.status]}</p>
+          <p className="mt-2 text-sm font-medium text-slate-950">{generatedKycCase ? kycStatusLabel(generatedKycCase.status) : enquiryStatusLabels[enquiry.status]}</p>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Requested Services</p>
