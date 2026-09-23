@@ -228,7 +228,7 @@ export function SearchableMultiSelect({
   onOtherChange
 }: SearchableMultiSelectProps) {
   const selectedValues = listValue(value);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [menuStyle, setMenuStyle] = useState<MenuStyle>({ top: 0, left: 0, width: 0, maxHeight: 256 });
@@ -274,17 +274,25 @@ export function SearchableMultiSelect({
   }
 
   function remove(option: string) {
-    onChange(selectedValues.filter((item) => item !== option));
     if (option === 'Other') onOtherChange?.('');
+    onChange(selectedValues.filter((item) => item !== option));
   }
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
       <FieldLabel label={label} />
-      <button
+      <div
         ref={triggerRef}
-        type="button"
-        onClick={() => {
+        role="button"
+        tabIndex={0}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('[data-remove-multiselect-value="true"]')) return;
+          setOpen((current) => !current);
+          setQuery('');
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
           setOpen((current) => !current);
           setQuery('');
         }}
@@ -295,9 +303,9 @@ export function SearchableMultiSelect({
             ? selectedValues.map((item) => (
                 <span key={item} className="inline-flex max-w-full items-center gap-1 rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800">
                   <span className="truncate">{item === 'Other' ? resolveOtherValue(item, otherValue) : item}</span>
-                  <span
-                    role="button"
-                    tabIndex={0}
+                  <button
+                    type="button"
+                    data-remove-multiselect-value="true"
                     onMouseDown={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -311,13 +319,13 @@ export function SearchableMultiSelect({
                     aria-label={`Remove ${item}`}
                   >
                     <X className="h-3 w-3" />
-                  </span>
+                  </button>
                 </span>
               ))
             : placeholder}
         </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" />
-      </button>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+      </div>
       {open
         ? createPortal(
             <div

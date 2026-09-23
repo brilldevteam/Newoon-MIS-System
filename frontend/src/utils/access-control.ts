@@ -33,7 +33,7 @@ export const workflowRoles = {
   documentDelete: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   kycPreparation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   screening: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
-  crrf: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'],
+  crrf: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
   kycFormBuilder: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
   amlDashboard: [],
   reviewTasks: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO', 'SEF'],

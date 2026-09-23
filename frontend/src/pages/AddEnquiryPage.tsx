@@ -57,7 +57,10 @@ type AttachmentDraft = {
 
 type StoredAttachmentFile = NonNullable<AttachmentDraft['storedFiles']>[number];
 
-type EnquiryStep = 'type' | 'details' | 'contact' | 'exposure' | 'attachments' | 'notes';
+type EnquiryStep = 'type' | 'details' | 'ownership' | 'management' | 'contact' | 'exposure' | 'attachments' | 'notes';
+
+type PreliminaryOwner = { fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
+type PreliminaryManagementPerson = { fullName: string; identityNumber: string; nationality: string; position: string };
 
 type EnquiryValidationForm = {
   enquiryType: EnquiryType;
@@ -89,8 +92,14 @@ type EnquiryValidationForm = {
   proposedBusinessActivity: string;
   sourceOfInitialCapital: string;
   proposedRegisteredOfficeAddress: string;
+  preliminaryShareholders: PreliminaryOwner[];
+  preliminaryUbos: PreliminaryOwner[];
+  preliminaryManagement: PreliminaryManagementPerson[];
   notes: string;
 };
+
+const blankPreliminaryOwner = (): PreliminaryOwner => ({ fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
+const blankPreliminaryManagement = (): PreliminaryManagementPerson => ({ fullName: '', identityNumber: '', nationality: '', position: '' });
 
 const existingLegalEntityAttachments = [
   'Key Contact QID / Passport attachment',
@@ -257,6 +266,18 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     }
   }
 
+  if (step === 'ownership' && form.enquiryType === 'PROPOSED_COMPANY') {
+    if (!form.preliminaryShareholders.length || form.preliminaryShareholders.some((row) => !row.fullName.trim() || !row.ownershipPercentage.trim())) {
+      return 'Add at least one proposed shareholder with name and ownership percentage.';
+    }
+  }
+
+  if (step === 'management' && form.enquiryType === 'PROPOSED_COMPANY') {
+    if (!form.preliminaryManagement.length || form.preliminaryManagement.some((row) => !row.fullName.trim() || !row.position.trim())) {
+      return 'Add at least one proposed management or control person with name and position.';
+    }
+  }
+
   if (step === 'exposure' && form.enquiryType === 'EXISTING_LEGAL_ENTITY') {
     if (!form.headOfficeCountry) return 'Head office country is required.';
     if (!form.areaOfOperation.trim()) return 'Area of operation is required.';
@@ -318,6 +339,9 @@ export function AddEnquiryPage() {
     proposedBusinessActivity: '',
     sourceOfInitialCapital: '',
     proposedRegisteredOfficeAddress: '',
+    preliminaryShareholders: [blankPreliminaryOwner()],
+    preliminaryUbos: [blankPreliminaryOwner()],
+    preliminaryManagement: [blankPreliminaryManagement()],
     notes: ''
   });
 
@@ -331,6 +355,7 @@ export function AddEnquiryPage() {
         const keyContactNationality = splitOtherValue(String(details.keyContactNationality || ''), nationalityOptions);
         const proposedLegalForm = splitOtherValue(String(details.proposedLegalForm || ''), legalForms);
         const requestedServices = splitRequestedServices(enquiry.requestedServices || []);
+        const preliminary = details.preliminaryKyc && typeof details.preliminaryKyc === 'object' ? details.preliminaryKyc as Record<string, any> : {};
         setForm({
           enquiryType: enquiry.enquiryType,
           clientId: enquiry.clientId || enquiry.client?.id || '',
@@ -361,6 +386,9 @@ export function AddEnquiryPage() {
           proposedBusinessActivity: String(details.proposedBusinessActivity || ''),
           sourceOfInitialCapital: String(details.sourceOfInitialCapital || ''),
           proposedRegisteredOfficeAddress: String(details.proposedRegisteredOfficeAddress || ''),
+          preliminaryShareholders: Array.isArray(preliminary.shareholders) && preliminary.shareholders.length ? preliminary.shareholders as PreliminaryOwner[] : [blankPreliminaryOwner()],
+          preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? preliminary.ubos as PreliminaryOwner[] : [blankPreliminaryOwner()],
+          preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? preliminary.management as PreliminaryManagementPerson[] : [blankPreliminaryManagement()],
           notes: enquiry.notes || ''
         });
         setAttachments(
@@ -400,7 +428,20 @@ export function AddEnquiryPage() {
             jurisdictionOfRegistration: form.jurisdictionOfRegistration,
             proposedBusinessActivity: form.proposedBusinessActivity,
             sourceOfInitialCapital: form.sourceOfInitialCapital,
-            proposedRegisteredOfficeAddress: form.proposedRegisteredOfficeAddress
+            proposedRegisteredOfficeAddress: form.proposedRegisteredOfficeAddress,
+            preliminaryKyc: {
+              companyName: form.proposedCompanyName,
+              proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
+              jurisdiction: form.jurisdictionOfRegistration,
+              businessActivity: form.proposedBusinessActivity,
+              registeredOfficeAddress: form.proposedRegisteredOfficeAddress,
+              sourceOfFunds: form.sourceOfInitialCapital,
+              shareholders: form.preliminaryShareholders,
+              ubos: form.preliminaryUbos,
+              management: form.preliminaryManagement,
+              documents: attachments.map((attachment) => ({ documentType: attachment.documentType, description: '', available: Boolean(attachmentDisplayNames(attachment).length) })),
+              completedAt: new Date().toISOString()
+            }
           }
         : keyContactDetails;
     const validationError = validateEnquiryForm(form);
@@ -528,8 +569,8 @@ export function AddEnquiryPage() {
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-      <section className="rounded-lg border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 px-5 py-4">
+      <section className={`rounded-lg border border-slate-200 bg-white ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
+        <div className={`border-b border-slate-200 px-5 py-4 ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:col-span-2' : ''}`}>
           <div className="flex flex-wrap gap-2">
             {steps.map((step, index) => {
               const accessError = getStepAccessError(step.id);
@@ -555,7 +596,7 @@ export function AddEnquiryPage() {
           <p className="mt-3 text-sm text-slate-500">{currentStep.description}</p>
         </div>
 
-        <div className="p-5">
+        <div className="min-w-0 p-5">
           {currentStep.id === 'type' ? (
             <div className="grid gap-4 md:grid-cols-2">
               <SearchableSelect
@@ -574,7 +615,17 @@ export function AddEnquiryPage() {
             </div>
           ) : null}
 
-          {currentStep.id === 'details' ? (
+          {currentStep.id === 'details' && form.enquiryType === 'PROPOSED_COMPANY' ? (
+            <ProposedCompanyDetails
+              form={form}
+              attachments={attachments}
+              proposedAddressRequired={proposedAddressRequired}
+              onFormChange={setForm}
+              onAttachmentsChange={setAttachments}
+            />
+          ) : null}
+
+          {currentStep.id === 'details' && form.enquiryType !== 'PROPOSED_COMPANY' ? (
             <div className="grid gap-4 md:grid-cols-2">
               {form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? (
                 <label className="text-sm font-medium text-slate-700">
@@ -593,43 +644,6 @@ export function AddEnquiryPage() {
                   Company name <RequiredMark />
                   <input required value={form.companyName} onChange={(event) => setForm({ ...form, companyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
-              ) : null}
-
-              {form.enquiryType === 'PROPOSED_COMPANY' ? (
-                <>
-                  <label className="text-sm font-medium text-slate-700">
-                    Proposed company name <RequiredMark />
-                    <input required value={form.proposedCompanyName} onChange={(event) => setForm({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <SearchableSelect
-                    label="Proposed legal form *"
-                    value={form.proposedLegalForm}
-                    otherValue={form.proposedLegalFormOther}
-                    options={legalForms}
-                    onChange={(value) => {
-                      setForm({ ...form, proposedLegalForm: value, ...(value === 'Other' ? {} : { proposedLegalFormOther: '' }) });
-                      setAttachments(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
-                    }}
-                    onOtherChange={(value) => {
-                      setForm({ ...form, proposedLegalFormOther: value });
-                      if (form.proposedLegalForm === 'Other') setAttachments(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
-                    }}
-                    allowOther
-                  />
-                  <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => setForm({ ...form, jurisdictionOfRegistration: value })} />
-                  <label className="text-sm font-medium text-slate-700">
-                    Proposed business activity <RequiredMark />
-                    <input value={form.proposedBusinessActivity} onChange={(event) => setForm({ ...form, proposedBusinessActivity: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Source of initial capital <RequiredMark />
-                    <input value={form.sourceOfInitialCapital} onChange={(event) => setForm({ ...form, sourceOfInitialCapital: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-medium text-slate-700 md:col-span-2">
-                    Proposed registered office address {proposedAddressRequired ? <RequiredMark /> : null}
-                    <textarea value={form.proposedRegisteredOfficeAddress} onChange={(event) => setForm({ ...form, proposedRegisteredOfficeAddress: event.target.value })} className="mt-1 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                </>
               ) : null}
 
               <SearchableMultiSelect
@@ -664,7 +678,7 @@ export function AddEnquiryPage() {
                 Email <RequiredMark />
                 <input required type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
-              <div className="grid gap-3 sm:grid-cols-[220px_minmax(0,1fr)]">
+              <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
                 <SearchableSelect
                   label="Code *"
                   value={form.keyContactPhoneCountry}
@@ -721,6 +735,14 @@ export function AddEnquiryPage() {
             </div>
           ) : null}
 
+          {currentStep.id === 'ownership' && form.enquiryType === 'PROPOSED_COMPANY' ? (
+            <PreliminaryOwnershipForm form={form} onChange={setForm} />
+          ) : null}
+
+          {currentStep.id === 'management' && form.enquiryType === 'PROPOSED_COMPANY' ? (
+            <PreliminaryManagementForm form={form} onChange={setForm} />
+          ) : null}
+
           {currentStep.id === 'exposure' ? (
             <div className="grid gap-4 md:grid-cols-2">
               <SearchableSelect label="Head office *" value={form.headOfficeCountry} options={countryOptions} onChange={setHeadOfficeCountry} />
@@ -773,9 +795,134 @@ export function AddEnquiryPage() {
             ) : null}
           </div>
         </div>
+        {form.enquiryType === 'PROPOSED_COMPANY' ? <ProposedCompanyPreview form={form} attachments={attachments} /> : null}
       </section>
     </form>
   );
+}
+
+function ProposedCompanyDetails({
+  form,
+  attachments,
+  proposedAddressRequired,
+  onFormChange,
+  onAttachmentsChange
+}: {
+  form: EnquiryValidationForm;
+  attachments: AttachmentDraft[];
+  proposedAddressRequired: boolean;
+  onFormChange: (form: EnquiryValidationForm) => void;
+  onAttachmentsChange: (attachments: AttachmentDraft[]) => void;
+}) {
+  const legalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
+  return <div className="grid gap-4 md:grid-cols-2">
+        <label className="text-sm font-medium text-slate-700">
+          Proposed company name <RequiredMark />
+          <input required value={form.proposedCompanyName} onChange={(event) => onFormChange({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <SearchableSelect
+          label="Proposed legal form *"
+          value={form.proposedLegalForm}
+          otherValue={form.proposedLegalFormOther}
+          options={legalForms}
+          onChange={(value) => {
+            onFormChange({ ...form, proposedLegalForm: value, ...(value === 'Other' ? {} : { proposedLegalFormOther: '' }) });
+            onAttachmentsChange(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
+          }}
+          onOtherChange={(value) => {
+            onFormChange({ ...form, proposedLegalFormOther: value });
+            if (form.proposedLegalForm === 'Other') onAttachmentsChange(mergeAttachmentTemplates('PROPOSED_COMPANY', value, attachments));
+          }}
+          allowOther
+        />
+        <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => onFormChange({ ...form, jurisdictionOfRegistration: value })} />
+        <label className="text-sm font-medium text-slate-700">
+          Proposed business activity <RequiredMark />
+          <input value={form.proposedBusinessActivity} onChange={(event) => onFormChange({ ...form, proposedBusinessActivity: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Source of initial capital <RequiredMark />
+          <input value={form.sourceOfInitialCapital} onChange={(event) => onFormChange({ ...form, sourceOfInitialCapital: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="text-sm font-medium text-slate-700 md:col-span-2">
+          Proposed registered office address {proposedAddressRequired ? <RequiredMark /> : null}
+          <textarea value={form.proposedRegisteredOfficeAddress} onChange={(event) => onFormChange({ ...form, proposedRegisteredOfficeAddress: event.target.value })} className="mt-1 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <SearchableMultiSelect
+          label="Requested services *"
+          value={form.requestedServices}
+          options={newoonServiceOptions}
+          onChange={(services) => onFormChange({ ...form, requestedServices: services, ...(services.includes('Other') ? {} : { requestedServicesOther: '' }) })}
+          otherValue={form.requestedServicesOther}
+          onOtherChange={(value) => onFormChange({ ...form, requestedServicesOther: value })}
+          allowOther
+          wide
+        />
+      </div>;
+}
+
+function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidationForm; attachments: AttachmentDraft[] }) {
+  const legalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
+  const value = (item?: string) => item || '-';
+  return <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto bg-slate-200 p-4">
+    <article className="mx-auto min-h-[1120px] w-full max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
+      <p>Date: <span className="inline-block min-w-24 border-b border-black">{new Date().toLocaleDateString('en-GB')}</span></p>
+      <h2 className="mt-3 text-center text-[9px] font-bold underline">Prospective Customer Information &amp; Preliminary Due Diligence form</h2>
+      <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity. The information is collected to enable Newoon LLC to conduct preliminary AML/CFT screening, customer due diligence, conflict checks, and risk assessment before deciding whether to proceed with the requested engagement.</p>
+      <PdfSection title="Section A: Basic Client Details">
+        <PdfTable headers={['No.', ''] } rows={[
+          ['1', `Proposed Company Name (if available): ${value(form.proposedCompanyName)}`],
+          ['2', `Proposed Legal Form (LLC, Branch, Partnership, etc.): ${value(legalForm)}`],
+          ['3', `Jurisdiction of Registration (QFC/MOCI): ${value(form.jurisdictionOfRegistration)}`],
+          ['4', 'Country of incorporation: -'],
+          ['5', `Proposed Registered Office Address: ${value(form.proposedRegisteredOfficeAddress)}`],
+          ['6', `Proposed Business Activity: ${value(form.proposedBusinessActivity)}`],
+          ['7', `Expected Source of Initial Capital: ${value(form.sourceOfInitialCapital)}`],
+          ['8', `Expected Business from Newoon: ${value(resolvedRequestedServices(form).join(', '))}`]
+        ]} />
+      </PdfSection>
+      <PdfSection title="Section B: Shareholders & Beneficial Owners (Proposed)">
+        <p className="font-bold">Proposed Shareholders</p>
+        <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryShareholders.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <p className="mt-2 font-bold">Ultimate Beneficial owners (Natural Person Only)</p>
+        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryUbos.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <p className="mt-2">If a shareholder is a corporate entity, please provide its Commercial Registration (or equivalent incorporation document) and ownership structure until the ultimate beneficial owner(s) (natural person(s)) are identified.</p>
+      </PdfSection>
+      <PdfSection title="Section C: Proposed Management & Control Persons (Directors, Secretary, SEF, Authorized Signatory)">
+        <PdfTable headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={form.preliminaryManagement.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.position)])} />
+      </PdfSection>
+      <PdfSection title="Section D: Required Documents">
+        <PdfTable headers={['No.', 'Documents', 'Description', 'Yes/No']} rows={[
+          ['1', 'Qatar ID / Passport copies', 'For all natural persons: Shareholder, UBO, Director, SEF, Secretary, and authorized signatory.', attachmentDisplayNames(attachments[0] || { documentType: '', fileName: '' }).length ? 'Yes' : 'No'],
+          ['2', 'National address certificates', 'Natural persons resident in Qatar.', attachments.some((attachment) => attachment.documentType.toLowerCase().includes('address')) ? 'Yes' : 'No'],
+          ['3', 'CR of legal entities', 'If shareholders are corporate entities, provide CR of each entity until natural persons are identified.', attachments.some((attachment) => attachment.documentType.toLowerCase().includes('corporate')) ? 'Yes' : 'No']
+        ]} />
+      </PdfSection>
+      <div className="mt-16 border-t-4 border-black pt-10">
+        <PdfSection title="Section E: Key Contact person">
+          <p className="mb-1 font-bold">Provide the contact information of the key contact person:</p>
+          <PdfTable headers={['No.', 'Field', 'Details']} rows={[
+            ['1', 'Full Name', value(form.keyContactName)], ['2', 'Nationality', value(resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther))],
+            ['3', 'Passport / QID Number', value(form.keyContactPassportNumber || form.keyContactQidNumber)], ['4', 'Mobile Number', value(form.keyContactPhone)], ['5', 'Email', value(form.keyContactEmail)]
+          ]} />
+        </PdfSection>
+      </div>
+    </article>
+  </aside>;
+}
+
+function PdfSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="mt-3"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><div className="mt-1">{children}</div></section>; }
+function PdfTable({ headers, rows }: { headers: string[]; rows: string[][] }) { return <table className="w-full border-collapse text-left"><thead><tr>{headers.map((header, index) => <th key={`${header}-${index}`} className="border border-black px-1 py-0.5 font-bold">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>)}</tbody></table>; }
+
+function PreliminaryOwnershipForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
+  const update = (key: 'preliminaryShareholders' | 'preliminaryUbos', index: number, field: keyof PreliminaryOwner, value: string | boolean) => onChange({ ...form, [key]: form[key].map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row) });
+  const renderRows = (key: 'preliminaryShareholders' | 'preliminaryUbos', title: string) => <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">{title}</h2><p className="mt-1 text-sm text-slate-500">Enter the proposed natural-person or corporate ownership details.</p></div><button type="button" onClick={() => onChange({ ...form, [key]: [...form[key], blankPreliminaryOwner()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add row</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[880px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID / CR', 'Nationality', 'Country / address', 'Ownership %', 'UBO', ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form[key].map((row, index) => <tr key={index} className="border-t border-slate-200">{(['fullName', 'identityNumber', 'nationality', 'address', 'ownershipPercentage'] as const).map((field) => <td key={field} className="p-2"><input value={row[field]} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td>)}<td className="p-2 text-center"><input type="checkbox" checked={row.isUbo} onChange={(event) => update(key, index, 'isUbo', event.target.checked)} /></td><td className="p-2"><button type="button" onClick={() => onChange({ ...form, [key]: form[key].filter((_, rowIndex) => rowIndex !== index) })} disabled={form[key].length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div></section>;
+  return <div className="space-y-5">{renderRows('preliminaryShareholders', 'Proposed Shareholders')}{renderRows('preliminaryUbos', 'Ultimate Beneficial Owners')}</div>;
+}
+
+function PreliminaryManagementForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
+  const update = (index: number, field: keyof PreliminaryManagementPerson, value: string) => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row) });
+  return <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">Proposed Management and Control Persons</h2><p className="mt-1 text-sm text-slate-500">Include directors, secretary, SEF, and authorised signatories.</p></div><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: [...form.preliminaryManagement, blankPreliminaryManagement()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add person</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[720px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID', 'Nationality', 'Position', ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form.preliminaryManagement.map((row, index) => <tr key={index} className="border-t border-slate-200">{(['fullName', 'identityNumber', 'nationality', 'position'] as const).map((field) => <td key={field} className="p-2"><input value={row[field]} onChange={(event) => update(index, field, event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td>)}<td className="p-2"><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.filter((_, rowIndex) => rowIndex !== index) })} disabled={form.preliminaryManagement.length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div></section>;
 }
 
 function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label: string; description: string }> {
@@ -785,6 +932,12 @@ function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label:
   ];
 
   if (enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES') {
+    if (enquiryType === 'PROPOSED_COMPANY') {
+      steps.push(
+        { id: 'ownership', label: 'Ownership', description: 'Add proposed shareholders and ultimate beneficial owners.' },
+        { id: 'management', label: 'Management', description: 'Add proposed directors, SEF, secretary, and authorised signatories.' }
+      );
+    }
     steps.push({ id: 'contact', label: 'Contact', description: 'Add the key communication person for this enquiry.' });
   }
 

@@ -344,13 +344,13 @@ export class KycController {
     return this.kycService.completeEngagementDecision(user, id, dto);
   }
 
-  @Roles('MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/final-kyc-decision')
   completeFinalKycDecision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.completeFinalKycDecision(user, id, dto);
   }
 
-  @Roles('MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_SUPERVISOR', 'AML_TEAM', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/amendments')
   startAmendment(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.startAmendment(user, id, dto);

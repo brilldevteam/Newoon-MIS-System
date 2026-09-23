@@ -16,7 +16,7 @@ import {
   UserRoundPlus,
   Users
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
@@ -43,6 +43,7 @@ export function AppLayout() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const notificationsRef = useRef<HTMLDivElement>(null);
   const [notificationsError, setNotificationsError] = useState('');
   const useCollapsedSidebar = isFocusedWorkspace && isSidebarCollapsed;
   const fullName = user ? `${user.firstName} ${user.lastName}`.trim() : '';
@@ -55,6 +56,19 @@ export function AppLayout() {
   useEffect(() => {
     setNotificationsOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+
+    function closeOnOutsidePointerDown(event: PointerEvent) {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown);
+  }, [notificationsOpen]);
 
   useEffect(() => {
     if (!user) return;
@@ -154,14 +168,14 @@ export function AppLayout() {
           ))}
         </nav>
       </aside>
-      <div className={useCollapsedSidebar ? 'lg:pl-20' : 'lg:pl-64'}>
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
-          <div>
-            <p className="text-base font-semibold text-slate-950">Newoon Operations</p>
+      <div className={useCollapsedSidebar ? 'min-w-0 lg:pl-20' : 'min-w-0 lg:pl-64'}>
+        <header className="sticky top-0 z-10 flex h-16 min-w-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
+          <div className="min-w-0">
+            <p className="truncate text-base font-semibold text-slate-950">Newoon Operations</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             {user ? (
-              <div className="relative">
+              <div ref={notificationsRef} className="relative">
                 <button
                   type="button"
                   onClick={() => setNotificationsOpen((current) => !current)}
@@ -244,11 +258,11 @@ export function AppLayout() {
               className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               <LogOut className="h-4 w-4" />
-              Logout
+              <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
         </header>
-        <main className="px-4 py-6 lg:px-8">
+        <main className="min-w-0 px-4 py-6 lg:px-8">
           <Outlet />
         </main>
       </div>

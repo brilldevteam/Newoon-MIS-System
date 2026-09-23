@@ -1323,7 +1323,7 @@ export function KycFormEditorPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div>
           <Link to={`/kyc/${kycCase.id}`} className="text-sm font-medium text-brand-700 hover:text-brand-900">
             Back to case
@@ -1333,7 +1333,7 @@ export function KycFormEditorPage() {
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'} | Version {form.version}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex max-w-full flex-wrap gap-2">
           {canEditVisibleForm ? <button onClick={saveDraft} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
@@ -1378,7 +1378,7 @@ export function KycFormEditorPage() {
               <h2 className="text-base font-semibold text-slate-950">Review Package</h2>
               <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">Use these sections together before submitting the next review decision. Select Screening or CRRF to review their details without leaving this screen.</p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[680px]">
+            <div className="grid w-full gap-3 sm:grid-cols-3 xl:w-auto">
               <ReviewPackageButton
                 active={activeReviewPackage === 'kyc'}
                 onClick={() => openReviewPackage('kyc')}
@@ -1443,14 +1443,14 @@ export function KycFormEditorPage() {
       ) : null}
 
       {activeReviewPackage === 'kyc' ? (
-        <div className="grid gap-5 2xl:grid-cols-[220px_minmax(430px,0.85fr)_minmax(520px,1.15fr)]">
+        <div className="grid min-w-0 gap-5 min-[1800px]:grid-cols-[minmax(180px,220px)_minmax(0,0.85fr)_minmax(0,1.15fr)]">
           <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
-          <section className="rounded-lg border border-slate-200 bg-white">
+          <section className="min-w-0 rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
               <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
       <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready.'}</p>
             </div>
-            <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] overflow-auto p-5 disabled:opacity-75">
+            <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
@@ -1478,7 +1478,7 @@ export function KycFormEditorPage() {
 
 function KycFormSectionSidebar({ sections, active, onChange }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void }) {
   return (
-    <aside className="rounded-lg border border-slate-200 bg-white p-2 2xl:sticky 2xl:top-20 2xl:h-fit">
+    <aside className="rounded-lg border border-slate-200 bg-white p-2 min-[1800px]:sticky min-[1800px]:top-20 min-[1800px]:h-fit">
       {sections.map((section) => (
         <button
           key={section.key}
@@ -2011,7 +2011,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
 
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
+    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <Select label="Nationality" value={data.nationality} otherValue={data.nationalityOther} options={nationalityOptions} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
     <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
@@ -2221,6 +2221,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   const showMlro = mode === 'MLRO' || mode === 'ALL';
   const showSef = mode === 'SEF' || mode === 'ALL';
   const mlroFinalRisk = data.mlroFinalRiskClassification || data.riskClassification || '';
+  const dmlroRiskClassification = data.dmlroRiskClassification || '';
   const mlroDecisionValues = mlroDecisionOptions;
   const mlroDecisionValue = mlroDecisionValues.includes(data.mlroDecision || '') ? data.mlroDecision || '' : '';
 
@@ -2248,6 +2249,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroName', value)} />
         <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
         <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDate', value)} />
+        <Select label="DMLRO risk classification" value={dmlroRiskClassification} options={riskClassificationOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroRiskClassification', value)} />
         <Select label="DMLRO decision" value={data.dmlroDecision || 'APPROVE'} options={dmlroDecisionOptions} optionLabels={dmlroDecisionLabels} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDecision', value)} wide />
         {data.dmlroDecision === 'APPROVE_WITH_CONDITIONS' ? (
           <Field label="DMLRO approval conditions" value={data.dmlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroConditions', value)} textarea wide />
@@ -2294,7 +2296,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
 
 function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
   return (
-    <aside className="max-h-[calc(100vh-160px)] overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
+    <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
       <div className="mx-auto min-h-[1120px] w-full max-w-[794px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-sm">
         <div className="flex items-start justify-between border-b-4 border-brand-600 pb-4">
           <div>
@@ -2349,7 +2351,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
+          <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO risk classification', form.sectionH?.dmlroRiskClassification], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -2360,11 +2362,11 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
 type FormProps = { data: Record<string, any>; onChange: (value: Record<string, any>) => void };
 
 function FormGrid({ children }: { children: React.ReactNode }) {
-  return <div className="grid gap-4 md:grid-cols-2">{children}</div>;
+  return <div className="grid gap-4 md:grid-cols-2 [&>*]:min-w-0">{children}</div>;
 }
 
 function Field({ label, value, onChange, type = 'text', textarea = false, wide = false }: { label: string; value: any; onChange: (value: string) => void; type?: string; textarea?: boolean; wide?: boolean }) {
-  const className = `${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`;
+  const className = `${wide ? 'md:col-span-2' : ''} min-w-0 text-sm font-medium text-slate-700`;
   return (
     <label className={className}>
       {label}

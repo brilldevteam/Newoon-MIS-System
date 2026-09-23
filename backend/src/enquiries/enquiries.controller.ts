@@ -67,6 +67,23 @@ export class EnquiriesController {
     return this.enquiriesService.uploadAttachmentFile(user, id, documentType, file);
   }
 
+  @Get(':id/preliminary-kyc')
+  getPreliminaryKyc(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.enquiriesService.getPreliminaryKyc(user, id);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Patch(':id/preliminary-kyc')
+  savePreliminaryKyc(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.enquiriesService.savePreliminaryKyc(user, id, dto);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/preliminary-kyc/complete')
+  completePreliminaryKyc(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.enquiriesService.completePreliminaryKyc(user, id, dto);
+  }
+
   @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/attachments/upload-many')
   @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions()))

@@ -13,6 +13,8 @@ import {
   viewCrrfDocument
 } from '../services/kyc-workflow.service';
 import { CRRF_DOCUMENT_ACCEPT, CRRF_DOCUMENT_HINT, validateCrrfDocuments } from '../utils/upload-security';
+import { useAuth } from '../hooks/useAuth';
+import { hasAnyRole } from '../utils/access-control';
 
 const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'LOW', label: 'Low' },
@@ -28,10 +30,12 @@ function errorMessage(error: any, fallback: string) {
 
 export function CrrfWorkspacePage() {
   const { id = '' } = useParams();
+  const { user } = useAuth();
   const [workspace, setWorkspace] = useState<CrrfWorkspace | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
+  const canEdit = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
 
   useEffect(() => {
     if (!id) return;
@@ -164,7 +168,7 @@ export function CrrfWorkspacePage() {
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">Risk Rating and Internal Comments</h2>
-          <p className="mt-1 text-sm text-slate-500">Risk rating is mandatory before saving the CRRF record.</p>
+          <p className="mt-1 text-sm text-slate-500">{canEdit ? 'Risk rating is mandatory before saving the CRRF record.' : 'CRRF details and supporting documents are available for review.'}</p>
         </div>
         <div className="space-y-4 p-5">
           <label className="block text-sm font-medium text-slate-700">
@@ -172,6 +176,7 @@ export function CrrfWorkspacePage() {
             <select
               value={workspace.record.riskRating || ''}
               onChange={(event) => patchRecord({ riskRating: event.target.value as CrrfRiskRating })}
+              disabled={!canEdit}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 md:max-w-sm"
             >
               <option value="">Select risk rating</option>
@@ -187,6 +192,7 @@ export function CrrfWorkspacePage() {
             value={workspace.record.internalComment || ''}
             onChange={(value) => patchRecord({ internalComment: value })}
             helpText="Internal reference only. These comments are not included in CRRF Excel/PDF exports."
+            disabled={!canEdit}
           />
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
@@ -194,7 +200,7 @@ export function CrrfWorkspacePage() {
                 <h3 className="text-sm font-semibold text-slate-950">CRRF Documents</h3>
                 <p className="mt-1 text-xs text-slate-500">At least one supporting document is required before saving. {CRRF_DOCUMENT_HINT}</p>
               </div>
-              <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+              {canEdit ? <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
                 <Upload className={`h-4 w-4 ${busyKey === 'upload' ? 'animate-pulse' : ''}`} />
                 Upload CRRF
                 <input
@@ -207,7 +213,7 @@ export function CrrfWorkspacePage() {
                     event.currentTarget.value = '';
                   }}
                 />
-              </label>
+              </label> : null}
             </div>
             <div className="divide-y divide-slate-100">
               {workspace.record.documents.length ? (
@@ -218,6 +224,7 @@ export function CrrfWorkspacePage() {
                     caseId={id}
                     busy={busyKey === `delete-${document.id}`}
                     onDelete={removeDocument}
+                    canDelete={canEdit}
                   />
                 ))
               ) : (
@@ -225,7 +232,7 @@ export function CrrfWorkspacePage() {
               )}
             </div>
           </div>
-          <div className="flex justify-end border-t border-slate-200 pt-4">
+          {canEdit ? <div className="flex justify-end border-t border-slate-200 pt-4">
             <button
               type="button"
               onClick={save}
@@ -235,7 +242,7 @@ export function CrrfWorkspacePage() {
               <Save className="h-4 w-4" />
               Save CRRF
             </button>
-          </div>
+          </div> : null}
         </div>
       </section>
     </div>
@@ -255,12 +262,14 @@ function CommentField({
   label,
   value,
   onChange,
-  helpText
+  helpText,
+  disabled = false
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   helpText?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="block text-sm font-medium text-slate-700">
@@ -268,6 +277,7 @@ function CommentField({
       <textarea
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
         rows={5}
         className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
       />
@@ -280,12 +290,14 @@ function DocumentRow({
   document,
   caseId,
   busy,
-  onDelete
+  onDelete,
+  canDelete
 }: {
   document: CrrfDocument;
   caseId: string;
   busy: boolean;
   onDelete: (documentId: string) => void;
+  canDelete: boolean;
 }) {
   return (
     <div className="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
@@ -306,7 +318,7 @@ function DocumentRow({
         >
           <Eye className="h-4 w-4" />
         </button>
-        <button
+        {canDelete ? <button
           type="button"
           onClick={() => onDelete(document.id)}
           disabled={busy}
@@ -315,7 +327,7 @@ function DocumentRow({
           aria-label={`Delete ${document.fileName}`}
         >
           <Trash2 className="h-4 w-4" />
-        </button>
+        </button> : null}
       </div>
     </div>
   );

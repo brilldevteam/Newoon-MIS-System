@@ -174,6 +174,7 @@ export function EnquiryDetailsPage() {
 
   const title = enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry';
   const details = enquiry.details || {};
+  const preliminaryKyc = details.preliminaryKyc && typeof details.preliminaryKyc === 'object' ? details.preliminaryKyc as Record<string, any> : null;
   const enquiryReturnedOrDraft = ['DRAFT', 'RETURNED_TO_BD'].includes(enquiry.status);
   const canEditEnquiry =
     hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM']) ||
@@ -216,7 +217,8 @@ export function EnquiryDetailsPage() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
+      <div className={enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(520px,1.15fr)] xl:items-start' : ''}>
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-5">
         <h2 className="text-base font-semibold text-slate-950">Core Details</h2>
         <dl className="mt-4 grid gap-4 md:grid-cols-2">
           <Info label="Key contact" value={enquiry.keyContactName} />
@@ -240,6 +242,9 @@ export function EnquiryDetailsPage() {
           <Info label="Notes" value={enquiry.notes} wide />
         </dl>
       </section>
+
+      {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? <PreliminaryKycDocument data={preliminaryKyc} /> : null}
+      </div>
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
@@ -311,6 +316,11 @@ export function EnquiryDetailsPage() {
         <h2 className="text-base font-semibold text-slate-950">Status Actions</h2>
         <textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} placeholder="Optional status note" className="mt-4 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
         <div className="mt-3 flex flex-wrap gap-2">
+          {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? (
+            <button type="button" onClick={() => document.getElementById('preliminary-kyc-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
+              View Preliminary KYC
+            </button>
+          ) : null}
           {canSubmitToAmlSupervisor ? (
             <button type="button" disabled={saving} onClick={() => setStatus('SUBMITTED_TO_AML_SUPERVISOR')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
               <Send className="h-4 w-4" />
@@ -392,4 +402,29 @@ function Info({ label, value, wide = false }: { label: string; value?: string | 
       <dd className="mt-1 whitespace-pre-wrap text-sm text-slate-950">{value}</dd>
     </div>
   );
+}
+
+function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
+  const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
+  const value = (item: unknown) => String(item || '-');
+  return <section id="preliminary-kyc-form" className="scroll-mt-6 max-h-[calc(100vh-150px)] min-w-0 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
+    <article className="mx-auto max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
+      <p>Date: {data.completedAt ? new Date(data.completedAt).toLocaleDateString('en-GB') : '-'}</p>
+      <h2 className="mt-3 text-center text-[11px] font-bold underline">Prospective Customer Information &amp; Preliminary Due Diligence form</h2>
+      <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity.</p>
+      <PreliminaryTable title="Section A: Basic Client Details" headers={['No.', 'Details']} rows={[
+        ['1', `Proposed Company Name: ${value(data.companyName)}`], ['2', `Proposed Legal Form: ${value(data.proposedLegalForm)}`],
+        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`],
+        ['5', `Proposed Business Activity: ${value(data.businessActivity)}`], ['6', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`]
+      ]} />
+      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.ubos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.position)])} />
+      <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
+    </article>
+  </section>;
+}
+
+function PreliminaryTable({ title, headers, rows }: { title: string; headers: string[]; rows: string[][] }) {
+  return <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><table className="mt-1 w-full border-collapse text-left"><thead><tr>{headers.map((header) => <th key={header} className="border border-black px-1 py-0.5">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-black px-1 py-1">-</td></tr>}</tbody></table></section>;
 }

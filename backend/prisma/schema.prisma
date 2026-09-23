@@ -749,6 +749,7 @@ model KycInternalReview {
   dmlroSignatureFileName   String?
   dmlroSignatureDataUrl    String?
   dmlroDate                DateTime?
+  dmlroRiskClassification  RiskClassification?
   dmlroDecision            ReviewDecision?
   dmlroConditions          String?
   dmlroReason              String?
