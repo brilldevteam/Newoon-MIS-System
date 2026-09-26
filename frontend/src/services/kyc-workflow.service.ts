@@ -83,7 +83,7 @@ export type ScreeningEntityType = 'CLIENT_COMPANY' | 'SHAREHOLDER' | 'UBO' | 'MA
 
 export type ScreeningCheckType = 'NCTC' | 'UN' | 'OFAC' | 'EU' | 'PPO_LIST' | 'WORLD_CHECK' | 'GOOGLE' | 'OTHER';
 
-export type ScreeningResultStatus = 'NOT_CHECKED' | 'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH';
+export type ScreeningResultStatus = 'NOT_CHECKED' | 'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH' | 'NEGATIVE_NEWS_FOUND' | 'NO_NEGATIVE_NEWS' | 'PREVIOUSLY_NEGATIVE_NEWS' | 'PREVIOUSLY_VIOLATIONS';
 
 export type ScreeningConclusionStatus = 'CLEAR' | 'NOT_CLEAR' | 'NO_SANCTION_FOUND' | 'SANCTION_FOUND';
 
@@ -243,7 +243,8 @@ export type StatusHistory = {
 
 export type KycCase = {
   id: string;
-  sourceEnquiry?: { enquiryType: EnquiryType } | null;
+  sourceEnquiry?: { id: string; enquiryType: EnquiryType; details?: Record<string, unknown> | null } | null;
+  kycForm?: { status: string } | null;
   title: string;
   kycNumber?: string;
   status: KycCaseStatus;
@@ -368,6 +369,7 @@ export type AppNotification = {
   isRead: boolean;
   createdAt: string;
   kycCase?: KycCase | null;
+  enquiry?: { id: string } | null;
 };
 
 export type ReviewTask = {

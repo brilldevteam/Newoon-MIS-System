@@ -873,17 +873,26 @@ export class KycService {
 
   async decideSefReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.SEF);
-    const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF decision') as ReviewDecision;
+    const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'], 'SEF decision') as ReviewDecision | 'RETURN_TO_MLRO';
     const kycCase = await this.findOne(user, id);
     await this.assertPreviousStageComplete(id, ReviewStage.SEF);
 
-    const sefDecisionsRequiringReason: ReviewDecision[] = [ReviewDecision.APPROVE_WITH_CONDITIONS, ReviewDecision.REJECT];
+    const sefDecisionsRequiringReason: Array<ReviewDecision | 'RETURN_TO_MLRO'> = [ReviewDecision.APPROVE_WITH_CONDITIONS, 'RETURN_TO_MLRO', ReviewDecision.REJECT];
     if (sefDecisionsRequiringReason.includes(decision) && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions)) {
       throw new BadRequestException('Provide SEF reason or conditions for this decision');
     }
 
     return this.prisma.$transaction(async (tx) => {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.SEF, dto);
+      if (decision === 'RETURN_TO_MLRO') {
+        await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_REVIEW_PENDING, 'SEF returned the KYC file to MLRO for further review.');
+        await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
+        await tx.internalReviewTask.upsert({ where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } }, update: { updatedBy: user.id }, create: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING, createdBy: user.id, updatedBy: user.id } });
+        await this.clearReviewTaskStatus(tx, id, ReviewStage.SEF, ReviewTaskStatus.COMPLETED);
+        await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'Returned to MLRO', `${kycCase.title} was returned by SEF for further MLRO review.`);
+        await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'SEF_RETURN_TO_MLRO' });
+        return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
+      }
       const targetStatus = decision === ReviewDecision.REJECT ? KycCaseStatus.SEF_REJECTED : KycCaseStatus.SEF_APPROVED;
       await this.recordStatus(tx, kycCase, user, targetStatus, `SEF decision: ${decision}`);
       await this.clearReviewTaskStatus(tx, id, ReviewStage.SEF, ReviewTaskStatus.COMPLETED);
@@ -3966,7 +3975,8 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 
   private caseInclude() {
     return {
-      sourceEnquiry: { select: { enquiryType: true } },
+      sourceEnquiry: { select: { id: true, enquiryType: true, details: true } },
+      kycForm: { select: { status: true } },
       client: { include: { contacts: true } },
       service: true,
       legalDocuments: { orderBy: { createdAt: 'desc' as const } },

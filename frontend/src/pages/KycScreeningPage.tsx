@@ -50,6 +50,13 @@ const resultOptions: Array<{ value: ScreeningResultStatus; label: string }> = [
   { value: 'CONFIRMED_MATCH', label: 'Confirmed match' }
 ];
 
+const googleResultOptions: Array<{ value: ScreeningResultStatus; label: string }> = [
+  { value: 'NO_NEGATIVE_NEWS', label: 'No negative news' },
+  { value: 'NEGATIVE_NEWS_FOUND', label: 'Negative news found' },
+  { value: 'PREVIOUSLY_NEGATIVE_NEWS', label: 'Previously negative news' },
+  { value: 'PREVIOUSLY_VIOLATIONS', label: 'Previously violations' }
+];
+
 const conclusionOptions: Array<{ value: ScreeningConclusionStatus; label: string }> = [
   { value: 'CLEAR', label: 'Clear' },
   { value: 'NOT_CLEAR', label: 'Not clear' },
@@ -575,7 +582,7 @@ export function KycScreeningPage() {
                     disabled={!canEditScreening || busyKey === 'save-merged-results'}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-700"
                   >
-                    {resultOptions.map((option) => (
+                    {(checkType === 'GOOGLE' ? googleResultOptions : resultOptions).map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
@@ -597,10 +604,10 @@ export function KycScreeningPage() {
                 {canEditScreening && requiresEvidence ? (
                   <label className="mt-3 inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     <Upload className={`h-4 w-4 ${busyKey === `upload-merged-${checkType}` ? 'animate-pulse' : ''}`} />
-                    Upload PDF
+                    Upload evidence
                     <input
                       type="file"
-                      accept={PDF_ONLY_ACCEPT}
+                      accept={STANDARD_DOCUMENT_ACCEPT}
                       multiple
                       className="hidden"
                       onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -846,7 +853,7 @@ export function KycScreeningPage() {
                             disabled={!canEditScreening}
                             className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
                           >
-                            {resultOptions.map((option) => (
+                            {(check.checkType === 'GOOGLE' ? googleResultOptions : resultOptions).map((option) => (
                               <option key={option.value} value={option.value}>
                                 {option.label}
                               </option>
@@ -869,10 +876,10 @@ export function KycScreeningPage() {
                             {canEditScreening && !isResultOnly ? (
                               <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                                 <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-${check.checkType}` ? 'animate-pulse' : ''}`} />
-                                Upload PDF
+                                Upload evidence
                                 <input
                                   type="file"
-                                  accept={check.checkType === 'OTHER' ? STANDARD_DOCUMENT_ACCEPT : PDF_ONLY_ACCEPT}
+                                  accept={STANDARD_DOCUMENT_ACCEPT}
                                   multiple
                                   className="hidden"
                                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -885,7 +892,7 @@ export function KycScreeningPage() {
                             <p className="text-xs text-slate-500">
                               {isResultOnly
                                 ? 'Result only. No individual file upload is required.'
-                                : `Optional supporting evidence. ${check.checkType === 'OTHER' ? STANDARD_DOCUMENT_HINT : PDF_ONLY_HINT}`}
+                                : `Optional supporting evidence. ${STANDARD_DOCUMENT_HINT}`}
                             </p>
                             <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                           </div>

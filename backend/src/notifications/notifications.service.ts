@@ -11,7 +11,8 @@ export class NotificationsService {
     return this.prisma.notification.findMany({
       where: this.notificationWhere(user),
       include: {
-        kycCase: { include: { client: true, service: true } }
+        kycCase: { include: { client: true, service: true } },
+        enquiry: { select: { id: true } }
       },
       orderBy: { createdAt: 'desc' },
       take: 20
@@ -31,7 +32,8 @@ export class NotificationsService {
       where: { id },
       data: { isRead: true },
       include: {
-        kycCase: { include: { client: true, service: true } }
+        kycCase: { include: { client: true, service: true } },
+        enquiry: { select: { id: true } }
       }
     });
   }
@@ -68,6 +70,7 @@ export class NotificationsService {
       types.add(NotificationType.ADDITIONAL_INFORMATION_REQUESTED);
       types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
       types.add(NotificationType.CLIENT_ACTIVATED);
+      types.add(NotificationType.SEF_DECISION_COMPLETED);
     }
 
     if (this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR'])) {
@@ -75,22 +78,30 @@ export class NotificationsService {
       types.add(NotificationType.SUPERVISOR_TASK_ASSIGNED);
       types.add(NotificationType.ADDITIONAL_INFORMATION_REQUESTED);
       types.add(NotificationType.RISK_CLASSIFICATION_CHANGED);
+      types.add(NotificationType.SEF_DECISION_COMPLETED);
+      types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
     }
 
     if (this.hasAnyRole(user, ['DMLRO'])) {
       types.add(NotificationType.DMLRO_TASK_ASSIGNED);
       types.add(NotificationType.ADDITIONAL_INFORMATION_REQUESTED);
+      types.add(NotificationType.SEF_DECISION_COMPLETED);
+      types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
     }
 
     if (this.hasAnyRole(user, ['MLRO'])) {
       types.add(NotificationType.MLRO_TASK_ASSIGNED);
       types.add(NotificationType.DMLRO_REVIEW_COMPLETED);
+      types.add(NotificationType.SEF_DECISION_COMPLETED);
+      types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
     }
 
     if (this.hasAnyRole(user, ['SEF'])) {
       types.add(NotificationType.SEF_TASK_ASSIGNED);
       types.add(NotificationType.MLRO_APPROVAL_COMPLETED);
       types.add(NotificationType.MLRO_APPROVAL_WITH_CONDITIONS);
+      types.add(NotificationType.SEF_DECISION_COMPLETED);
+      types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
     }
 
     return [...types];

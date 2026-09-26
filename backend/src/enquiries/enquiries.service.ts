@@ -103,6 +103,7 @@ export class EnquiriesService {
           await prisma.notification.createMany({
             data: reviewerRecipients.map((recipient) => ({
               tenantId,
+              enquiryId: enquiry.id,
               recipientId: recipient.id,
               type: NotificationType.GENERAL,
               title: 'New enquiry created',
@@ -272,6 +273,7 @@ export class EnquiriesService {
         await prisma.notification.createMany({
           data: (recipients.length ? recipients : [{ id: null }]).map((recipient) => ({
             tenantId: existing.tenantId,
+            enquiryId: existing.id,
             recipientId: recipient.id,
             type: NotificationType.AML_CASE_SUBMITTED,
             title: 'Enquiry submitted to AML Supervisor',
@@ -300,6 +302,7 @@ export class EnquiriesService {
         await prisma.notification.createMany({
           data: (recipients.length ? recipients : [{ id: null }]).map((recipient) => ({
             tenantId: existing.tenantId,
+            enquiryId: existing.id,
             recipientId: recipient.id,
             type: NotificationType.ADDITIONAL_INFORMATION_REQUESTED,
             title: 'Enquiry returned to BD',
@@ -474,7 +477,7 @@ export class EnquiriesService {
       if (preliminaryManagement.length) {
         await prisma.kycManager.createMany({ data: preliminaryManagement.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
           tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', identityNumber: this.optionalText(row.identityNumber),
-          nationality: this.optionalText(row.nationality), position: this.optionalText(row.position), sortOrder: index, createdBy: user.id, updatedBy: user.id
+          nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', ') || null, sortOrder: index, createdBy: user.id, updatedBy: user.id
         })) });
       }
 
@@ -838,12 +841,18 @@ export class EnquiriesService {
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)
       })),
+      ubos: this.asArray<Record<string, unknown>>(dto.ubos).map((row) => ({
+        fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
+        address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: true
+      })),
       management: this.asArray<Record<string, unknown>>(dto.management).map((row) => ({
-        fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), position: this.optionalText(row.position)
+        fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', '), positions: this.asArray<string>(row.positions).map(String).filter(Boolean)
       })),
       documents: this.asArray<Record<string, unknown>>(dto.documents).map((row) => ({
         documentType: this.optionalText(row.documentType), description: this.optionalText(row.description), available: Boolean(row.available)
       })),
+      contact: this.objectValue(dto.contact),
+      declaration: this.objectValue(dto.declaration),
       updatedAt: new Date().toISOString()
     };
   }

@@ -61,11 +61,11 @@ export function DashboardPage() {
       <DashboardHeader canCreateEnquiry={canCreateEnquiry} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Tenants" value={summary.totalTenants} detail="Configured workspaces" trend="Live" tone="green" icon={Building2} />
-        <StatCard label="Clients" value={summary.totalClients} detail="Client intake register" trend="Active" tone="blue" icon={UsersRound} />
-        <StatCard label="Pending KYC" value={summary.pendingKyc} detail="Files in preparation" trend="Open" tone="amber" icon={ClipboardCheck} />
-        <StatCard label="Approvals" value={summary.pendingApprovals} detail="Waiting for review" trend="Queue" tone="rose" icon={ShieldCheck} />
-        <StatCard label="Modules" value={summary.enabledModules} detail="Enabled capabilities" trend="Ready" icon={Layers} />
+        <StatCard label="Tenants" value={summary.totalTenants} detail="Configured workspaces" trend="Live" tone="green" icon={Building2} to="/tenants" />
+        <StatCard label="Clients" value={summary.totalClients} detail="Client intake register" trend="Active" tone="blue" icon={UsersRound} to="/clients" />
+        <StatCard label="Pending KYC" value={summary.pendingKyc} detail="Files in preparation" trend="Open" tone="amber" icon={ClipboardCheck} to="/kyc-workflow?filter=pending-kyc" />
+        <StatCard label="Approvals" value={summary.pendingApprovals} detail="Waiting for review" trend="Queue" tone="rose" icon={ShieldCheck} to="/kyc-workflow?filter=pending-approvals" />
+        <StatCard label="Modules" value={summary.enabledModules} detail="Enabled capabilities" trend="Ready" icon={Layers} to="/modules" />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">

@@ -272,6 +272,7 @@ export function AppLayout() {
 
 function notificationLink(notification: AppNotification) {
   const caseId = notification.kycCase?.id;
+  if (notification.enquiry?.id) return `/enquiries/${notification.enquiry.id}`;
   if (!caseId) {
     return ['GENERAL', 'AML_CASE_SUBMITTED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type) ? '/enquiries' : '/review-tasks';
   }
@@ -287,11 +288,11 @@ function notificationLink(notification: AppNotification) {
       'MLRO_REJECTION'
     ].includes(notification.type)
   ) {
-    return `/kyc/${caseId}/form`;
+    return `/kyc/${caseId}`;
   }
 
   if (['AML_CASE_SUBMITTED', 'SUPERVISOR_TASK_ASSIGNED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type)) {
-    return `/kyc/${caseId}/form`;
+    return `/kyc/${caseId}`;
   }
 
   return `/kyc/${caseId}`;

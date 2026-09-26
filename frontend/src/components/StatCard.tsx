@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { Link } from 'react-router-dom';
 import { formatNumber } from '../utils/format';
 
 type StatCardProps = {
@@ -8,6 +9,7 @@ type StatCardProps = {
   trend?: string;
   tone?: 'green' | 'blue' | 'amber' | 'rose' | 'slate';
   icon?: ComponentType<{ className?: string }>;
+  to?: string;
 };
 
 const tones = {
@@ -38,11 +40,9 @@ const tones = {
   }
 };
 
-export function StatCard({ label, value, detail, trend, tone = 'slate', icon: Icon }: StatCardProps) {
+export function StatCard({ label, value, detail, trend, tone = 'slate', icon: Icon, to }: StatCardProps) {
   const styles = tones[tone];
-
-  return (
-    <div className={`rounded-xl border p-5 shadow-sm shadow-slate-200/60 transition hover:-translate-y-0.5 hover:shadow-md ${styles.card}`}>
+  const content = <>
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
@@ -58,6 +58,7 @@ export function StatCard({ label, value, detail, trend, tone = 'slate', icon: Ic
         <span className="truncate text-slate-500">{detail || 'Current workspace total'}</span>
         {trend ? <span className={`rounded-full px-2 py-1 font-semibold ${styles.trend}`}>{trend}</span> : null}
       </div>
-    </div>
-  );
+    </>;
+  const className = `block rounded-xl border p-5 shadow-sm shadow-slate-200/60 transition hover:-translate-y-0.5 hover:shadow-md ${styles.card}`;
+  return to ? <Link to={to} className={className}>{content}</Link> : <div className={className}>{content}</div>;
 }

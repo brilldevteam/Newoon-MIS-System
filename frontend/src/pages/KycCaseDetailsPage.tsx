@@ -279,7 +279,16 @@ export function KycCaseDetailsPage() {
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
-        {canOpenKycForm ? (
+        {isPreliminaryProposedCompany && kycCase.sourceEnquiry ? (
+          <Link
+            to={`/enquiries/${kycCase.sourceEnquiry.id}`}
+            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <FileText className="h-4 w-4" />
+            Open Preliminary KYC
+          </Link>
+        ) : null}
+        {canOpenKycForm && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
           <Link
             to={`/kyc/${kycCase.id}/form`}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"

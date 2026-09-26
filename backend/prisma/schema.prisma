@@ -128,6 +128,7 @@ model Enquiry {
   attachments         EnquiryAttachment[]
   comments            EnquiryComment[]
   statusHistory       EnquiryStatusHistory[]
+  notifications       Notification[]
   generatedKycCases   KycCase[]              @relation("EnquiryGeneratedKycCases")
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
@@ -366,6 +367,10 @@ enum ScreeningResultStatus {
   CLEAR
   POTENTIAL_MATCH
   CONFIRMED_MATCH
+  NEGATIVE_NEWS_FOUND
+  NO_NEGATIVE_NEWS
+  PREVIOUSLY_NEGATIVE_NEWS
+  PREVIOUSLY_VIOLATIONS
 }
 
 enum ScreeningConclusionStatus {
@@ -1007,6 +1012,8 @@ model Notification {
   tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   kycCaseId   String?
   kycCase     KycCase?         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  enquiryId   String?
+  enquiry     Enquiry?         @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
   recipientId String?
   recipient   User?            @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   type        NotificationType @default(GENERAL)
@@ -1018,6 +1025,7 @@ model Notification {
 
   @@index([tenantId])
   @@index([kycCaseId])
+  @@index([enquiryId])
 }
 
 model LegalDocument {

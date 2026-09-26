@@ -549,10 +549,11 @@ const mlroDecisionLabels: Record<string, string> = {
   RETURN_TO_DMLRO: 'Return to DMLRO',
   SEND_TO_SEF: 'Send to SEF for management decision'
 };
-const sefDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'];
+const sefDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'];
 const sefDecisionLabels: Record<string, string> = {
   APPROVE: 'Approve',
   APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+  RETURN_TO_MLRO: 'Return to MLRO',
   REJECT: 'Reject'
 };
 
@@ -589,12 +590,14 @@ function mlroDecisionErrorMessage(decision: string) {
 }
 
 function sefDecisionSuccessMessage(decision: string) {
+  if (decision === 'RETURN_TO_MLRO') return 'KYC file returned to MLRO.';
   if (decision === 'REJECT') return 'SEF management rejection submitted.';
   if (decision === 'APPROVE_WITH_CONDITIONS') return 'SEF management approval with conditions submitted.';
   return 'SEF management approval submitted.';
 }
 
 function sefDecisionErrorMessage(decision: string) {
+  if (decision === 'RETURN_TO_MLRO') return 'Unable to return the KYC file to MLRO.';
   if (decision === 'REJECT') return 'Unable to submit SEF management rejection.';
   if (decision === 'APPROVE_WITH_CONDITIONS') return 'Unable to submit SEF management approval with conditions.';
   return 'Unable to submit SEF management decision.';
@@ -1256,7 +1259,7 @@ export function KycFormEditorPage() {
       setError('Complete the SEF name, date, and signature before submitting the management decision.');
       return;
     }
-    if (['APPROVE_WITH_CONDITIONS', 'REJECT'].includes(decision) && !sectionH.sefConditions && !sectionH.sefComments) {
+    if (['APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'].includes(decision) && !sectionH.sefConditions && !sectionH.sefComments) {
       setError('Add SEF conditions or comments before submitting this decision.');
       return;
     }
@@ -2285,8 +2288,8 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         {data.sefDecision === 'APPROVE_WITH_CONDITIONS' ? (
           <Field label="SEF approval conditions" value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
         ) : null}
-        {data.sefDecision === 'REJECT' ? (
-          <Field label="SEF rejection reason" value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
+        {data.sefDecision === 'REJECT' || data.sefDecision === 'RETURN_TO_MLRO' ? (
+          <Field label={data.sefDecision === 'RETURN_TO_MLRO' ? 'Return reason for MLRO' : 'SEF rejection reason'} value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
         ) : null}
         <Field label="SEF comments" value={data.sefComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefComments', value)} textarea wide />
       </>
