@@ -14,12 +14,15 @@ export class DashboardService {
     const [
       totalTenants,
       totalClients,
+      openEnquiries,
       pendingKyc,
       pendingApprovals,
+      approvedKyc,
       enabledModules
     ] = await Promise.all([
       isSuperAdmin ? this.prisma.tenant.count() : Promise.resolve(1),
       this.prisma.client.count({ where: tenantFilter }),
+      this.prisma.enquiry.count({ where: { ...tenantFilter, status: { in: ['DRAFT', 'SUBMITTED_TO_AML_SUPERVISOR', 'RETURNED_TO_BD', 'READY_FOR_KYC'] } } }),
       this.prisma.kycCase.count({
         where: {
           ...tenantFilter,
@@ -33,7 +36,15 @@ export class DashboardService {
           }
         }
       }),
-      this.prisma.approval.count({ where: { ...tenantFilter, status: 'PENDING' } }),
+      this.prisma.kycCase.count({
+        where: {
+          ...tenantFilter,
+          status: { in: [KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.MLRO_REVIEW_PENDING, KycCaseStatus.SEF_DECISION_PENDING] }
+        }
+      }),
+      this.prisma.kycCase.count({
+        where: { ...tenantFilter, status: { in: [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING, KycCaseStatus.CLIENT_ACTIVE] } }
+      }),
       this.prisma.tenantModule.count({
         where: { ...(isSuperAdmin ? {} : { tenantId: user.tenantId || '' }), isEnabled: true }
       })
@@ -42,8 +53,10 @@ export class DashboardService {
     return {
       totalTenants,
       totalClients,
+      openEnquiries,
       pendingKyc,
       pendingApprovals,
+      approvedKyc,
       enabledModules
     };
   }

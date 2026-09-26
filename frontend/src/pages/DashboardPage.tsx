@@ -10,23 +10,21 @@ import { formatNumber } from '../utils/format';
 const emptySummary: DashboardSummary = {
   totalTenants: 0,
   totalClients: 0,
+  openEnquiries: 0,
   pendingKyc: 0,
   pendingApprovals: 0,
+  approvedKyc: 0,
   enabledModules: 0
 };
-
-const workflowStages = [
-  { label: 'Enquiry', helper: 'BD intake', value: 82, tone: 'bg-sky-500' },
-  { label: 'KYC Prep', helper: 'AML form', value: 64, tone: 'bg-brand-600' },
-  { label: 'Review', helper: 'DMLRO and MLRO', value: 48, tone: 'bg-amber-500' },
-  { label: 'Approved', helper: 'Client ready', value: 36, tone: 'bg-emerald-500' }
-];
 
 export function DashboardPage() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [loading, setLoading] = useState(true);
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
+  const canViewClients = hasAnyRole(user, workflowRoles.clientIntake);
+  const canViewKyc = hasAnyRole(user, [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]);
+  const canManageWorkspace = hasAnyRole(user, workflowRoles.admin);
 
   useEffect(() => {
     getDashboardSummary()
@@ -36,12 +34,19 @@ export function DashboardPage() {
   }, []);
 
   const healthScore = useMemo(() => {
-    const totalOpen = summary.pendingKyc + summary.pendingApprovals;
-    if (!summary.totalClients) return 0;
-    return Math.max(18, Math.min(96, Math.round(((summary.totalClients - totalOpen) / Math.max(summary.totalClients, 1)) * 100)));
-  }, [summary.pendingApprovals, summary.pendingKyc, summary.totalClients]);
+    const trackedCases = summary.pendingKyc + summary.pendingApprovals + summary.approvedKyc;
+    if (!trackedCases) return 0;
+    return Math.round((summary.approvedKyc / trackedCases) * 100);
+  }, [summary.approvedKyc, summary.pendingApprovals, summary.pendingKyc]);
 
   const pendingTotal = summary.pendingKyc + summary.pendingApprovals;
+  const stageTotal = Math.max(1, summary.openEnquiries + summary.pendingKyc + summary.pendingApprovals + summary.approvedKyc);
+  const workflowStages = [
+    { label: 'Enquiry', helper: `${formatNumber(summary.openEnquiries)} open`, value: Math.round((summary.openEnquiries / stageTotal) * 100), tone: 'bg-sky-500' },
+    { label: 'KYC Prep', helper: `${formatNumber(summary.pendingKyc)} pending`, value: Math.round((summary.pendingKyc / stageTotal) * 100), tone: 'bg-brand-600' },
+    { label: 'Review', helper: `${formatNumber(summary.pendingApprovals)} pending`, value: Math.round((summary.pendingApprovals / stageTotal) * 100), tone: 'bg-amber-500' },
+    { label: 'Approved', helper: `${formatNumber(summary.approvedKyc)} approved`, value: Math.round((summary.approvedKyc / stageTotal) * 100), tone: 'bg-emerald-500' }
+  ];
 
   if (loading) {
     return (
@@ -61,11 +66,11 @@ export function DashboardPage() {
       <DashboardHeader canCreateEnquiry={canCreateEnquiry} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Tenants" value={summary.totalTenants} detail="Configured workspaces" trend="Live" tone="green" icon={Building2} to="/tenants" />
-        <StatCard label="Clients" value={summary.totalClients} detail="Client intake register" trend="Active" tone="blue" icon={UsersRound} to="/clients" />
-        <StatCard label="Pending KYC" value={summary.pendingKyc} detail="Files in preparation" trend="Open" tone="amber" icon={ClipboardCheck} to="/kyc-workflow?filter=pending-kyc" />
-        <StatCard label="Approvals" value={summary.pendingApprovals} detail="Waiting for review" trend="Queue" tone="rose" icon={ShieldCheck} to="/kyc-workflow?filter=pending-approvals" />
-        <StatCard label="Modules" value={summary.enabledModules} detail="Enabled capabilities" trend="Ready" icon={Layers} to="/modules" />
+        <StatCard label="Tenants" value={summary.totalTenants} detail="Configured workspaces" trend="Live" tone="green" icon={Building2} to={canManageWorkspace ? '/tenants' : undefined} />
+        <StatCard label="Clients" value={summary.totalClients} detail="Client intake register" trend="Active" tone="blue" icon={UsersRound} to={canViewClients ? '/clients' : undefined} />
+        <StatCard label="Pending KYC" value={summary.pendingKyc} detail="Files in preparation" trend="Open" tone="amber" icon={ClipboardCheck} to={canViewKyc ? '/kyc-workflow?filter=pending-kyc' : undefined} />
+        <StatCard label="Approvals" value={summary.pendingApprovals} detail="Waiting for review" trend="Queue" tone="rose" icon={ShieldCheck} to={canViewKyc ? '/kyc-workflow?filter=pending-approvals' : undefined} />
+        <StatCard label="Modules" value={summary.enabledModules} detail="Enabled capabilities" trend="Ready" icon={Layers} to={canManageWorkspace ? '/modules' : undefined} />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.65fr)]">
