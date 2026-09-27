@@ -1311,7 +1311,14 @@ export function KycFormEditorPage() {
   const canOpenCrrf = hasAnyRole(user, workflowRoles.crrf);
   const showReviewPackage = sectionHMode !== 'AML' || hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']);
   const dmlroDecision = form.sectionH?.dmlroDecision || 'APPROVE';
-  const dmlroSubmitLabel = dmlroDecision === 'APPROVE' || dmlroDecision === 'APPROVE_WITH_CONDITIONS' ? 'Submit to MLRO' : 'Send to AML Supervisor';
+  const dmlroSubmitLabel =
+    dmlroDecision === 'RETURN_TO_SUPERVISOR'
+      ? 'Return to AML Supervisor'
+      : dmlroDecision === 'REQUEST_ADDITIONAL_INFORMATION'
+        ? 'Request Additional Information'
+        : dmlroDecision === 'DMLRO_FINAL_APPROVE'
+          ? 'Submit Final Approval'
+          : 'Submit to MLRO';
   const mlroDecision = form.sectionH?.mlroDecision || 'APPROVE';
   const mlroSubmitLabel =
     mlroDecision === 'RETURN_TO_DMLRO'

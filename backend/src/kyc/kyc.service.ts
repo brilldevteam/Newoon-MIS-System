@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Int
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
+  EnquiryStatus,
   EnquiryType,
   KycCaseStatus,
   KycFormSectionKey,
@@ -584,20 +585,7 @@ export class KycService {
         }
       });
 
-      await tx.internalReviewTask.upsert({
-        where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
-        update: { updatedBy: user.id },
-        create: {
-          tenantId: kycCase.tenantId,
-          kycCaseId: id,
-          stage: ReviewStage.MLRO,
-          createdBy: user.id,
-          updatedBy: user.id
-        }
-      });
-
       await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'DMLRO review task assigned', `${kycCase.title} is ready for DMLRO review.`);
-      await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'MLRO parallel review available', `${kycCase.title} is available for MLRO review while DMLRO review is pending.`);
 
       return tx.kycCase.findUniqueOrThrow({
         where: { id },
@@ -618,6 +606,57 @@ export class KycService {
     return this.updateStatus(user, id, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, 'Supervisor review task assigned', {
       amlAssigneeId: user.id,
       amlReviewStartedAt: new Date()
+    });
+  }
+
+  async returnToBusinessDevelopment(user: RequestUser, id: string, reason: string) {
+    if (!this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only AML users can return a KYC case to BD.');
+    }
+
+    const note = this.optionalText(reason);
+    if (!note) throw new BadRequestException('Provide a reason before returning the KYC case to BD.');
+
+    const kycCase = await this.findOne(user, id);
+    if (!kycCase.sourceEnquiryId) {
+      throw new BadRequestException('Only KYC cases created from an enquiry can be returned to BD.');
+    }
+    const returnableStatuses: KycCaseStatus[] = [KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
+    if (!returnableStatuses.includes(kycCase.status)) {
+      throw new BadRequestException('The KYC case can be returned to BD only while it is with AML Supervisor.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const enquiry = await tx.enquiry.findFirst({ where: { id: kycCase.sourceEnquiryId!, tenantId: kycCase.tenantId } });
+      if (!enquiry) throw new NotFoundException('Source enquiry not found.');
+
+      await tx.enquiry.update({ where: { id: enquiry.id }, data: { status: EnquiryStatus.RETURNED_TO_BD } });
+      await tx.enquiryStatusHistory.create({
+        data: { tenantId: enquiry.tenantId, enquiryId: enquiry.id, fromStatus: enquiry.status, toStatus: EnquiryStatus.RETURNED_TO_BD, changedById: user.id, note }
+      });
+      await tx.kycCase.update({ where: { id }, data: { status: KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED } });
+      await tx.kycCaseStatusHistory.create({
+        data: { tenantId: kycCase.tenantId, kycCaseId: id, fromStatus: kycCase.status, toStatus: KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED, changedById: user.id, note: `Returned to BD: ${note}` }
+      });
+      await tx.internalReviewTask.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+        data: { status: ReviewTaskStatus.RETURNED, completedAt: new Date(), updatedBy: user.id }
+      });
+
+      const recipients = await tx.user.findMany({ where: { tenantId: enquiry.tenantId, roles: { some: { role: { name: 'OPERATING_TEAM' } } } }, select: { id: true } });
+      await tx.notification.createMany({
+        data: (recipients.length ? recipients : [{ id: null }]).map((recipient) => ({
+          tenantId: enquiry.tenantId,
+          enquiryId: enquiry.id,
+          kycCaseId: id,
+          recipientId: recipient.id,
+          type: NotificationType.ADDITIONAL_INFORMATION_REQUESTED,
+          title: 'KYC case returned to BD',
+          message: `${kycCase.title} requires BD updates: ${note}`
+        }))
+      });
+
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     });
   }
 
@@ -662,8 +701,9 @@ export class KycService {
   async startReviewStage(user: RequestUser, id: string, stage: ReviewStage) {
     this.assertStageRole(user, stage);
     const kycCase = await this.findOne(user, id);
-    if (stage !== ReviewStage.MLRO) {
-      await this.assertPreviousStageComplete(kycCase.id, stage);
+    await this.assertPreviousStageComplete(kycCase.id, stage);
+    if (![this.stageStatus(stage, 'pending'), this.stageStatus(stage, 'inProgress')].includes(kycCase.status)) {
+      throw new BadRequestException(`${this.stageLabel(stage)} is not the active review stage for this case.`);
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -717,11 +757,13 @@ export class KycService {
 
   async submitSupervisorReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.SUPERVISOR);
+    await this.assertReviewStageActive(id, ReviewStage.SUPERVISOR);
     return this.submitReviewAndRoute(user, id, ReviewStage.SUPERVISOR, dto, ReviewStage.DMLRO);
   }
 
   async submitDmlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.DMLRO);
+    await this.assertReviewStageActive(id, ReviewStage.DMLRO);
     const decision = this.enumValue(dto.decision || 'APPROVE', ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision') as ReviewDecision;
     const reason = this.optionalText(dto.reason);
     const conditions = this.optionalText(dto.conditions);
@@ -762,6 +804,8 @@ export class KycService {
 
   async decideMlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.MLRO);
+    await this.assertReviewStageActive(id, ReviewStage.MLRO);
+    await this.assertPreviousStageComplete(id, ReviewStage.MLRO);
     const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO decision') as ReviewDecision;
     const kycCase = await this.findOne(user, id);
     const dmlroSubmission = await this.prisma.internalReviewSubmission.findUnique({
@@ -873,6 +917,7 @@ export class KycService {
 
   async decideSefReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.SEF);
+    await this.assertReviewStageActive(id, ReviewStage.SEF);
     const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'], 'SEF decision') as ReviewDecision | 'RETURN_TO_MLRO';
     const kycCase = await this.findOne(user, id);
     await this.assertPreviousStageComplete(id, ReviewStage.SEF);
@@ -1693,9 +1738,6 @@ export class KycService {
   }
 
   async getMyReviewTasks(user: RequestUser) {
-    if (this.hasAnyRole(user, ['MLRO'])) {
-      await this.ensureMlroParallelReviewQueue(user);
-    }
     const stages = this.reviewStagesForUser(user);
     const notificationTypes = this.reviewNotificationTypesForUser(user);
     const tenantWhere = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
@@ -1731,8 +1773,12 @@ export class KycService {
         : []
       ]);
 
+      const activeTasks = tasks.filter((task) =>
+        [this.stageStatus(task.stage, 'pending'), this.stageStatus(task.stage, 'inProgress')].includes(task.kycCase.status)
+      );
+
       return {
-        tasks,
+        tasks: activeTasks,
         notifications,
         stages
       };
@@ -1843,7 +1889,11 @@ export class KycService {
       sectionB: {
         ...ownershipSection,
         shareholders: this.sectionRows(ownershipSection.shareholders, form.shareholders),
-        ubos: this.sectionRows(ownershipSection.ubos, form.ubos)
+        ubos: this.sectionRows(ownershipSection.ubos, form.ubos).map((row) => {
+          const ubo = row as RowPayload;
+          // Proposed-company cases persist this as ownershipPercentage; preserve it for all UBO form and export paths.
+          return { ...ubo, uboInterestPercentage: ubo.uboInterestPercentage ?? ubo.ownershipPercentage };
+        })
       },
       sectionC: {
         ...section(KycFormSectionKey.MANAGEMENT),
@@ -2188,45 +2238,6 @@ export class KycService {
     return user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
   }
 
-  private async ensureMlroParallelReviewQueue(user: RequestUser) {
-    const tenantWhere = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: this.getTenantId(user) };
-    const cases = await this.prisma.kycCase.findMany({
-      where: {
-        ...tenantWhere,
-        status: { in: [KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_IN_PROGRESS] }
-      },
-      select: { id: true, tenantId: true, title: true }
-    });
-
-    for (const kycCase of cases) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.internalReviewTask.upsert({
-          where: { kycCaseId_stage_status: { kycCaseId: kycCase.id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
-          update: { updatedBy: user.id },
-          create: {
-            tenantId: kycCase.tenantId,
-            kycCaseId: kycCase.id,
-            stage: ReviewStage.MLRO,
-            createdBy: user.id,
-            updatedBy: user.id
-          }
-        });
-        const existingNotification = await tx.notification.findFirst({
-          where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, type: NotificationType.MLRO_TASK_ASSIGNED }
-        });
-        if (!existingNotification) {
-          await this.createNotification(
-            tx,
-            kycCase,
-            NotificationType.MLRO_TASK_ASSIGNED,
-            'MLRO parallel review available',
-            `${kycCase.title} is available for MLRO review while DMLRO review is pending.`
-          );
-        }
-      });
-    }
-  }
-
   private async nextKycNumber(prisma: Prisma.TransactionClient, tenantId: string) {
     const year = new Date().getFullYear();
     const prefix = `KYC-${year}-`;
@@ -2336,6 +2347,15 @@ export class KycService {
     }
   }
 
+  private async assertReviewStageActive(kycCaseId: string, stage: ReviewStage) {
+    const task = await this.prisma.internalReviewTask.findFirst({
+      where: { kycCaseId, stage, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS] } }
+    });
+    if (!task) {
+      throw new BadRequestException(`${this.stageLabel(stage)} does not have an active review task for this case.`);
+    }
+  }
+
   private async ensureReviewTask(user: RequestUser, id: string, stage: ReviewStage, notificationType: NotificationType) {
     const kycCase = await this.findOne(user, id);
     await this.prisma.$transaction(async (tx) => {
@@ -2390,27 +2410,6 @@ export class KycService {
             updatedBy: user.id
           }
         });
-
-        if (stage === ReviewStage.SUPERVISOR && nextStage === ReviewStage.DMLRO) {
-          await tx.internalReviewTask.upsert({
-            where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } },
-            update: { updatedBy: user.id },
-            create: {
-              tenantId: kycCase.tenantId,
-              kycCaseId: id,
-              stage: ReviewStage.MLRO,
-              createdBy: user.id,
-              updatedBy: user.id
-            }
-          });
-          await this.createNotification(
-            tx,
-            kycCase,
-            NotificationType.MLRO_TASK_ASSIGNED,
-            'MLRO parallel review available',
-            `${kycCase.title} is available for MLRO review while DMLRO review is pending.`
-          );
-        }
 
         await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
         await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);

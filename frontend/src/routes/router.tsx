@@ -45,17 +45,19 @@ export const router = createBrowserRouter([
           { path: '/dashboard', element: <DashboardPage /> },
           {
             element: <RequireRoles roles={workflowRoles.enquiries} />,
-            children: [
-              { path: '/enquiries', element: <EnquiryListPage /> },
-              { path: '/enquiries/:id', element: <EnquiryDetailsPage /> },
-            ]
+            children: [{ path: '/enquiries', element: <EnquiryListPage /> }]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.enquiryView} />,
+            children: [{ path: '/enquiries/:id', element: <EnquiryDetailsPage /> }]
           },
           {
             element: <RequireRoles roles={workflowRoles.clientIntake} />,
-            children: [
-              { path: '/enquiries/new', element: <AddEnquiryPage /> },
-              { path: '/enquiries/:id/edit', element: <AddEnquiryPage /> }
-            ]
+            children: [{ path: '/enquiries/new', element: <AddEnquiryPage /> }]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.enquiryEditing} />,
+            children: [{ path: '/enquiries/:id/edit', element: <AddEnquiryPage /> }]
           },
           {
             element: <RequireRoles roles={workflowRoles.clientIntake} />,

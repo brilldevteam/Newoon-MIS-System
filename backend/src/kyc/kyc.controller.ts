@@ -247,6 +247,12 @@ export class KycController {
     return this.kycService.submitToAml(user, id);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/return-to-bd')
+  returnToBusinessDevelopment(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body('reason') reason: string) {
+    return this.kycService.returnToBusinessDevelopment(user, id, reason);
+  }
+
   @Roles('AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/start-aml-review')
   startAmlReview(@CurrentUser() user: RequestUser, @Param('id') id: string) {

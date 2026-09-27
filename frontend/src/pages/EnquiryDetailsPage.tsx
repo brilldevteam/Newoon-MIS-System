@@ -98,6 +98,39 @@ export function EnquiryDetailsPage() {
     }
   }
 
+  function printPreliminaryKyc() {
+    const preview = document.querySelector('#preliminary-kyc-form article');
+    if (!preview) {
+      setError('The Preliminary KYC form is not available to print.');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=900,height=1000');
+    if (!printWindow) {
+      setError('Unable to open the print preview. Allow pop-ups and try again.');
+      return;
+    }
+
+    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((node) => node.outerHTML)
+      .join('');
+
+    printWindow.document.write(`<!doctype html>
+      <html><head><title>Preliminary KYC</title>${styles}
+      <style>
+        @page { size: A4; margin: 12mm; }
+        body { background: #ffffff !important; padding: 0 !important; }
+        #preliminary-kyc-form { max-height: none !important; overflow: visible !important; background: #ffffff !important; border: 0 !important; padding: 0 !important; }
+      </style>
+      </head><body><section id="preliminary-kyc-form">${preview.outerHTML}</section></body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.onload = () => {
+      printWindow.print();
+      printWindow.onafterprint = () => printWindow.close();
+    };
+  }
+
   async function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!id || !comment.trim()) return;
@@ -321,7 +354,7 @@ export function EnquiryDetailsPage() {
               <button type="button" onClick={() => document.getElementById('preliminary-kyc-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
                 View Preliminary KYC
               </button>
-              <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              <button type="button" onClick={printPreliminaryKyc} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 <Printer className="h-4 w-4" />
                 Print Preliminary KYC
               </button>

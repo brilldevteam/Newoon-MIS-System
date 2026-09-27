@@ -908,6 +908,10 @@ export function decideSefReview(caseId: string, payload: Record<string, any>) {
   return api.post<KycCase>(`/kyc/${caseId}/internal-reviews/sef/decision`, payload).then((response) => response.data);
 }
 
+export function returnKycToBusinessDevelopment(caseId: string, reason: string) {
+  return api.post<KycCase>(`/kyc/${caseId}/return-to-bd`, { reason }).then((response) => response.data);
+}
+
 export function addReviewerComment(caseId: string, stage: ReviewStage, payload: Record<string, any>) {
   return api.post(`/kyc/${caseId}/internal-reviews/${stage}/comments`, payload).then((response) => response.data);
 }
