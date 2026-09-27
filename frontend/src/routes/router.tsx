@@ -25,8 +25,9 @@ import { SubmitToAmlPage } from '../pages/SubmitToAmlPage';
 import { TenantsPage } from '../pages/TenantsPage';
 import { UploadLegalDocumentsPage } from '../pages/UploadLegalDocumentsPage';
 import { UsersPage } from '../pages/UsersPage';
+import { AccessControlPage } from '../pages/AccessControlPage';
 import { ProtectedRoute } from './ProtectedRoute';
-import { HomeRedirect, RequireRoles } from './RequireRoles';
+import { HomeRedirect, RequireAccess, RequireRoles } from './RequireRoles';
 import { workflowRoles } from '../utils/access-control';
 
 export const router = createBrowserRouter([
@@ -44,88 +45,97 @@ export const router = createBrowserRouter([
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
           {
-            element: <RequireRoles roles={workflowRoles.enquiries} />,
+            element: <RequireAccess area="enquiries" fallbackRoles={workflowRoles.enquiries} />,
             children: [{ path: '/enquiries', element: <EnquiryListPage /> }]
           },
           {
-            element: <RequireRoles roles={workflowRoles.enquiryView} />,
+            element: <RequireAccess area="enquiries" fallbackRoles={workflowRoles.enquiryView} />,
             children: [{ path: '/enquiries/:id', element: <EnquiryDetailsPage /> }]
           },
           {
-            element: <RequireRoles roles={workflowRoles.clientIntake} />,
+            element: <RequireAccess area="enquiries" write fallbackRoles={workflowRoles.clientIntake} />,
             children: [{ path: '/enquiries/new', element: <AddEnquiryPage /> }]
           },
           {
-            element: <RequireRoles roles={workflowRoles.enquiryEditing} />,
+            element: <RequireAccess area="enquiries" write fallbackRoles={workflowRoles.enquiryEditing} />,
             children: [{ path: '/enquiries/:id/edit', element: <AddEnquiryPage /> }]
           },
           {
-            element: <RequireRoles roles={workflowRoles.clientIntake} />,
+            element: <RequireAccess area="clients" fallbackRoles={workflowRoles.clientIntake} />,
             children: [
               { path: '/clients', element: <ClientListPage /> },
-              { path: '/clients/new', element: <AddClientPage /> },
-              { path: '/clients/:id/edit', element: <AddClientPage /> },
               { path: '/clients/:id', element: <ClientDetailsPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.admin} />,
+            element: <RequireAccess area="clients" write fallbackRoles={workflowRoles.clientIntake} />,
+            children: [
+              { path: '/clients/new', element: <AddClientPage /> },
+              { path: '/clients/:id/edit', element: <AddClientPage /> }
+            ]
+          },
+          {
+            element: <RequireAccess area="administration" fallbackRoles={workflowRoles.admin} />,
             children: [
               { path: '/tenants', element: <TenantsPage /> },
               { path: '/modules', element: <ModulesPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.userAdmin} />,
+            element: <RequireAccess area="administration" fallbackRoles={workflowRoles.userAdmin} />,
             children: [{ path: '/users', element: <UsersPage /> }]
           },
           {
-            element: <RequireRoles roles={[...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
+            element: <RequireRoles roles={workflowRoles.admin} />,
+            children: [{ path: '/access-control', element: <AccessControlPage /> }]
+          },
+          {
+            element: <RequireAccess area="kyc" fallbackRoles={[...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
             children: [
               { path: '/kyc-workflow', element: <KycWorkflowPage /> },
               { path: '/kyc/:id', element: <KycCaseDetailsPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.caseCreation} />,
+            element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.caseCreation} />,
             children: [
               { path: '/kyc/new', element: <CreateKycCasePage /> },
               { path: '/kyc/:id/edit', element: <CreateKycCasePage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.kycFormBuilder} />,
+            element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.kycFormBuilder} />,
             children: [
               { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
               { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.documentUpload} />,
+            element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.documentUpload} />,
             children: [{ path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> }]
           },
           {
-            element: <RequireRoles roles={workflowRoles.screening} />,
+            element: <RequireAccess area="screening" fallbackRoles={workflowRoles.screening} />,
             children: [
               { path: '/screening', element: <ScreeningListPage /> },
               { path: '/kyc/:id/screening', element: <KycScreeningPage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.crrf} />,
+            element: <RequireAccess area="crrf" fallbackRoles={workflowRoles.crrf} />,
             children: [
               { path: '/crrf', element: <CrrfListPage /> },
               { path: '/kyc/:id/crrf', element: <CrrfWorkspacePage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.reviewTasks} />,
+            element: <RequireAccess area="approvals" fallbackRoles={workflowRoles.reviewTasks} />,
             children: [
               { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> }
             ]
           },
           {
-            element: <RequireRoles roles={workflowRoles.reviewTasks} />,
+            element: <RequireAccess area="approvals" fallbackRoles={workflowRoles.reviewTasks} />,
             children: [
               { path: '/review-tasks', element: <ReviewTasksPage /> }
             ]

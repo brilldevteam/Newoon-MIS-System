@@ -3,12 +3,14 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import { AccessControlService } from '../access-control/access-control.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly accessControlService: AccessControlService
   ) {}
 
   async login(dto: LoginDto) {
@@ -45,7 +47,7 @@ export class AuthService {
 
     return {
       accessToken: await this.jwtService.signAsync(payload),
-      user: this.toPublicUser(user, roles)
+      user: await this.toPublicUser(user, roles)
     };
   }
 
@@ -61,7 +63,8 @@ export class AuthService {
     );
   }
 
-  private toPublicUser(user: any, roles: string[]) {
+  private async toPublicUser(user: any, roles: string[]) {
+    const access = await this.accessControlService.effectivePermissions(roles);
     return {
       id: user.id,
       tenantId: user.tenantId,
@@ -70,7 +73,9 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       status: user.status,
-      roles
+      roles,
+      permissions: access.permissions,
+      accessControlConfigured: access.configured
     };
   }
 }
