@@ -1,6 +1,6 @@
-import { Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
@@ -61,7 +61,15 @@ type EnquiryStep = 'type' | 'details' | 'ownership' | 'management' | 'contact' |
 
 type PreliminaryOwner = { fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
 type PreliminaryManagementPerson = { fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
-type PreliminaryDeclaration = { fullName: string; position: string; date: string; authorizedSignature: string; companyStamp: string };
+type PreliminaryDeclaration = {
+  fullName: string;
+  position: string;
+  date: string;
+  authorizedSignature: string;
+  authorizedSignatureDataUrl?: string;
+  companyStamp: string;
+  companyStampDataUrl?: string;
+};
 
 type EnquiryValidationForm = {
   enquiryType: EnquiryType;
@@ -309,6 +317,7 @@ export function AddEnquiryPage() {
   const [loading, setLoading] = useState(Boolean(id));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [activeStep, setActiveStep] = useState<EnquiryStep>('type');
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(attachmentTemplates('EXISTING_LEGAL_ENTITY'));
   const [form, setForm] = useState<EnquiryValidationForm>({
@@ -344,9 +353,10 @@ export function AddEnquiryPage() {
     preliminaryShareholders: [blankPreliminaryOwner()],
     preliminaryUbos: [blankPreliminaryOwner()],
     preliminaryManagement: [blankPreliminaryManagement()],
-    preliminaryDeclaration: { fullName: '', position: '', date: '', authorizedSignature: '', companyStamp: '' },
+    preliminaryDeclaration: { fullName: '', position: '', date: '', authorizedSignature: '', authorizedSignatureDataUrl: '', companyStamp: '', companyStampDataUrl: '' },
     notes: ''
   });
+  const [declarationFiles, setDeclarationFiles] = useState<{ authorizedSignature?: File; companyStamp?: File }>({});
 
   useEffect(() => {
     Promise.all([listClients(), id ? getEnquiry(id) : Promise.resolve(null)])
@@ -393,8 +403,16 @@ export function AddEnquiryPage() {
           preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? preliminary.ubos as PreliminaryOwner[] : [blankPreliminaryOwner()],
           preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? preliminary.management as PreliminaryManagementPerson[] : [blankPreliminaryManagement()],
           preliminaryDeclaration: preliminary.declaration && typeof preliminary.declaration === 'object'
-            ? { fullName: String(preliminary.declaration.fullName || ''), position: String(preliminary.declaration.position || ''), date: String(preliminary.declaration.date || ''), authorizedSignature: String(preliminary.declaration.authorizedSignature || ''), companyStamp: String(preliminary.declaration.companyStamp || '') }
-            : { fullName: '', position: '', date: '', authorizedSignature: '', companyStamp: '' },
+            ? {
+                fullName: String(preliminary.declaration.fullName || ''),
+                position: String(preliminary.declaration.position || ''),
+                date: String(preliminary.declaration.date || ''),
+                authorizedSignature: String(preliminary.declaration.authorizedSignature || ''),
+                authorizedSignatureDataUrl: String(preliminary.declaration.authorizedSignatureDataUrl || ''),
+                companyStamp: String(preliminary.declaration.companyStamp || ''),
+                companyStampDataUrl: String(preliminary.declaration.companyStampDataUrl || '')
+              }
+            : { fullName: '', position: '', date: '', authorizedSignature: '', authorizedSignatureDataUrl: '', companyStamp: '', companyStampDataUrl: '' },
           notes: enquiry.notes || ''
         });
         setAttachments(
@@ -477,16 +495,64 @@ export function AddEnquiryPage() {
     };
   }
 
+  async function selectDeclarationFile(key: 'authorizedSignature' | 'companyStamp', file?: File) {
+    const dataUrl = file ? await readFileAsDataUrl(file) : '';
+    setDeclarationFiles((current) => ({ ...current, [key]: file }));
+    setForm((current) => ({
+      ...current,
+      preliminaryDeclaration: {
+        ...current.preliminaryDeclaration,
+        [key]: file?.name || '',
+        [`${key}DataUrl`]: dataUrl
+      }
+    }));
+  }
+
+  async function uploadDeclarationFiles(enquiryId: string) {
+    if (declarationFiles.authorizedSignature) {
+      await uploadEnquiryAttachmentFiles(enquiryId, {
+        documentType: 'Preliminary KYC - Authorised Signature',
+        files: [declarationFiles.authorizedSignature]
+      });
+    }
+    if (declarationFiles.companyStamp) {
+      await uploadEnquiryAttachmentFiles(enquiryId, {
+        documentType: 'Preliminary KYC - Company Stamp',
+        files: [declarationFiles.companyStamp]
+      });
+    }
+  }
+
+  async function refreshUploadedAttachments(enquiryId: string) {
+    const saved = await getEnquiry(enquiryId);
+    const proposedLegalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
+    setAttachments(
+      mergeAttachmentTemplates(
+        saved.enquiryType,
+        proposedLegalForm,
+        attachmentDraftsFromSaved(saved.attachments || [])
+      )
+    );
+    setDeclarationFiles({});
+  }
+
   async function saveDraft() {
     setSaving(true);
     setError('');
+    setSuccess('');
     try {
       const enquiry = id ? await updateEnquiry(id, buildPayload(false)) : await createEnquiry(buildPayload(false));
       for (const [index, attachment] of attachments.entries()) {
         if (!attachment.files?.length) continue;
         await uploadEnquiryAttachmentFiles(enquiry.id, { documentType: attachmentDocumentType(form.enquiryType, attachment, index), files: attachment.files });
       }
-      navigate(`/enquiries/${enquiry.id}/edit`, { replace: true });
+      await uploadDeclarationFiles(enquiry.id);
+      if (id) {
+        await refreshUploadedAttachments(enquiry.id);
+        setSuccess('Enquiry updated successfully.');
+      } else {
+        navigate(`/enquiries/${enquiry.id}/edit`, { replace: true });
+      }
     } catch (requestError: any) {
       setError(getRequestErrorMessage(requestError, 'Unable to save enquiry draft.'));
     } finally {
@@ -498,6 +564,7 @@ export function AddEnquiryPage() {
     event.preventDefault();
     setSaving(true);
     setError('');
+    setSuccess('');
 
     const validationError = validateEnquiryForm(form);
     if (validationError) {
@@ -518,6 +585,7 @@ export function AddEnquiryPage() {
           files: attachment.files
         });
       }
+      await uploadDeclarationFiles(enquiry.id);
       navigate(`/enquiries/${enquiry.id}`);
     } catch (requestError: any) {
       setError(getRequestErrorMessage(requestError, `Unable to ${isEditMode ? 'update' : 'create'} enquiry.`));
@@ -602,11 +670,16 @@ export function AddEnquiryPage() {
   return (
     <form onSubmit={submit} className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-950">{isEditMode ? 'Edit Enquiry' : 'New Enquiry'}</h1>
+        <Link to={id ? `/enquiries/${id}` : '/enquiries'} className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
+          <ArrowLeft className="h-4 w-4" />
+          {isEditMode ? 'Back to enquiry' : 'Back to enquiries'}
+        </Link>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">{isEditMode ? 'Edit Enquiry' : 'New Enquiry'}</h1>
         <p className="mt-1 text-sm text-slate-500">Capture the BD enquiry before AML prepares the KYC file.</p>
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {success ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800" role="status">{success}</p> : null}
 
       <section className={`rounded-lg border border-slate-200 bg-white ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
         <div className={`border-b border-slate-200 px-5 py-4 ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:col-span-2' : ''}`}>
@@ -782,8 +855,34 @@ export function AddEnquiryPage() {
                 <label className="text-sm font-medium text-slate-700">Full name<input value={form.preliminaryDeclaration.fullName} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, fullName: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <label className="text-sm font-medium text-slate-700">Position<input value={form.preliminaryDeclaration.position} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, position: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <label className="text-sm font-medium text-slate-700">Date<input type="date" value={form.preliminaryDeclaration.date} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, date: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-                <label className="text-sm font-medium text-slate-700">Authorised signature reference<input value={form.preliminaryDeclaration.authorizedSignature} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, authorizedSignature: event.target.value } })} placeholder="Name or attachment reference" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-                <label className="text-sm font-medium text-slate-700 md:col-span-2">Company stamp reference<input value={form.preliminaryDeclaration.companyStamp} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, companyStamp: event.target.value } })} placeholder="Attachment reference, if available" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
+                <div className="text-sm font-medium text-slate-700">
+                  <span>Authorised signature</span>
+                  <div className="mt-1">
+                    <MultiFileUploadControl
+                      multiple={false}
+                      names={form.preliminaryDeclaration.authorizedSignature ? [form.preliminaryDeclaration.authorizedSignature] : []}
+                      buttonLabel="Upload signature"
+                      placeholder="No signature selected"
+                      helperText="Upload the authorised signature file. Images will appear in the Preliminary KYC preview and printout."
+                      onSelect={(files) => void selectDeclarationFile('authorizedSignature', files[0])}
+                      onRemoveName={() => void selectDeclarationFile('authorizedSignature')}
+                    />
+                  </div>
+                </div>
+                <div className="text-sm font-medium text-slate-700 md:col-span-2">
+                  <span>Company stamp</span>
+                  <div className="mt-1">
+                    <MultiFileUploadControl
+                      multiple={false}
+                      names={form.preliminaryDeclaration.companyStamp ? [form.preliminaryDeclaration.companyStamp] : []}
+                      buttonLabel="Upload stamp"
+                      placeholder="No company stamp selected"
+                      helperText="Upload the company stamp file. Images will appear in the Preliminary KYC preview and printout."
+                      onSelect={(files) => void selectDeclarationFile('companyStamp', files[0])}
+                      onRemoveName={() => void selectDeclarationFile('companyStamp')}
+                    />
+                  </div>
+                </div>
               </div>
             </section>
           ) : null}
@@ -841,9 +940,9 @@ export function AddEnquiryPage() {
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={saveDraft} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+              <button type="button" onClick={saveDraft} disabled={saving} className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60 ${isEditMode ? 'bg-brand-600 text-white hover:bg-brand-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
                 <Save className="h-4 w-4" />
-                {saving ? 'Saving...' : 'Save Draft'}
+                {saving ? 'Saving...' : isEditMode ? 'Update Enquiry' : 'Save Draft'}
               </button>
               {activeStepIndex === steps.length - 1 ? (
                 <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
@@ -971,10 +1070,13 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
       </div>
       <PdfSection title="Section F: Client Declaration">
         <p>By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorised to represent and sign this document on behalf of the proposed entity.</p>
-        <PdfTable headers={['Field', 'Details']} rows={[
-          ['Full Name', value(form.preliminaryDeclaration.fullName)], ['Position', value(form.preliminaryDeclaration.position)], ['Date', value(form.preliminaryDeclaration.date)],
-          ['Authorised signature', value(form.preliminaryDeclaration.authorizedSignature)], ['Company Stamp', value(form.preliminaryDeclaration.companyStamp)]
-        ]} />
+        <table className="mt-1 w-full border-collapse text-left"><tbody>
+          <tr><th className="w-1/3 border border-black px-1 py-0.5">Full Name</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.fullName)}</td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Position</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.position)}</td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Date</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.date)}</td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Authorised signature</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={form.preliminaryDeclaration.authorizedSignature} dataUrl={form.preliminaryDeclaration.authorizedSignatureDataUrl} /></td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Company Stamp</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={form.preliminaryDeclaration.companyStamp} dataUrl={form.preliminaryDeclaration.companyStampDataUrl} /></td></tr>
+        </tbody></table>
       </PdfSection>
     </article>
   </aside>;
@@ -982,6 +1084,19 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
 
 function PdfSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="mt-3"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><div className="mt-1">{children}</div></section>; }
 function PdfTable({ headers, rows }: { headers: string[]; rows: string[][] }) { return <table className="w-full border-collapse text-left"><thead><tr>{headers.map((header, index) => <th key={`${header}-${index}`} className="border border-black px-1 py-0.5 font-bold">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>)}</tbody></table>; }
+function PreliminaryUploadPreview({ fileName, dataUrl }: { fileName?: string; dataUrl?: string }) {
+  if (!fileName) return <>-</>;
+  return <div className="min-h-6"><span>{fileName}</span>{dataUrl?.startsWith('data:image/') ? <img src={dataUrl} alt={fileName} className="mt-1 max-h-20 max-w-40 object-contain" /> : null}</div>;
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error(`Unable to read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
 
 function totalOwnership(rows: PreliminaryOwner[]) {
   return rows.reduce((total, row) => total + (Number.parseFloat(row.ownershipPercentage) || 0), 0).toFixed(2);

@@ -1,7 +1,7 @@
-import { Save, Sparkles } from 'lucide-react';
+import { ArrowLeft, Save, Sparkles } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableSelect } from '../components/SearchableSelect';
 import { createClient, getClient, updateClient } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
@@ -183,7 +183,11 @@ export function AddClientPage() {
   return (
     <form onSubmit={submit} className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-950">{isEditMode ? 'Edit Client' : 'Add Client'}</h1>
+        <Link to={id ? `/clients/${id}` : '/clients'} className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
+          <ArrowLeft className="h-4 w-4" />
+          {isEditMode ? 'Back to client' : 'Back to clients'}
+        </Link>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">{isEditMode ? 'Edit Client' : 'Add Client'}</h1>
         <p className="mt-1 text-sm text-slate-500">{isEditMode ? 'Update the client profile and primary contact.' : 'Capture the first client inquiry before opening a KYC case.'}</p>
       </div>
 

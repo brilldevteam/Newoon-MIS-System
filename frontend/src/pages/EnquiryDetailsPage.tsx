@@ -1,4 +1,4 @@
-import { ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Printer, Send } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Printer, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -221,7 +221,11 @@ export function EnquiryDetailsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-slate-500">{enquiry.enquiryCode}</p>
+          <Link to="/enquiries" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
+            <ArrowLeft className="h-4 w-4" />
+            Back to enquiries
+          </Link>
+          <p className="mt-3 text-sm font-medium text-slate-500">{enquiry.enquiryCode}</p>
           <h1 className="mt-1 text-2xl font-semibold text-slate-950">{title}</h1>
           <p className="mt-1 text-sm text-slate-500">{enquiryTypeLabels[enquiry.enquiryType]} | {generatedKycCase ? kycStatusLabel(generatedKycCase.status) : enquiryStatusLabels[enquiry.status]}</p>
         </div>
@@ -471,14 +475,22 @@ function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
         ['8', 'Mobile Number', value(contact.mobileNumber)], ['9', 'Email', value(contact.email)]
       ]} />
       <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">Section F: Client Declaration</h3><p className="mt-1">By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorised to represent and sign this document on behalf of the proposed entity.</p></section>
-      <PreliminaryTable title="" headers={['Field', 'Details']} rows={[
-        ['Full Name', value(declaration.fullName)], ['Position', value(declaration.position)], ['Date', value(declaration.date)],
-        ['Authorised signature', value(declaration.authorizedSignature)], ['Company Stamp', value(declaration.companyStamp)]
-      ]} />
+      <table className="mt-1 w-full border-collapse text-left"><tbody>
+        <tr><th className="w-1/3 border border-black px-1 py-0.5">Full Name</th><td className="border border-black px-1 py-0.5">{value(declaration.fullName)}</td></tr>
+        <tr><th className="border border-black px-1 py-0.5">Position</th><td className="border border-black px-1 py-0.5">{value(declaration.position)}</td></tr>
+        <tr><th className="border border-black px-1 py-0.5">Date</th><td className="border border-black px-1 py-0.5">{value(declaration.date)}</td></tr>
+        <tr><th className="border border-black px-1 py-0.5">Authorised signature</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={declaration.authorizedSignature} dataUrl={declaration.authorizedSignatureDataUrl} /></td></tr>
+        <tr><th className="border border-black px-1 py-0.5">Company Stamp</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={declaration.companyStamp} dataUrl={declaration.companyStampDataUrl} /></td></tr>
+      </tbody></table>
     </article>
   </section>;
 }
 
 function PreliminaryTable({ title, headers, rows }: { title: string; headers: string[]; rows: string[][] }) {
   return <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><table className="mt-1 w-full border-collapse text-left"><thead><tr>{headers.map((header) => <th key={header} className="border border-black px-1 py-0.5">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-black px-1 py-1">-</td></tr>}</tbody></table></section>;
+}
+
+function PreliminaryUploadPreview({ fileName, dataUrl }: { fileName?: string; dataUrl?: string }) {
+  if (!fileName) return <>-</>;
+  return <div className="min-h-6"><span>{fileName}</span>{dataUrl?.startsWith('data:image/') ? <img src={dataUrl} alt={fileName} className="mt-1 max-h-20 max-w-40 object-contain" /> : null}</div>;
 }
