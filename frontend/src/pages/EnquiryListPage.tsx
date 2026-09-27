@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.service';
 import { useAuth } from '../hooks/useAuth';
-import { hasAnyRole } from '../utils/access-control';
+import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
@@ -35,6 +35,8 @@ export function EnquiryListPage() {
   const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
   const canDeleteEnquiries = hasAnyRole(user, ['SUPER_ADMIN']);
+  const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
+  const canEditEnquiries = hasAnyRole(user, workflowRoles.enquiryEditing);
 
   useEffect(() => {
     loadEnquiries();
@@ -72,10 +74,12 @@ export function EnquiryListPage() {
           <h1 className="text-2xl font-semibold text-slate-950">Enquiries</h1>
           <p className="mt-1 text-sm text-slate-500">Capture BD enquiries before AML prepares the KYC file.</p>
         </div>
-        <Link to="/enquiries/new" className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-          <Plus className="h-4 w-4" />
-          New Enquiry
-        </Link>
+        {canCreateEnquiry ? (
+          <Link to="/enquiries/new" className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+            <Plus className="h-4 w-4" />
+            New Enquiry
+          </Link>
+        ) : null}
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
@@ -130,9 +134,11 @@ export function EnquiryListPage() {
                         <Link to={`/enquiries/${enquiry.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="View">
                           <Eye className="h-4 w-4" />
                         </Link>
-                        <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="Edit">
-                          <Edit3 className="h-4 w-4" />
-                        </Link>
+                        {canEditEnquiries ? (
+                          <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="Edit">
+                            <Edit3 className="h-4 w-4" />
+                          </Link>
+                        ) : null}
                         {canDeleteEnquiries ? (
                           <button type="button" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50" title="Delete">
                             <Trash2 className="h-4 w-4" />

@@ -214,6 +214,7 @@ export function EnquiryDetailsPage() {
     (hasAnyRole(user, ['OPERATING_TEAM']) && enquiryReturnedOrDraft);
   const canSubmitToAmlSupervisor = hasAnyRole(user, workflowRoles.caseCreation) && enquiryReturnedOrDraft;
   const canAmlManageStatus = hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
+  const canAddComment = hasAnyRole(user, ['OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const generatedKycCase = enquiry.generatedKycCases?.[0];
   const attachmentGroups = groupedAttachments(enquiry.attachments || []);
 
@@ -416,13 +417,15 @@ export function EnquiryDetailsPage() {
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="text-base font-semibold text-slate-950">Comments</h2>
           </div>
-          <form onSubmit={submitComment} className="border-b border-slate-200 p-5">
-            <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add enquiry comment" className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-            <button type="submit" disabled={saving || !comment.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-              <MessageSquare className="h-4 w-4" />
-              Add Comment
-            </button>
-          </form>
+          {canAddComment ? (
+            <form onSubmit={submitComment} className="border-b border-slate-200 p-5">
+              <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add enquiry comment" className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+              <button type="submit" disabled={saving || !comment.trim()} className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                <MessageSquare className="h-4 w-4" />
+                Add Comment
+              </button>
+            </form>
+          ) : null}
           <div className="divide-y divide-slate-100">
             {enquiry.comments?.length ? enquiry.comments.map((item) => (
               <div key={item.id} className="px-5 py-4">
