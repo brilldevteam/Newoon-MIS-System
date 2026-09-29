@@ -928,18 +928,18 @@ export class KycService {
   async decideSefReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.SEF);
     await this.assertReviewStageActive(id, ReviewStage.SEF);
-    const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'], 'SEF decision') as ReviewDecision | 'RETURN_TO_MLRO';
+    const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'], 'SEF decision') as ReviewDecision;
     const kycCase = await this.findOne(user, id);
     await this.assertPreviousStageComplete(id, ReviewStage.SEF);
 
-    const sefDecisionsRequiringReason: Array<ReviewDecision | 'RETURN_TO_MLRO'> = [ReviewDecision.APPROVE_WITH_CONDITIONS, 'RETURN_TO_MLRO', ReviewDecision.REJECT];
+    const sefDecisionsRequiringReason: ReviewDecision[] = [ReviewDecision.APPROVE_WITH_CONDITIONS, ReviewDecision.RETURN_TO_MLRO, ReviewDecision.REJECT];
     if (sefDecisionsRequiringReason.includes(decision) && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions)) {
       throw new BadRequestException('Provide SEF reason or conditions for this decision');
     }
 
     return this.prisma.$transaction(async (tx) => {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.SEF, dto);
-      if (decision === 'RETURN_TO_MLRO') {
+      if (decision === ReviewDecision.RETURN_TO_MLRO) {
         await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_REVIEW_PENDING, 'SEF returned the KYC file to MLRO for further review.');
         await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
         await tx.internalReviewTask.upsert({ where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING } }, update: { updatedBy: user.id }, create: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: ReviewTaskStatus.PENDING, createdBy: user.id, updatedBy: user.id } });
@@ -2830,7 +2830,7 @@ export class KycService {
     const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
     const dmlroRiskClassification = this.enumValue(dto.dmlroRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'DMLRO risk classification');
     const mlroDecision = this.enumValue(dto.mlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO final decision');
-    const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF management decision');
+    const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'RETURN_TO_MLRO', 'REJECT'], 'SEF management decision');
     const mlroFinalRiskClassification = this.enumValue(dto.mlroFinalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification');
     const mlroRiskReasonCategory = this.enumValue(dto.mlroRiskReasonCategory, ['PEP_IDENTIFIED', 'SANCTIONS_FINDING', 'ADVERSE_MEDIA', 'OWNERSHIP_COMPLEXITY', 'COUNTRY_RISK', 'INDUSTRY_RISK', 'SOURCE_OF_FUNDS_CONCERN', 'ENHANCED_MONITORING_REQUIRED', 'PROFESSIONAL_JUDGEMENT', 'OTHER'], 'Risk reason category');
 
@@ -3743,6 +3743,7 @@ export class KycService {
       REQUEST_ADDITIONAL_INFORMATION: 'Request additional information',
       RETURN_TO_SUPERVISOR: 'Return to AML Supervisor',
       RETURN_TO_DMLRO: 'Return to DMLRO',
+      RETURN_TO_MLRO: 'Return to MLRO',
       SEND_TO_SEF: 'Send to SEF'
     };
 
