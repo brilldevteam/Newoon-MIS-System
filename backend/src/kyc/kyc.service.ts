@@ -644,9 +644,9 @@ export class KycService {
       await tx.enquiryStatusHistory.create({
         data: { tenantId: enquiry.tenantId, enquiryId: enquiry.id, fromStatus: enquiry.status, toStatus: EnquiryStatus.RETURNED_TO_BD, changedById: user.id, note }
       });
-      await tx.kycCase.update({ where: { id }, data: { status: KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED } });
+      await tx.kycCase.update({ where: { id }, data: { status: KycCaseStatus.RETURNED_TO_BD } });
       await tx.kycCaseStatusHistory.create({
-        data: { tenantId: kycCase.tenantId, kycCaseId: id, fromStatus: kycCase.status, toStatus: KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED, changedById: user.id, note: `Returned to BD: ${note}` }
+        data: { tenantId: kycCase.tenantId, kycCaseId: id, fromStatus: kycCase.status, toStatus: KycCaseStatus.RETURNED_TO_BD, changedById: user.id, note: `Returned to BD: ${note}` }
       });
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
