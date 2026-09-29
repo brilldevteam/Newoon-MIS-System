@@ -487,7 +487,7 @@ export class EnquiriesService {
         await prisma.kycShareholder.createMany({
           data: preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
-            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage) || null,
+            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
           }))
         });
@@ -495,7 +495,7 @@ export class EnquiriesService {
         if (ubos.length) {
           await prisma.kycUbo.createMany({ data: ubos.map((row, index) => ({
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
-            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage) || null,
+            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
           })) });
         }
@@ -949,6 +949,23 @@ export class EnquiriesService {
 
   private optionalText(value: unknown) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private ownershipPercentageValue(value: unknown) {
+    const text = this.optionalText(value);
+    if (!text) return null;
+
+    const normalized = text.replace(/\s*%\s*$/, '').replace(',', '.').trim();
+    if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+      throw new BadRequestException('Ownership percentage must be a number between 0 and 100.');
+    }
+
+    const percentage = Number(normalized);
+    if (percentage < 0 || percentage > 100) {
+      throw new BadRequestException('Ownership percentage must be a number between 0 and 100.');
+    }
+
+    return new Prisma.Decimal(normalized);
   }
 
   private enquirySectionA(
