@@ -621,7 +621,17 @@ export class KycService {
     if (!kycCase.sourceEnquiryId) {
       throw new BadRequestException('Only KYC cases created from an enquiry can be returned to BD.');
     }
-    const returnableStatuses: KycCaseStatus[] = [KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
+    const returnableStatuses: KycCaseStatus[] = [
+      KycCaseStatus.INQUIRY_RECEIVED,
+      KycCaseStatus.PROPOSAL_OPTIONAL,
+      KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
+      KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+      KycCaseStatus.SUBMITTED_TO_AML,
+      KycCaseStatus.AML_REVIEW_STARTED,
+      KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
+      KycCaseStatus.SUPERVISOR_REVIEW_IN_PROGRESS,
+      KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+    ];
     if (!returnableStatuses.includes(kycCase.status)) {
       throw new BadRequestException('The KYC case can be returned to BD only while it is with AML Supervisor.');
     }

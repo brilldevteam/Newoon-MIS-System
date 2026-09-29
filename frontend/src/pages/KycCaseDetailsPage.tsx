@@ -295,7 +295,17 @@ export function KycCaseDetailsPage() {
     (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
   const canReturnToBd =
     Boolean(kycCase.sourceEnquiry) &&
-    ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) &&
+    [
+      'INQUIRY_RECEIVED',
+      'PROPOSAL_OPTIONAL',
+      'LEGAL_DOCUMENTS_PENDING',
+      'LEGAL_DOCUMENTS_UPLOADED',
+      'SUBMITTED_TO_AML',
+      'AML_REVIEW_STARTED',
+      'SUPERVISOR_REVIEW_PENDING',
+      'SUPERVISOR_REVIEW_IN_PROGRESS',
+      'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'
+    ].includes(kycCase.status) &&
     hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);

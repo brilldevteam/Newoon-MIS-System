@@ -1323,7 +1323,7 @@ export function KycFormEditorPage() {
   const mlroDecision = form.sectionH?.mlroDecision || 'APPROVE';
   const mlroSubmitLabel =
     mlroDecision === 'RETURN_TO_DMLRO'
-      ? 'Send to DMLRO'
+      ? 'Return to DMLRO'
       : mlroDecision === 'SEND_TO_SEF'
         ? 'Send to SEF'
         : mlroDecision === 'REQUEST_ADDITIONAL_INFORMATION'
