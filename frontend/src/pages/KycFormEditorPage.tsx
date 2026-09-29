@@ -1331,6 +1331,15 @@ export function KycFormEditorPage() {
           : mlroDecision === 'REJECT'
             ? 'Submit Rejection'
             : 'Submit Final Decision';
+  const sefDecision = form.sectionH?.sefDecision || 'APPROVE';
+  const sefSubmitLabel =
+    sefDecision === 'RETURN_TO_MLRO'
+      ? 'Return to MLRO'
+      : sefDecision === 'REJECT'
+        ? 'Submit Rejection'
+        : sefDecision === 'APPROVE_WITH_CONDITIONS'
+          ? 'Approve with Conditions'
+          : 'Approve KYC';
 
   return (
     <div className="space-y-5">
@@ -1364,7 +1373,7 @@ export function KycFormEditorPage() {
           {sectionHMode === 'SEF' ? (
             <button onClick={submitSefFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
-              Submit SEF Decision
+              {sefSubmitLabel}
             </button>
           ) : null}
           <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
