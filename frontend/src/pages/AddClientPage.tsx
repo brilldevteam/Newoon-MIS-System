@@ -37,7 +37,8 @@ const positionOptions = [
   'Primary Contact',
   'Secretary',
   'Shareholder',
-  'Authorized Signatory'
+  'Authorized Signatory',
+  'SEF'
 ];
 
 const countryOptions = countryDialOptions.map((country) => country.name);

@@ -325,6 +325,7 @@ export type PreliminaryKycData = {
   businessActivity?: string;
   registeredOfficeAddress?: string;
   sourceOfFunds?: string;
+  expectedBusiness?: string | string[];
   shareholders?: Array<{ fullName?: string; nationality?: string; identityNumber?: string; address?: string; ownershipPercentage?: string; isUbo?: boolean }>;
   management?: Array<{ fullName?: string; identityNumber?: string; nationality?: string; position?: string }>;
   documents?: Array<{ documentType?: string; description?: string; available?: boolean }>;

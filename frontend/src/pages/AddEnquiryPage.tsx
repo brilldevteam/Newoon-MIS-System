@@ -33,6 +33,7 @@ const positionOptions = [
   'Partner',
   'Shareholder',
   'Authorized Signatory',
+  'SEF',
   'Company Secretary',
   'Compliance Officer',
   'Finance Manager'
@@ -456,6 +457,7 @@ export function AddEnquiryPage() {
               businessActivity: form.proposedBusinessActivity,
               registeredOfficeAddress: form.proposedRegisteredOfficeAddress,
               sourceOfFunds: form.sourceOfInitialCapital,
+              expectedBusiness: resolvedRequestedServices(form),
               shareholders: form.preliminaryShareholders,
               ubos: form.preliminaryUbos,
               management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.join(', ') || row.position })),

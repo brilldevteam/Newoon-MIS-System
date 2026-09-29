@@ -526,6 +526,7 @@ const positionOptions = [
   'General Manager',
   'Authorized Signatory',
   'Secretary',
+  'SEF',
   'Senior Executive Function',
   'Interest Holder',
   'Beneficial Person',

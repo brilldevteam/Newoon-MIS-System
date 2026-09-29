@@ -855,6 +855,11 @@ export class EnquiriesService {
 
   private preliminaryKycData(dto: Record<string, unknown>, enquiry: { proposedCompanyName: string | null; details: unknown }) {
     const existing = this.objectValue(this.objectValue(enquiry.details).preliminaryKyc);
+    const expectedBusiness = dto.expectedBusiness === undefined
+      ? existing.expectedBusiness
+      : (Array.isArray(dto.expectedBusiness) ? dto.expectedBusiness : [dto.expectedBusiness])
+          .map((value) => this.optionalText(value))
+          .filter((value): value is string => Boolean(value));
     return {
       ...existing,
       companyName: this.optionalText(dto.companyName) || enquiry.proposedCompanyName || '',
@@ -863,6 +868,7 @@ export class EnquiriesService {
       businessActivity: this.optionalText(dto.businessActivity),
       registeredOfficeAddress: this.optionalText(dto.registeredOfficeAddress),
       sourceOfFunds: this.optionalText(dto.sourceOfFunds),
+      expectedBusiness,
       shareholders: this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)

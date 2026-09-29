@@ -281,7 +281,7 @@ export function EnquiryDetailsPage() {
         </dl>
       </section>
 
-      {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? <PreliminaryKycDocument data={preliminaryKyc} /> : null}
+      {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? <PreliminaryKycDocument data={{ ...preliminaryKyc, expectedBusiness: preliminaryKyc.expectedBusiness || enquiry.requestedServices }} /> : null}
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white">
@@ -454,6 +454,7 @@ function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
   const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
   const value = (item: unknown) => String(item || '-');
   const totalOwnership = (items: Array<Record<string, any>>) => items.reduce((total, item) => total + (Number.parseFloat(String(item.ownershipPercentage || '')) || 0), 0).toFixed(2);
+  const expectedBusiness = Array.isArray(data.expectedBusiness) ? data.expectedBusiness.filter(Boolean).join(', ') : data.expectedBusiness;
   const contact = data.contact && typeof data.contact === 'object' ? data.contact as Record<string, any> : {};
   const declaration = data.declaration && typeof data.declaration === 'object' ? data.declaration as Record<string, any> : {};
   return <section id="preliminary-kyc-form" className="scroll-mt-6 max-h-[calc(100vh-150px)] min-w-0 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
@@ -463,8 +464,9 @@ function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
       <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity.</p>
       <PreliminaryTable title="Section A: Basic Client Details" headers={['No.', 'Details']} rows={[
         ['1', `Proposed Company Name: ${value(data.companyName)}`], ['2', `Proposed Legal Form: ${value(data.proposedLegalForm)}`],
-        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`],
-        ['5', `Proposed Business Activity: ${value(data.businessActivity)}`], ['6', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`]
+        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', 'Country of incorporation: -'],
+        ['5', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`], ['6', `Proposed Business Activity: ${value(data.businessActivity)}`],
+        ['7', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`], ['8', `Expected Business from Newoon: ${value(expectedBusiness)}`]
       ]} />
       <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
       <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.ubos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
