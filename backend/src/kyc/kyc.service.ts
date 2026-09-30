@@ -3140,7 +3140,8 @@ export class KycService {
 
     return {
       date: this.text(sectionA.date),
-      reference: this.text(sectionA.reference),
+      // Word treats ordinary hyphens as line-break opportunities in the narrow reference field.
+      reference: this.nonBreakingHyphens(sectionA.reference),
       legalName: this.text(sectionA.legalName),
       commercialRegistrationNo: this.text(sectionA.commercialRegistrationNo),
       taxIdentificationNo: this.text(sectionA.taxIdentificationNo),
@@ -3157,8 +3158,8 @@ export class KycService {
       prospectiveService: this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther),
       totalOwnershipPercentage: this.text(sectionB.totalOwnershipPercentage),
       uboDifferentFromShareholders: this.text(sectionB.uboDifferentFromShareholders),
-      uboDifferentYes: sectionB.uboDifferentFromShareholders === 'Yes' ? '☒' : '☐',
-      uboDifferentNo: sectionB.uboDifferentFromShareholders === 'Yes' ? '☐' : '☒',
+      uboDifferentYes: this.checkboxMark(sectionB.uboDifferentFromShareholders === 'Yes'),
+      uboDifferentNo: this.checkboxMark(sectionB.uboDifferentFromShareholders !== 'Yes'),
       uboGroupStructureNotes: this.text(sectionB.uboGroupStructureNotes),
       shareholders,
       ubos,
@@ -3207,17 +3208,17 @@ export class KycService {
       signatureFileName: this.signatureDisplay('declarationSignature', sectionG.signatureFileName, sectionG.signatureDataUrl),
       stampFileName: this.signatureDisplay('companyStamp', sectionG.stampFileName, sectionG.stampDataUrl),
       amlAccuracyChecked: this.text(sectionH.amlAccuracyChecked),
-      amlAccuracyYes: sectionH.amlAccuracyChecked ? '☒' : '☐',
-      amlAccuracyNo: sectionH.amlAccuracyChecked ? '☐' : '☒',
+      amlAccuracyYes: this.checkboxMark(Boolean(sectionH.amlAccuracyChecked)),
+      amlAccuracyNo: this.checkboxMark(!sectionH.amlAccuracyChecked),
       amlClarificationFindings: this.text(sectionH.amlClarificationFindings),
       riskClassification: this.text(sectionH.riskClassification),
-      riskHigh: sectionH.riskClassification === 'HIGH' ? '☒' : '☐',
-      riskMedium: sectionH.riskClassification === 'MEDIUM' ? '☒' : '☐',
-      riskLow: sectionH.riskClassification === 'LOW' ? '☒' : '☐',
+      riskHigh: this.checkboxMark(sectionH.riskClassification === 'HIGH'),
+      riskMedium: this.checkboxMark(sectionH.riskClassification === 'MEDIUM'),
+      riskLow: this.checkboxMark(sectionH.riskClassification === 'LOW'),
       dueDiligenceType: this.text(sectionH.dueDiligenceType),
-      dueSimplified: sectionH.dueDiligenceType === 'SIMPLIFIED' ? '☒' : '☐',
-      dueRegular: sectionH.dueDiligenceType === 'REGULAR' ? '☒' : '☐',
-      dueEnhanced: sectionH.dueDiligenceType === 'ENHANCED' ? '☒' : '☐',
+      dueSimplified: this.checkboxMark(sectionH.dueDiligenceType === 'SIMPLIFIED'),
+      dueRegular: this.checkboxMark(sectionH.dueDiligenceType === 'REGULAR'),
+      dueEnhanced: this.checkboxMark(sectionH.dueDiligenceType === 'ENHANCED'),
       amlName: this.text(sectionH.amlName),
       amlSignatureFileName: this.signatureDisplay('amlSignature', sectionH.amlSignatureFileName, sectionH.amlSignatureDataUrl),
       amlDate: this.text(sectionH.amlDate),
@@ -3358,7 +3359,7 @@ export class KycService {
   }
 
   private docxImageSize(key: string) {
-    if (key === 'ownershipStructure') return { cx: 6500000, cy: 3800000 };
+    if (key === 'ownershipStructure') return { cx: 4800000, cy: 2800000 };
     return { cx: 1900000, cy: 650000 };
   }
 
@@ -3373,16 +3374,16 @@ export class KycService {
   }
 
   private yesNoMark(value: unknown, expected: 'Yes' | 'No') {
-    return this.text(value || 'No') === expected ? '☒' : '☐';
+    return this.checkboxMark(this.text(value || 'No') === expected);
   }
 
   private documentMark(rows: RowPayload[] | undefined, label: string) {
     const row = rows?.find((item) => this.text(item.documentType).toLowerCase().includes(label.toLowerCase()));
-    return row?.isProvided ? '☒' : '☐';
+    return this.checkboxMark(Boolean(row?.isProvided));
   }
 
   private checkboxMark(isChecked: boolean) {
-    return isChecked ? '☒' : '☐';
+    return String.fromCodePoint(isChecked ? 0x2612 : 0x2610);
   }
 
   private requiredDocumentMark(rows: RowPayload[] | undefined, label: string) {
@@ -3713,6 +3714,10 @@ export class KycService {
     if (value instanceof Prisma.Decimal) return value.toString();
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return String(value);
+  }
+
+  private nonBreakingHyphens(value: unknown) {
+    return this.text(value).replace(/-/g, String.fromCodePoint(0x2011));
   }
 
   private optionText(value: unknown, otherValue: unknown): string {
