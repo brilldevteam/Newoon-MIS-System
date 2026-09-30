@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   SearchCheck,
+  SlidersHorizontal,
   ShieldCheck,
   UserCircle,
   UserRoundPlus,
@@ -24,15 +25,16 @@ import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
-  { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries },
-  { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake },
-  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks] },
-  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening },
-  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf },
-  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks },
-  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
-  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
-  { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin }
+  { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
+  { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake, area: 'clients' },
+  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
+  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening' },
+  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf' },
+  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals' },
+  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin, area: 'administration' },
+  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin, area: 'administration' },
+  { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin, area: 'administration' },
+  { to: '/access-control', label: 'Access Control', icon: SlidersHorizontal, roles: workflowRoles.admin }
 ];
 
 export function AppLayout() {
@@ -149,7 +151,7 @@ export function AppLayout() {
           )}
         </div>
         <nav className={`space-y-1 py-4 ${useCollapsedSidebar ? 'px-3' : 'px-3'}`}>
-          {navItems.filter((item) => !item.roles.length || hasAnyRole(user, item.roles)).map((item) => (
+          {navItems.filter((item) => canAccessNavigation(user, item.roles, item.area)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -268,6 +270,13 @@ export function AppLayout() {
       </div>
     </div>
   );
+}
+
+function canAccessNavigation(user: ReturnType<typeof useAuth>['user'], roles: string[], area?: string) {
+  if (!user) return false;
+  if (user.roles.includes('SUPER_ADMIN')) return true;
+  if (area && user.accessControlConfigured) return Boolean(user.permissions?.includes(`${area}.view`));
+  return !roles.length || hasAnyRole(user, roles);
 }
 
 function notificationLink(notification: AppNotification) {

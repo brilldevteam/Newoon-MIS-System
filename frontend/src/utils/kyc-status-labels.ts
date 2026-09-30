@@ -3,6 +3,7 @@ const kycStatusLabels: Record<string, string> = {
   PROPOSAL_OPTIONAL: 'PROPOSAL OPTIONAL',
   LEGAL_DOCUMENTS_PENDING: 'DOCUMENTS REQUIRED FOR KYC PREPARATION PENDING',
   LEGAL_DOCUMENTS_UPLOADED: 'DOCUMENTS REQUIRED FOR KYC PREPARATION UPLOADED',
+  RETURNED_TO_BD: 'RETURNED TO BD FOR CORRECTION',
   SUBMITTED_TO_AML: 'SUBMITTED FOR APPROVAL',
   AML_REVIEW_STARTED: 'APPROVAL REVIEW STARTED',
   SUPERVISOR_REVIEW_PENDING: 'AML SUPERVISOR REVIEW PENDING',
@@ -45,7 +46,7 @@ export function kycStatusToneClass(value: string) {
     return 'bg-red-50 text-red-700';
   }
 
-  if (value.includes('ADDITIONAL_INFORMATION') || value.includes('DOCUMENTS_REQUIRED') || value.includes('PENDING')) {
+  if (value === 'RETURNED_TO_BD' || value.includes('ADDITIONAL_INFORMATION') || value.includes('DOCUMENTS_REQUIRED') || value.includes('PENDING')) {
     return 'bg-amber-50 text-amber-700';
   }
 

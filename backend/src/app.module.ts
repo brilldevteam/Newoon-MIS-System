@@ -19,6 +19,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ScreeningModule } from './screening/screening.module';
 import { CrrfModule } from './crrf/crrf.module';
+import { AccessControlModule } from './access-control/access-control.module';
 
 @Module({
   imports: [
@@ -40,7 +41,8 @@ import { CrrfModule } from './crrf/crrf.module';
     AuditLogsModule,
     DashboardModule,
     ScreeningModule,
-    CrrfModule
+    CrrfModule,
+    AccessControlModule
   ],
   controllers: [AppController]
 })

@@ -7,6 +7,8 @@ export type AuthUser = {
   firstName: string;
   lastName: string;
   roles: string[];
+  permissions?: string[];
+  accessControlConfigured?: boolean;
 };
 
 export async function login(email: string, password: string) {

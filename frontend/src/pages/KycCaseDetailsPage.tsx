@@ -276,14 +276,14 @@ export function KycCaseDetailsPage() {
     (hasAnyRole(user, ['DMLRO']) && ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
     (hasAnyRole(user, ['MLRO']) && ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
     (hasAnyRole(user, ['SEF']) && ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status));
-  const preliminaryReviewAction =
-    isPreliminaryProposedCompany && canOpenKycForm
+  const reviewerAction =
+    canOpenKycForm && canOpenKycFormForActiveStage
       ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
-        ? 'Review and Send to MLRO'
+        ? 'DMLRO Review: Send to MLRO or Return to AML'
         : ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
-          ? 'Review and Send to SEF'
+          ? 'MLRO Review: Send to SEF or Return to DMLRO'
           : ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
-            ? 'SEF Review Decision'
+            ? 'SEF Review: Approve or Return to MLRO'
             : null
       : null;
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
@@ -295,7 +295,17 @@ export function KycCaseDetailsPage() {
     (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
   const canReturnToBd =
     Boolean(kycCase.sourceEnquiry) &&
-    ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) &&
+    [
+      'INQUIRY_RECEIVED',
+      'PROPOSAL_OPTIONAL',
+      'LEGAL_DOCUMENTS_PENDING',
+      'LEGAL_DOCUMENTS_UPLOADED',
+      'SUBMITTED_TO_AML',
+      'AML_REVIEW_STARTED',
+      'SUPERVISOR_REVIEW_PENDING',
+      'SUPERVISOR_REVIEW_IN_PROGRESS',
+      'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'
+    ].includes(kycCase.status) &&
     hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);
@@ -327,16 +337,16 @@ export function KycCaseDetailsPage() {
             Open Preliminary KYC
           </Link>
         ) : null}
-        {preliminaryReviewAction ? (
+        {reviewerAction ? (
           <Link
             to={`/kyc/${kycCase.id}/form`}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
           >
             <FileText className="h-4 w-4" />
-            {preliminaryReviewAction}
+            {reviewerAction}
           </Link>
         ) : null}
-        {canOpenKycForm && canOpenKycFormForActiveStage && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
+        {canOpenKycForm && canOpenKycFormForActiveStage && !reviewerAction && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
           <Link
             to={`/kyc/${kycCase.id}/form`}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
