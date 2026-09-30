@@ -35,6 +35,7 @@ export function CrrfWorkspacePage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const canEdit = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
 
   useEffect(() => {
@@ -46,19 +47,28 @@ export function CrrfWorkspacePage() {
 
   async function save() {
     if (!id || !workspace) return;
+    if (!workspace.record.riskRating) {
+      setError('Select a risk rating before saving the CRRF draft.');
+      return;
+    }
     setError('');
     setMessage('');
     setBusyKey('save');
     try {
+      let currentWorkspace = workspace;
+      if (pendingFiles.length) {
+        currentWorkspace = await uploadCrrfDocuments(id, pendingFiles);
+        setPendingFiles([]);
+      }
       setWorkspace(
         await saveCrrfWorkspace(id, {
-          riskRating: workspace.record.riskRating || '',
-          internalComment: workspace.record.internalComment || '',
-          dmlroComment: workspace.record.dmlroComment || '',
-          mlroComment: workspace.record.mlroComment || ''
+          riskRating: currentWorkspace.record.riskRating || '',
+          internalComment: currentWorkspace.record.internalComment || '',
+          dmlroComment: currentWorkspace.record.dmlroComment || '',
+          mlroComment: currentWorkspace.record.mlroComment || ''
         })
       );
-      setMessage('CRRF record saved.');
+      setMessage('CRRF draft saved.');
     } catch (requestError: any) {
       setError(errorMessage(requestError, 'Unable to save CRRF record.'));
     } finally {
@@ -75,15 +85,8 @@ export function CrrfWorkspacePage() {
     }
     setError('');
     setMessage('');
-    setBusyKey('upload');
-    try {
-      setWorkspace(await uploadCrrfDocuments(id, files));
-      setMessage('CRRF document uploaded.');
-    } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to upload CRRF document.'));
-    } finally {
-      setBusyKey('');
-    }
+    setPendingFiles((current) => [...current, ...files].filter((file, index, items) => items.findIndex((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index));
+    setMessage(`${files.length} CRRF document${files.length === 1 ? '' : 's'} selected. Click Save Draft to upload and save.`);
   }
 
   async function removeDocument(documentId: string) {
@@ -118,6 +121,10 @@ export function CrrfWorkspacePage() {
 
   function patchRecord(patch: Partial<CrrfWorkspace['record']>) {
     setWorkspace((current) => (current ? { ...current, record: { ...current.record, ...patch } } : current));
+  }
+
+  function removePendingFile(file: File) {
+    setPendingFiles((current) => current.filter((item) => item !== file));
   }
 
   if (!workspace) {
@@ -220,6 +227,17 @@ export function CrrfWorkspacePage() {
               </label> : null}
             </div>
             <div className="divide-y divide-slate-100">
+              {pendingFiles.map((file) => (
+                <div key={`${file.name}-${file.lastModified}`} className="flex items-center justify-between gap-3 bg-amber-50 px-5 py-4">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-slate-950">{file.name}</p>
+                    <p className="mt-1 text-xs text-amber-800">Selected locally. It will upload when the draft is saved.</p>
+                  </div>
+                  <button type="button" onClick={() => removePendingFile(file)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50" title="Remove selected document" aria-label={`Remove ${file.name}`}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
               {workspace.record.documents.length ? (
                 workspace.record.documents.map((document) => (
                   <DocumentRow
@@ -244,7 +262,7 @@ export function CrrfWorkspacePage() {
               className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              Save CRRF
+              Save Draft
             </button>
           </div> : null}
         </div>

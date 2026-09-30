@@ -1,4 +1,4 @@
-import { Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
@@ -18,6 +18,7 @@ import {
   KycCase,
   ProposalStatus,
   KycCaseStatus,
+  returnKycToBusinessDevelopment,
   updateProposalStatus,
   uploadLegalDocumentFiles,
   viewLegalDocument
@@ -67,6 +68,7 @@ export function KycCaseDetailsPage() {
   const [finalKycDecision, setFinalKycDecision] = useState<'SAME_KYC_FINAL' | 'AMENDMENT_REQUIRED'>('SAME_KYC_FINAL');
   const [workflowActionMessage, setWorkflowActionMessage] = useState('');
   const [workflowActionError, setWorkflowActionError] = useState('');
+  const [returnToBdReason, setReturnToBdReason] = useState('');
 
   useEffect(() => {
     if (id) {
@@ -176,6 +178,19 @@ export function KycCaseDetailsPage() {
     }
   }
 
+  async function returnToBusinessDevelopment() {
+    if (!id || !returnToBdReason.trim()) return;
+    setWorkflowActionError('');
+    setWorkflowActionMessage('');
+    try {
+      setKycCase(await returnKycToBusinessDevelopment(id, returnToBdReason.trim()));
+      setReturnToBdReason('');
+      setWorkflowActionMessage('KYC case returned to BD for correction.');
+    } catch (requestError: any) {
+      setWorkflowActionError(getApiErrorMessage(requestError, 'Unable to return the KYC case to BD.'));
+    }
+  }
+
   async function replaceDocumentFile(document: KycCase['legalDocuments'][number], files: File[]) {
     if (!id || !files.length) return;
     setDocumentError('');
@@ -255,6 +270,22 @@ export function KycCaseDetailsPage() {
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
   const isPreliminaryProposedCompany = kycCase.sourceEnquiry?.enquiryType === 'PROPOSED_COMPANY';
+  const canOpenKycFormForActiveStage =
+    hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']) ||
+    (hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR']) && preparationEditable) ||
+    (hasAnyRole(user, ['DMLRO']) && ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
+    (hasAnyRole(user, ['MLRO']) && ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
+    (hasAnyRole(user, ['SEF']) && ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status));
+  const preliminaryReviewAction =
+    isPreliminaryProposedCompany && canOpenKycForm
+      ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
+        ? 'Review and Send to MLRO'
+        : ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
+          ? 'Review and Send to SEF'
+          : ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
+            ? 'SEF Review Decision'
+            : null
+      : null;
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
   const finalDecisionRole = isPreliminaryProposedCompany ? 'AML Supervisor' : kycCase.status === 'SEF_APPROVED' ? 'SEF' : 'MLRO';
   const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
@@ -262,6 +293,10 @@ export function KycCaseDetailsPage() {
     (isPreliminaryProposedCompany && finalDecisionPending && hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
     (!isPreliminaryProposedCompany && ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
     (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
+  const canReturnToBd =
+    Boolean(kycCase.sourceEnquiry) &&
+    ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) &&
+    hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);
 
@@ -269,7 +304,11 @@ export function KycCaseDetailsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-950">{kycCase.title}</h1>
+          <Link to="/kyc-workflow" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
+            <ArrowLeft className="h-4 w-4" />
+            Back to KYC workflow
+          </Link>
+          <h1 className="mt-3 text-2xl font-semibold text-slate-950">{kycCase.title}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'}
           </p>
@@ -279,7 +318,7 @@ export function KycCaseDetailsPage() {
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
-        {isPreliminaryProposedCompany && kycCase.sourceEnquiry ? (
+        {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (
           <Link
             to={`/enquiries/${kycCase.sourceEnquiry.id}`}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
@@ -288,7 +327,16 @@ export function KycCaseDetailsPage() {
             Open Preliminary KYC
           </Link>
         ) : null}
-        {canOpenKycForm && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
+        {preliminaryReviewAction ? (
+          <Link
+            to={`/kyc/${kycCase.id}/form`}
+            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <FileText className="h-4 w-4" />
+            {preliminaryReviewAction}
+          </Link>
+        ) : null}
+        {canOpenKycForm && canOpenKycFormForActiveStage && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
           <Link
             to={`/kyc/${kycCase.id}/form`}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
@@ -334,6 +382,19 @@ export function KycCaseDetailsPage() {
           </Link>
         ) : null}
       </div>
+
+      {canReturnToBd ? (
+        <section className="flex flex-col gap-3 border-l-4 border-amber-400 bg-amber-50 p-4 sm:flex-row sm:items-end">
+          <label className="min-w-0 flex-1 text-sm font-semibold text-slate-800">
+            Return reason for BD
+            <textarea value={returnToBdReason} onChange={(event) => setReturnToBdReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-normal" placeholder="Describe the information or documents BD must correct." />
+          </label>
+          <button type="button" onClick={returnToBusinessDevelopment} disabled={!returnToBdReason.trim()} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+            <Send className="h-4 w-4" />
+            Return to BD
+          </button>
+        </section>
+      ) : null}
 
       {isApproved ? (
         <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">

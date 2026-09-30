@@ -366,6 +366,32 @@ export class EnquiriesService {
     const details = this.objectValue(enquiry.details);
 
     return this.prisma.$transaction(async (prisma) => {
+      const existingKycCase = await prisma.kycCase.findFirst({
+        where: { tenantId, sourceEnquiryId: enquiry.id }
+      });
+      if (existingKycCase) {
+        const resumedStatus = enquiry.attachments.length ? KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED : KycCaseStatus.LEGAL_DOCUMENTS_PENDING;
+        const claimed = await prisma.enquiry.updateMany({
+          where: { id: enquiry.id, tenantId, status: EnquiryStatus.READY_FOR_KYC },
+          data: { status: EnquiryStatus.CONVERTED_TO_KYC }
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException('This enquiry is no longer ready to resume its KYC case.');
+        }
+        await prisma.kycCase.update({ where: { id: existingKycCase.id }, data: { status: resumedStatus, updatedAt: new Date() } });
+        await prisma.kycCaseStatusHistory.create({
+          data: {
+            tenantId,
+            kycCaseId: existingKycCase.id,
+            fromStatus: existingKycCase.status,
+            toStatus: resumedStatus,
+            changedById: user.id,
+            note: `KYC case resumed after BD corrected enquiry ${enquiry.enquiryCode}`
+          }
+        });
+        return prisma.kycCase.findUniqueOrThrow({ where: { id: existingKycCase.id } });
+      }
+
       const claimed = await prisma.enquiry.updateMany({
         where: {
           id: enquiry.id,

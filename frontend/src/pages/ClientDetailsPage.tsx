@@ -1,4 +1,4 @@
-import { FilePlus2 } from 'lucide-react';
+import { ArrowLeft, FilePlus2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Client, getClient } from '../services/kyc-workflow.service';
@@ -22,7 +22,11 @@ export function ClientDetailsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-950">{client.name}</h1>
+          <Link to="/clients" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
+            <ArrowLeft className="h-4 w-4" />
+            Back to clients
+          </Link>
+          <h1 className="mt-3 text-2xl font-semibold text-slate-950">{client.name}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {client.industry || 'Industry not captured'} {client.country ? `| ${client.country}` : ''}
           </p>
