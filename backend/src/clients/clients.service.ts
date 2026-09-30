@@ -72,9 +72,10 @@ export class ClientsService {
     return client;
   }
 
-  async matchByIdentifier(user: RequestUser, type: string, identifier: string) {
+  async matchByIdentifier(user: RequestUser, type: string, identifier: string, excludeClientId?: string) {
     const normalizedType = String(type || '').toLowerCase();
     const value = String(identifier || '').trim();
+    const excludedClientId = String(excludeClientId || '').trim();
 
     if (!value) {
       return { match: null };
@@ -84,6 +85,7 @@ export class ClientsService {
       const client = await this.prisma.client.findFirst({
         where: {
           ...this.tenantWhere(user),
+          ...(excludedClientId ? { id: { not: excludedClientId } } : {}),
           registrationNumber: { equals: value, mode: 'insensitive' }
         }
       });
@@ -92,17 +94,18 @@ export class ClientsService {
         return { match: this.clientMatch(client, 'client-registration') };
       }
 
-      return { match: await this.matchKycOwnerByIdentifier(user, value) };
+      return { match: await this.matchKycOwnerByIdentifier(user, value, excludedClientId) };
     }
 
-    return { match: await this.matchKycOwnerByIdentifier(user, value) };
+    return { match: await this.matchKycOwnerByIdentifier(user, value, excludedClientId) };
   }
 
-  private async matchKycOwnerByIdentifier(user: RequestUser, value: string) {
+  private async matchKycOwnerByIdentifier(user: RequestUser, value: string, excludeClientId?: string) {
     const shareholder = await this.prisma.kycShareholder.findFirst({
       where: {
         ...this.tenantWhere(user),
-        identityNumber: { equals: value, mode: 'insensitive' }
+        identityNumber: { equals: value, mode: 'insensitive' },
+        ...(excludeClientId ? { kycCase: { clientId: { not: excludeClientId } } } : {})
       },
       include: { kycCase: { include: { client: true } } },
       orderBy: { createdAt: 'desc' }
@@ -115,7 +118,8 @@ export class ClientsService {
     const ubo = await this.prisma.kycUbo.findFirst({
       where: {
         ...this.tenantWhere(user),
-        identityNumber: { equals: value, mode: 'insensitive' }
+        identityNumber: { equals: value, mode: 'insensitive' },
+        ...(excludeClientId ? { kycCase: { clientId: { not: excludeClientId } } } : {})
       },
       include: { kycCase: { include: { client: true } } },
       orderBy: { createdAt: 'desc' }

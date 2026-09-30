@@ -106,13 +106,13 @@ export function AppLayout() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-[#eef3f8]">
       <aside
-        className={`fixed inset-y-0 left-0 hidden border-r border-slate-200 bg-white transition-all duration-200 lg:block ${
+        className={`fixed inset-y-0 left-0 hidden border-r border-slate-200/80 bg-white/95 shadow-sm transition-all duration-200 lg:block ${
           useCollapsedSidebar ? 'w-20' : 'w-64'
         }`}
       >
-        <div className={`flex h-[85px] items-center border-b border-slate-200 ${useCollapsedSidebar ? 'justify-center px-3' : 'justify-between px-6'}`}>
+        <div className={`flex h-[85px] items-center border-b border-slate-200/80 ${useCollapsedSidebar ? 'justify-center px-3' : 'justify-between px-6'}`}>
           <div className={useCollapsedSidebar ? 'hidden' : 'min-w-0'}>
             <p className="text-lg font-semibold text-slate-950">Newoon MIS</p>
             <p className="text-sm text-slate-500">KYC & Engagement Platform</p>
@@ -137,10 +137,10 @@ export function AppLayout() {
               to={item.to}
               title={useCollapsedSidebar ? item.label : undefined}
               className={({ isActive }) =>
-                `flex items-center rounded-md py-2 text-sm font-medium ${
+                `flex items-center rounded-xl py-2.5 text-sm font-medium transition ${
                   useCollapsedSidebar ? 'justify-center px-0' : 'gap-3 px-3'
                 } ${
-                  isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'
+                  isActive ? 'bg-brand-50 text-brand-700 shadow-sm shadow-brand-100/50' : 'text-slate-600 hover:bg-slate-50'
                 }`
               }
             >
@@ -151,7 +151,7 @@ export function AppLayout() {
         </nav>
       </aside>
       <div className={useCollapsedSidebar ? 'lg:pl-20' : 'lg:pl-64'}>
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-8">
+        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
           <div>
             <p className="text-base font-semibold text-slate-950">Newoon Operations</p>
           </div>

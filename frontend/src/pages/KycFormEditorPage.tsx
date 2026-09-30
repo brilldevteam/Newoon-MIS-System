@@ -1057,6 +1057,7 @@ export function KycFormEditorPage() {
                 data={form.sectionB}
                 total={totalOwnership}
                 rootName={form.sectionA.legalName || kycCase.client.name}
+                currentClientId={kycCase.client.id}
                 onChange={(value) => setSection('sectionB', value)}
               />
             ) : null}
@@ -1158,7 +1159,7 @@ function effectiveUboRows(sectionB: Record<string, any>) {
   return (sectionB.shareholders || []).filter((row: Row) => row.isUbo);
 }
 
-function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: number; rootName: string }) {
+function SectionBForm({ data, total, rootName, currentClientId, onChange }: FormProps & { total: number; rootName: string; currentClientId: string }) {
   const shareholders = data.shareholders || [];
   const totals = ownershipLayerTotals(shareholders);
   const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
@@ -1166,7 +1167,7 @@ function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: 
 
   return (
     <div className="space-y-5">
-      <OwnershipRows rootName={rootName} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
+      <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
       <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
         Direct ownership percentage: {total.toFixed(2)}%
         {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more ownership layers exceed 100%.</span> : null}
@@ -1186,7 +1187,7 @@ function SectionBForm({ data, total, rootName, onChange }: FormProps & { total: 
   );
 }
 
-function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
+function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName: string; currentClientId: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
   const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
@@ -1225,8 +1226,8 @@ function OwnershipRows({ rootName, rows, onChange }: { rootName: string; rows: R
 
     setLookupMessages((current) => ({ ...current, [rowKey]: 'Checking existing clients...' }));
     try {
-      const response = await matchClientByIdentifier((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'corporate' : 'individual', identifier);
-      if (response.match) {
+      const response = await matchClientByIdentifier((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'corporate' : 'individual', identifier, currentClientId);
+      if (response.match && response.match.id !== currentClientId) {
         patchRow(index, { linkedClientId: response.match.id, linkedClientName: response.match.name });
         setLookupMessages((current) => ({ ...current, [rowKey]: 'Linked to existing client.' }));
       } else {
