@@ -25,6 +25,7 @@ import { tmpdir } from 'os';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { promisify } from 'util';
 import { deflateSync } from 'zlib';
+import { isPathInsideRoot, validateUploadFile } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -332,6 +333,7 @@ export class KycService {
     if (!file?.buffer?.length) {
       throw new BadRequestException('Upload a document file');
     }
+    validateUploadFile(file, ['pdf', 'word', 'excel', 'image'], 'document file');
 
     const kycCase = await this.requireWritableCase(user, id);
     const uploadRoot = this.legalDocumentUploadRoot();
@@ -796,6 +798,7 @@ export class KycService {
     if (!file?.buffer?.length) {
       throw new BadRequestException('Upload a signed KYC document file');
     }
+    validateUploadFile(file, ['pdf', 'word', 'image'], 'signed KYC document');
 
     const kycCase = await this.findOne(user, id);
     const reviewStage = this.enumValue(reviewStageValue, ['DMLRO_SIGNED_KYC', 'MLRO_SIGNED_KYC', 'FINAL_SIGNED_KYC'], 'Signed KYC document stage') as SignedKycDocumentStage;
@@ -3419,7 +3422,7 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 
     return candidates
       .map((candidate) => normalize(candidate))
-      .find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
+      .find((candidate) => isPathInsideRoot(candidate, normalizedRoot) && existsSync(candidate)) || null;
   }
 
   private safeFileName(fileName: string) {

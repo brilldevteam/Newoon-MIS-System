@@ -31,6 +31,7 @@ import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT } from '../utils/upload-security';
 
 const sections = [
   { id: 'section-a', key: 'sectionA', label: 'A. General Company Information' },
@@ -2117,7 +2118,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-950">Additional Documents</h3>
-            <p className="mt-1 text-xs text-slate-500">Upload supplementary files or one ZIP file containing multiple supporting documents.</p>
+            <p className="mt-1 text-xs text-slate-500">Upload supplementary supporting documents. ZIP and executable files are not allowed.</p>
           </div>
           <button
             type="button"
@@ -2135,10 +2136,11 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
                 <MultiFileUploadControl
                   names={fileNameList(document.fileName)}
                   disabled={uploadingKey === `additional-${index}`}
-                  buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload files / ZIP'}
+                  buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload files'}
                   placeholder="Select one or more files"
                   showFileList={false}
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed"
+                  accept={STANDARD_DOCUMENT_ACCEPT}
+                  helperText={STANDARD_DOCUMENT_HINT}
                   onSelect={(files) => uploadAdditionalDocument(index, files)}
                   onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
                 />

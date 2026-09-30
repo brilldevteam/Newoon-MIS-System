@@ -3,6 +3,7 @@ import { CrrfRiskRating, KycFormSectionKey, Prisma } from '@prisma/client';
 import PDFDocument from 'pdfkit';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { crrfDocumentKinds, isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -75,10 +76,7 @@ export class CrrfService {
       throw new BadRequestException('Select at least one CRRF document to upload.');
     }
 
-    const invalidFile = files.find((file) => !this.isAllowedDocument(file));
-    if (invalidFile) {
-      throw new BadRequestException(`${invalidFile.originalname} is not supported. Upload PDF, XLS, or XLSX files only.`);
-    }
+    validateUploadFiles(files, crrfDocumentKinds, 'CRRF document');
 
     const root = this.uploadRoot();
     const folder = join(root, record.tenantId, kycCaseId, record.id);
@@ -286,20 +284,7 @@ export class CrrfService {
       candidates.push(join(uploadRoot, relative(legacyUploadPrefix, normalizedStoragePath)));
     }
 
-    return candidates.map((candidate) => normalize(candidate)).find((candidate) => candidate.startsWith(normalizedRoot) && existsSync(candidate)) || null;
-  }
-
-  private isAllowedDocument(file: { originalname: string; mimetype?: string }) {
-    const fileName = file.originalname.toLowerCase();
-    const mimeType = (file.mimetype || '').toLowerCase();
-    return (
-      fileName.endsWith('.pdf') ||
-      fileName.endsWith('.xls') ||
-      fileName.endsWith('.xlsx') ||
-      mimeType === 'application/pdf' ||
-      mimeType === 'application/vnd.ms-excel' ||
-      mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
+    return candidates.map((candidate) => normalize(candidate)).find((candidate) => isPathInsideRoot(candidate, normalizedRoot) && existsSync(candidate)) || null;
   }
 
   private mimeTypeForFile(fileName: string) {

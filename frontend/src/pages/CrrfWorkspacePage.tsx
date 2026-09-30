@@ -12,6 +12,7 @@ import {
   uploadCrrfDocuments,
   viewCrrfDocument
 } from '../services/kyc-workflow.service';
+import { CRRF_DOCUMENT_ACCEPT, CRRF_DOCUMENT_HINT, validateCrrfDocuments } from '../utils/upload-security';
 
 const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'LOW', label: 'Low' },
@@ -61,6 +62,11 @@ export function CrrfWorkspacePage() {
 
   async function upload(files: File[]) {
     if (!id || !files.length) return;
+    const validationError = validateCrrfDocuments(files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     setError('');
     setMessage('');
     setBusyKey('upload');
@@ -197,7 +203,7 @@ export function CrrfWorkspacePage() {
         <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold text-slate-950">CRRF Documents</h2>
-            <p className="mt-1 text-sm text-slate-500">Upload multiple PDF, XLS, or XLSX documents linked to this KYC profile.</p>
+            <p className="mt-1 text-sm text-slate-500">{CRRF_DOCUMENT_HINT}</p>
           </div>
           <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Upload className={`h-4 w-4 ${busyKey === 'upload' ? 'animate-pulse' : ''}`} />
@@ -205,7 +211,7 @@ export function CrrfWorkspacePage() {
             <input
               type="file"
               multiple
-              accept=".pdf,.xls,.xlsx,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept={CRRF_DOCUMENT_ACCEPT}
               className="hidden"
               onChange={(event: ChangeEvent<HTMLInputElement>) => {
                 upload(Array.from(event.target.files || []));

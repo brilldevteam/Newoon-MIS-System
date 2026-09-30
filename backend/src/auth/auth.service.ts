@@ -21,6 +21,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    if (user.status === 'SUSPENDED') {
+      throw new UnauthorizedException('User account is not active');
+    }
+
     const roles = user.roles.map((userRole) => userRole.role.name);
     const payload = {
       sub: user.id,

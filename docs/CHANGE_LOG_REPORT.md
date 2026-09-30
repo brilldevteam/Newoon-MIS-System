@@ -40,6 +40,72 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-09-08 - Production Security Hardening Review
+
+Module:
+- Security
+- File uploads
+- Authentication and tenant isolation
+- Frontend API configuration
+
+Summary:
+- Added centralized upload validation for file size, file count, extension, MIME type, binary file signatures, and executable file blocking.
+- Applied upload validation to KYC legal documents, signed KYC files, enquiry attachments, Screening evidence, and CRRF document uploads.
+- Restricted Screening merged/list evidence to PDF, CRRF uploads to PDF/Excel, and blocked executable/script/macro-capable file extensions.
+- Added safe file response headers and `X-Content-Type-Options: nosniff` on document view/download endpoints.
+- Tightened upload path containment checks so stored file paths must resolve inside the configured upload root.
+- Changed the frontend API fallback to same-origin `/api` so production builds do not call hard-coded localhost endpoints when `VITE_API_URL` is missing.
+- Revalidated JWT sessions against the database on every authenticated request so disabled users, changed roles, and tenant changes are not trusted from stale tokens.
+- Blocked login and stale-session access for suspended users without locking out existing invited/test workflow accounts.
+- Fixed the login password visibility icon so it toggles the password field correctly.
+- Added a Vite development proxy for `/api` so local frontend testing reaches the backend after removing the production localhost fallback.
+- Improved login failure messaging so API connectivity/proxy issues are shown separately from invalid credentials.
+- Updated the seed script so existing workflow test users are reset to the displayed default test password when seeding a test environment.
+- Added visible upload rule hints across KYC, Enquiry, Screening, CRRF, and signed KYC upload areas so users can see allowed file types, maximum file size, and maximum file count before uploading.
+- Added frontend upload selection validation to stop unsupported formats and oversized selections before sending them to the backend.
+- Added baseline security headers and production-safe CORS behavior in the backend bootstrap.
+- Reviewed tenant-id request usage; ordinary KYC, Screening, CRRF, enquiry, and document paths use authenticated tenant scoping, while tenant module assignment remains restricted to `SUPER_ADMIN`.
+
+Changed Files:
+- `backend/src/common/security/upload-security.ts`
+- `backend/src/auth/auth.service.ts`
+- `backend/src/auth/jwt.strategy.ts`
+- `backend/src/main.ts`
+- `backend/src/crrf/crrf.controller.ts`
+- `backend/src/crrf/crrf.service.ts`
+- `backend/src/enquiries/enquiries.controller.ts`
+- `backend/src/enquiries/enquiries.service.ts`
+- `backend/src/kyc/kyc.controller.ts`
+- `backend/src/kyc/kyc.service.ts`
+- `backend/src/screening/screening.controller.ts`
+- `backend/src/screening/screening.service.ts`
+- `backend/prisma/seed.ts`
+- `frontend/src/pages/LoginPage.tsx`
+- `frontend/src/services/api.ts`
+- `frontend/src/utils/upload-security.ts`
+- `frontend/src/components/MultiFileUploadControl.tsx`
+- `frontend/src/pages/CrrfWorkspacePage.tsx`
+- `frontend/src/pages/InternalReviewWorkspacePage.tsx`
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `frontend/vite.config.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/review-package-ui-evidence`
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Frontend and backend rebuild required.
+- No Prisma migration required.
+- Set `FRONTEND_URL` to the production application origin on the server. In production, CORS will reject browser origins not listed in `FRONTEND_URL`.
+- Optional upload environment controls: `MAX_UPLOAD_FILE_SIZE_BYTES`, `MAX_UPLOAD_FILE_COUNT`, `UPLOAD_DIR`, `ENQUIRY_UPLOAD_DIR`, `SCREENING_UPLOAD_DIR`, and `CRRF_UPLOAD_DIR`.
+
 ## 2026-09-08 - Review Package Access for KYC, Screening, and CRRF
 
 Module:

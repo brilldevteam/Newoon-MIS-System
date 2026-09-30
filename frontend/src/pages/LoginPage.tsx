@@ -1,7 +1,8 @@
 import { FormEvent, useState } from 'react';
-import { ArrowRight, BadgeCheck, Building2, Eye, KeyRound, Mail, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Building2, Eye, EyeOff, KeyRound, Mail, ShieldCheck, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../services/auth.service';
+import { getApiErrorMessage } from '../services/api';
 
 const testLogins = [
   { label: 'Super Admin', email: 'admin@newoon.com', note: 'Full platform setup' },
@@ -17,6 +18,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('admin@newoon.com');
   const [password, setPassword] = useState('Admin@12345');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -29,8 +31,12 @@ export function LoginPage() {
       const result = await login(email, password);
       localStorage.setItem('newoon_token', result.accessToken);
       navigate('/dashboard', { replace: true });
-    } catch {
-      setError('Invalid email or password.');
+    } catch (loginError) {
+      if (!(loginError as any)?.response) {
+        setError('Cannot reach the API server. Confirm the backend is running and the frontend was rebuilt.');
+      } else {
+        setError(getApiErrorMessage(loginError, 'Invalid email or password.'));
+      }
     } finally {
       setLoading(false);
     }
@@ -116,11 +122,18 @@ export function LoginPage() {
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     className="w-full border-0 bg-transparent p-0 text-sm text-slate-950 outline-none placeholder:text-slate-400"
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     placeholder="Enter your password"
                     required
                   />
-                  <Eye className="h-4 w-4 text-slate-400" />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((current) => !current)}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </span>
               </label>
 
