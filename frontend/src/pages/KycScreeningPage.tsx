@@ -26,7 +26,10 @@ import {
   viewScreeningDocument
 } from '../services/kyc-workflow.service';
 import { hasAnyRole } from '../utils/access-control';
+import { countryDialOptions } from '../utils/country-phone';
 import { PDF_ONLY_ACCEPT, PDF_ONLY_HINT, STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT, validatePdfDocuments, validateStandardDocuments } from '../utils/upload-security';
+
+const countryOptions = countryDialOptions.map((country) => country.name);
 
 const checkLabels: Record<ScreeningCheckType, string> = {
   NCTC: 'NCTC',
@@ -61,6 +64,7 @@ function emptyCheck(checkType: ScreeningCheckType): ScreeningCheck {
   return {
     id: `${checkType}-draft`,
     checkType,
+    isSelected: false,
     resultStatus: 'NOT_CHECKED',
     notes: '',
     documents: []
@@ -133,7 +137,6 @@ export function KycScreeningPage() {
   const [manualEntityName, setManualEntityName] = useState('');
   const [manualIdentifier, setManualIdentifier] = useState('');
   const [manualCountry, setManualCountry] = useState('');
-  const [otherDocumentType, setOtherDocumentType] = useState('Other screening document');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
@@ -254,6 +257,7 @@ export function KycScreeningPage() {
           remarks: record.remarks,
           checks: record.checks.map((check) => ({
             checkType: check.checkType,
+            isSelected: check.isSelected,
             resultStatus: check.resultStatus,
             notes: check.notes
           }))
@@ -281,6 +285,7 @@ export function KycScreeningPage() {
         remarks: record.remarks,
         checks: record.checks.map((check) => ({
           checkType: check.checkType,
+          isSelected: check.isSelected,
           resultStatus: check.resultStatus,
           notes: check.notes
         }))
@@ -463,7 +468,11 @@ export function KycScreeningPage() {
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
-      <section className="grid gap-3 md:grid-cols-3">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">KYC number</p>
+          <p className="mt-2 font-semibold text-slate-950">{context.clientInfo.kycNumber || '-'}</p>
+        </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Client name</p>
           <p className="mt-2 font-semibold text-slate-950">{context.clientInfo.clientName}</p>
@@ -584,10 +593,7 @@ export function KycScreeningPage() {
               Identifier
               <input value={manualIdentifier} onChange={(event) => setManualIdentifier(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
             </label>
-            <label className="text-sm font-medium text-slate-700">
-              Country
-              <input value={manualCountry} onChange={(event) => setManualCountry(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-            </label>
+            <SearchableSelect label="Country" value={manualCountry} options={countryOptions} onChange={setManualCountry} placeholder="Select country" />
           </div>
         ) : null}
       </section>
@@ -619,9 +625,10 @@ export function KycScreeningPage() {
           </div>
           {context.records.map((record) => {
             const checks = context.mandatoryChecks.map((checkType) => record.checks.find((check) => check.checkType === checkType) || emptyCheck(checkType));
+            const selectedChecks = checks.filter((check) => check.isSelected);
             const expanded = expandedRecordIds.has(record.id);
-            const completedChecks = checks.filter((check) => check.resultStatus !== 'NOT_CHECKED').length;
-            const requiredIndividualEvidenceCount = checks.filter((check) => context.individualEvidenceChecks.includes(check.checkType) && check.documents.length).length;
+            const selectedFilters = checks.filter((check) => check.isSelected);
+            const filtersWithEvidence = selectedFilters.filter((check) => check.documents.length).length;
             return (
               <section key={record.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
                 <button
@@ -635,11 +642,8 @@ export function KycScreeningPage() {
                       <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-base font-semibold text-slate-950">{record.entityName}</h2>
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{record.entityType.replace('_', ' ')}</span>
-                      <span className="rounded-full bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700">
-                        {completedChecks}/{context.mandatoryChecks.length} results
-                      </span>
                       <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-                        {requiredIndividualEvidenceCount}/{context.individualEvidenceChecks.length} individual PDFs
+                        {filtersWithEvidence}/{selectedFilters.length} selected filters attached
                       </span>
                       {record.conclusionStatus ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Result set</span> : null}
                       {record.status === 'COMPLETED' ? (
@@ -694,7 +698,7 @@ export function KycScreeningPage() {
                     </div>
 
                 <div className="space-y-5 p-5">
-                  <div className="grid gap-4 md:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <label className="text-sm font-medium text-slate-700">
                       Screening name
                       <input disabled={!canEditScreening} value={record.entityName} onChange={(event) => updateRecordLocally(record.id, { entityName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
@@ -703,10 +707,13 @@ export function KycScreeningPage() {
                       Identifier
                       <input disabled={!canEditScreening} value={record.identifier || ''} onChange={(event) => updateRecordLocally(record.id, { identifier: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
                     </label>
-                    <label className="text-sm font-medium text-slate-700">
-                      Country
-                      <input disabled={!canEditScreening} value={record.country || ''} onChange={(event) => updateRecordLocally(record.id, { country: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
-                    </label>
+                    {canEditScreening ? (
+                      <SearchableSelect label="Country" value={record.country || ''} options={countryOptions} onChange={(value) => updateRecordLocally(record.id, { country: value })} placeholder="Select country" />
+                    ) : (
+                      <label className="text-sm font-medium text-slate-700">Country
+                        <input disabled value={record.country || ''} className="mt-1 w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-sm" />
+                      </label>
+                    )}
                     <label className="text-sm font-medium text-slate-700">
                       Result <span className="text-red-600">*</span>
                       <select
@@ -725,6 +732,30 @@ export function KycScreeningPage() {
                     </label>
                   </div>
 
+                  <fieldset className="rounded-lg border border-slate-200 p-4">
+                    <legend className="px-1 text-sm font-semibold text-slate-900">Individual screening tools</legend>
+                    <p className="mb-3 text-xs text-slate-500">Select only the tools needed for this individual. Selected tools will be added below and require a result and evidence.</p>
+                    <div className="flex flex-wrap gap-3">
+                      {checks.map((check) => (
+                        <label key={check.checkType} className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium ${check.isSelected ? 'border-brand-300 bg-brand-50 text-brand-800' : 'border-slate-300 bg-white text-slate-700'}`}>
+                          <input
+                            type="checkbox"
+                            checked={check.isSelected}
+                            disabled={!canEditScreening}
+                            onChange={(event) => updateCheckLocally(record.id, check.checkType, {
+                              isSelected: event.target.checked,
+                              resultStatus: event.target.checked ? check.resultStatus : 'NOT_CHECKED',
+                              notes: event.target.checked ? check.notes : ''
+                            })}
+                            className="h-4 w-4 accent-brand-600"
+                          />
+                          {checkLabels[check.checkType]}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+
+                  {selectedChecks.length ? (
                   <div className="overflow-hidden rounded-lg border border-slate-200">
                     <div className="grid grid-cols-[1fr_180px_1.2fr_260px] gap-3 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                       <span>Screening tool</span>
@@ -733,7 +764,11 @@ export function KycScreeningPage() {
                       <span>PDF evidence</span>
                     </div>
                     <div className="divide-y divide-slate-100">
-                      {checks.map((check) => (
+                      {selectedChecks.map((check) => {
+                        const isResultOnly = false;
+                        const isSelectedFilter = context.individualFilterChecks.includes(check.checkType) && check.resultStatus !== 'NOT_CHECKED';
+                        const showMatchComment = isResultOnly && ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus);
+                        return (
                         <div key={check.checkType} className="grid gap-3 px-4 py-4 lg:grid-cols-[1fr_180px_1.2fr_260px] lg:items-start">
                           <p className="font-semibold text-slate-900">{checkLabels[check.checkType]}</p>
                           <select
@@ -748,21 +783,27 @@ export function KycScreeningPage() {
                               </option>
                             ))}
                           </select>
-                          <input
-                            value={check.notes || ''}
-                            onChange={(event) => updateCheckLocally(record.id, check.checkType, { notes: event.target.value })}
-                            placeholder="Finding notes"
-                            disabled={!canEditScreening}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
-                          />
+                          {showMatchComment ? (
+                            <input
+                              value={check.notes || ''}
+                              onChange={(event) => updateCheckLocally(record.id, check.checkType, { notes: event.target.value })}
+                              placeholder="Match comments required"
+                              disabled={!canEditScreening}
+                              className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
+                            />
+                          ) : (
+                            <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                              {isResultOnly ? 'Comments open for potential or confirmed matches.' : 'Optional filter'}
+                            </p>
+                          )}
                           <div className="space-y-3">
-                            {canEditScreening ? (
+                            {canEditScreening && !isResultOnly ? (
                               <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                                 <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-${check.checkType}` ? 'animate-pulse' : ''}`} />
                                 Upload PDF
                                 <input
                                   type="file"
-                                  accept={PDF_ONLY_ACCEPT}
+                                  accept={check.checkType === 'OTHER' ? STANDARD_DOCUMENT_ACCEPT : PDF_ONLY_ACCEPT}
                                   multiple
                                   className="hidden"
                                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -773,47 +814,21 @@ export function KycScreeningPage() {
                               </label>
                             ) : null}
                             <p className="text-xs text-slate-500">
-                              {context.individualEvidenceChecks.includes(check.checkType)
-                                ? PDF_ONLY_HINT
-                                : `Individual upload optional when merged PDF is attached. ${PDF_ONLY_HINT}`}
+                              {isResultOnly
+                                ? 'Result only. No individual file upload is required.'
+                                : isSelectedFilter
+                                  ? `Evidence required for this selected filter. ${check.checkType === 'OTHER' ? STANDARD_DOCUMENT_HINT : PDF_ONLY_HINT}`
+                                  : 'Select a result only when this filter is used.'}
                             </p>
                             <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                           </div>
                         </div>
-                      ))}
+                      );})}
                     </div>
                   </div>
-
-                  {canEditScreening || record.documents.length ? (
-                  <div className="rounded-lg border border-slate-200 p-4">
-                    <div className="grid gap-3 md:grid-cols-[1fr_220px] md:items-end">
-                      <label className="text-sm font-medium text-slate-700">
-                        Other relevant document type
-                        <input disabled={!canEditScreening} value={otherDocumentType} onChange={(event) => setOtherDocumentType(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
-                      </label>
-                      {canEditScreening ? (
-                        <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                          <Upload className={`h-4 w-4 ${busyKey === `upload-${record.id}-OTHER` ? 'animate-pulse' : ''}`} />
-                          Upload documents
-                          <input
-                            type="file"
-                            multiple
-                            accept={STANDARD_DOCUMENT_ACCEPT}
-                            className="hidden"
-                            onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                              uploadFiles(record.id, 'OTHER', Array.from(event.target.files || []), otherDocumentType);
-                              event.currentTarget.value = '';
-                            }}
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                    <div className="mt-3">
-                      <p className="mb-2 text-xs text-slate-500">{STANDARD_DOCUMENT_HINT}</p>
-                      <DocumentList documents={record.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
-                    </div>
-                  </div>
-                  ) : null}
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No individual screening tools selected.</p>
+                  )}
 
                   <label className="block text-sm font-medium text-slate-700">
                     Observation / remarks <span className="text-red-600">*</span>

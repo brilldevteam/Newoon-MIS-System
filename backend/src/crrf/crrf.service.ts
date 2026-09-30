@@ -227,6 +227,7 @@ export class CrrfService {
     return {
       caseId: kycCase.id,
       caseTitle: kycCase.title,
+      kycNumber: kycCase.kycNumber,
       clientId: kycCase.client.id,
       clientName: this.stringValue(sectionA.legalName) || this.stringValue(sectionA.legalNameOfCompany) || kycCase.client.name,
       clientCode: this.stringValue(sectionA.clientCode) || kycCase.client.registrationNumber || crNumber || kycCase.client.id,

@@ -2,6 +2,8 @@ import { Edit3, Eye, Plus, Search, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.service';
+import { useAuth } from '../hooks/useAuth';
+import { hasAnyRole } from '../utils/access-control';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -14,7 +16,7 @@ const enquiryStatusLabels: Record<string, string> = {
   SUBMITTED_TO_AML_SUPERVISOR: 'Submitted to AML Supervisor',
   RETURNED_TO_BD: 'Returned to BD',
   READY_FOR_KYC: 'Ready for KYC',
-  CONVERTED_TO_KYC: 'Converted to KYC',
+  CONVERTED_TO_KYC: 'Pending with AML Supervisor',
   CLOSED: 'Closed'
 };
 
@@ -26,10 +28,12 @@ function enquiryStatusToneClass(value: string) {
 }
 
 export function EnquiryListPage() {
+  const { user } = useAuth();
   const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
+  const canDeleteEnquiries = hasAnyRole(user, ['SUPER_ADMIN']);
 
   useEffect(() => {
     loadEnquiries();
@@ -122,9 +126,11 @@ export function EnquiryListPage() {
                         <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="Edit">
                           <Edit3 className="h-4 w-4" />
                         </Link>
-                        <button type="button" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50" title="Delete">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {canDeleteEnquiries ? (
+                          <button type="button" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50" title="Delete">
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

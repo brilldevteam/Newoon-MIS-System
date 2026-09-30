@@ -105,6 +105,7 @@ export type ScreeningDocument = {
 export type ScreeningCheck = {
   id: string;
   checkType: ScreeningCheckType;
+  isSelected: boolean;
   resultStatus: ScreeningResultStatus;
   notes?: string | null;
   documents: ScreeningDocument[];
@@ -167,6 +168,7 @@ export type CrrfWorkspace = {
   clientInfo: {
     caseId: string;
     caseTitle: string;
+    kycNumber: string;
     clientId: string;
     clientName: string;
     clientCode?: string | null;
@@ -200,6 +202,7 @@ export type ScreeningContext = {
   clientInfo: {
     caseId: string;
     caseTitle: string;
+    kycNumber: string;
     clientId: string;
     clientName: string;
     clientCode?: string | null;
@@ -208,6 +211,8 @@ export type ScreeningContext = {
   };
   entities: ScreeningEntityOption[];
   mandatoryChecks: ScreeningCheckType[];
+  resultRequiredChecks: ScreeningCheckType[];
+  individualFilterChecks: ScreeningCheckType[];
   mergedEvidenceChecks: ScreeningCheckType[];
   individualEvidenceChecks: ScreeningCheckType[];
   mergedChecks: ScreeningCaseCheck[];
@@ -237,6 +242,7 @@ export type StatusHistory = {
 export type KycCase = {
   id: string;
   title: string;
+  kycNumber?: string;
   status: KycCaseStatus;
   proposalStatus: ProposalStatus;
   client: Client;
@@ -303,6 +309,7 @@ export type Enquiry = {
   attachments: EnquiryAttachment[];
   comments: EnquiryComment[];
   statusHistory: EnquiryStatusHistory[];
+  generatedKycCases?: Array<{ id: string; kycNumber: string; title: string; status: KycCaseStatus }>;
   createdAt: string;
   updatedAt: string;
 };
@@ -489,12 +496,18 @@ export function uploadEnquiryAttachmentFile(id: string, payload: { documentType:
   }).then((response) => response.data);
 }
 
-export async function uploadEnquiryAttachmentFiles(id: string, payload: { documentType: string; files: File[] }) {
-  let enquiry: Enquiry | null = null;
-  for (const file of payload.files) {
-    enquiry = await uploadEnquiryAttachmentFile(id, { documentType: payload.documentType, file });
+export function uploadEnquiryAttachmentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  if (payload.files.length === 1) {
+    return uploadEnquiryAttachmentFile(id, { documentType: payload.documentType, file: payload.files[0] });
   }
-  return enquiry;
+
+  const data = new FormData();
+  data.append('documentType', payload.documentType);
+  payload.files.forEach((file) => data.append('files', file));
+
+  return api.post<Enquiry>(`/enquiries/${id}/attachments/upload-many`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((response) => response.data);
 }
 
 export async function viewEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
@@ -522,6 +535,16 @@ export async function downloadEnquiryAttachment(enquiryId: string, attachment: E
   });
   const url = window.URL.createObjectURL(response.data);
   downloadBlob(url, attachment.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadEnquiryAttachmentGroup(enquiryId: string, documentType: string) {
+  const response = await api.get(`/enquiries/${enquiryId}/attachments/download-group`, {
+    params: { documentType },
+    responseType: 'blob'
+  });
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, `${safeDownloadName(documentType)}.zip`);
   window.URL.revokeObjectURL(url);
 }
 
@@ -572,12 +595,30 @@ export function uploadLegalDocumentFile(id: string, payload: { documentType: str
   return api.post<KycCase>(`/kyc/${id}/legal-documents/upload`, data).then((response) => response.data);
 }
 
-export async function uploadLegalDocumentFiles(id: string, payload: { documentType: string; files: File[] }) {
-  let kycCase: KycCase | null = null;
-  for (const file of payload.files) {
-    kycCase = await uploadLegalDocumentFile(id, { documentType: payload.documentType, file });
+export function completeEngagementDecision(id: string, payload: { decision: 'CONVERT_TO_CLIENT' | 'REJECT' | 'ON_HOLD'; reason?: string }) {
+  return api.post<KycCase>(`/kyc/${id}/engagement-decision`, payload).then((response) => response.data);
+}
+
+export function startKycAmendment(id: string, payload: { sections: string[]; reason: string }) {
+  return api.post<KycCase>(`/kyc/${id}/amendments`, payload).then((response) => response.data);
+}
+
+export function completeFinalKycDecision(id: string, payload: { decision: 'SAME_KYC_FINAL' | 'AMENDMENT_REQUIRED'; sections?: string[]; reason?: string }) {
+  return api.post<KycCase>(`/kyc/${id}/final-kyc-decision`, payload).then((response) => response.data);
+}
+
+export function uploadLegalDocumentFiles(id: string, payload: { documentType: string; files: File[] }) {
+  if (payload.files.length === 1) {
+    return uploadLegalDocumentFile(id, { documentType: payload.documentType, file: payload.files[0] });
   }
-  return kycCase;
+
+  const data = new FormData();
+  data.append('documentType', payload.documentType);
+  payload.files.forEach((file) => data.append('files', file));
+
+  return api.post<KycCase>(`/kyc/${id}/legal-documents/upload-many`, data, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then((response) => response.data);
 }
 
 export async function viewLegalDocument(caseId: string, document: LegalDocument) {
@@ -601,6 +642,25 @@ export async function viewLegalDocument(caseId: string, document: LegalDocument)
   window.document.body.appendChild(link);
   link.click();
   link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadLegalDocument(caseId: string, document: LegalDocument) {
+  const response = await api.get(`/kyc/${caseId}/legal-documents/${document.id}/view`, {
+    responseType: 'blob'
+  });
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, document.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadLegalDocumentGroup(caseId: string, documentType: string) {
+  const response = await api.get(`/kyc/${caseId}/legal-documents/download-group`, {
+    params: { documentType },
+    responseType: 'blob'
+  });
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, `${safeDownloadName(documentType)}.zip`);
   window.URL.revokeObjectURL(url);
 }
 
@@ -874,4 +934,8 @@ function downloadBlob(url: string, fileName: string) {
   window.document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+function safeDownloadName(value: string) {
+  return (value || 'attachments').replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim() || 'attachments';
 }

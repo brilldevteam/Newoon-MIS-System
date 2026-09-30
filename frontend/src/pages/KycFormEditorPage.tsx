@@ -35,7 +35,7 @@ import { STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT } from '../utils/uploa
 
 const sections = [
   { id: 'section-a', key: 'sectionA', label: 'A. General Company Information' },
-  { id: 'section-b', key: 'sectionB', label: 'B. Ownership / Shareholders' },
+  { id: 'section-b', key: 'sectionB', label: 'B. Control / Interest Details' },
   { id: 'section-c', key: 'sectionC', label: 'C. Managers / Signatories' },
   { id: 'section-d', key: 'sectionD', label: 'D. Compliance and Risk' },
   { id: 'section-e', key: 'sectionE', label: 'E. Key Communication Person' },
@@ -50,7 +50,7 @@ const requiredDocuments = [
   'Certificate of Incorporation',
   'Articles of Association',
   'QID / Passport copies',
-  'CR of legal entity shareholders',
+  'CR of legal entity parties',
   'National address certificates',
   'Latest Audited Financial Statements',
   'Tax Card'
@@ -92,6 +92,7 @@ function appendFileNameText(existing: unknown, incoming: unknown) {
 function documentKey(value: unknown) {
   return String(value || '')
     .toLowerCase()
+    .replace(/shareholders?/g, 'parties')
     .replace(/&/g, 'and')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -526,18 +527,17 @@ const positionOptions = [
   'Authorized Signatory',
   'Secretary',
   'Senior Executive Function',
-  'Shareholder',
-  'UBO',
+  'Interest Holder',
+  'Beneficial Person',
   'Compliance Officer'
 ];
 
 const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'];
-const standardMlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
-const highRiskMlroDecisionOptions = ['', 'SEND_TO_SEF', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO'];
-const dmlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'];
+const dmlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'];
 const dmlroDecisionLabels: Record<string, string> = {
   APPROVE: 'Send to MLRO',
   APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+  DMLRO_FINAL_APPROVE: 'Final approval during MLRO absence',
   REQUEST_ADDITIONAL_INFORMATION: 'Request additional information from AML Supervisor',
   RETURN_TO_SUPERVISOR: 'Return to AML Supervisor'
 };
@@ -975,7 +975,7 @@ export function KycFormEditorPage() {
     setError('');
     Promise.all([getKycCase(id), getKycForm(id)])
       .then(([caseData, formData]) => {
-        const normalized = normalizeForm(formData);
+        const normalized = normalizeForm(formData, caseData);
         setKycCase(caseData);
         formRef.current = normalized;
         setForm(normalized);
@@ -992,6 +992,7 @@ export function KycFormEditorPage() {
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
   const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';
+  const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY';
   const visibleSections = useMemo(
     () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
     [canEditAllSections, canPrepareKyc]
@@ -1141,7 +1142,7 @@ export function KycFormEditorPage() {
       setError('Complete the DMLRO name, date, and signature before submitting the DMLRO decision.');
       return;
     }
-    if (['APPROVE_WITH_CONDITIONS', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'].includes(decision) && !reason && !conditions) {
+    if (['APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'].includes(decision) && !reason && !conditions) {
       setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
@@ -1168,7 +1169,7 @@ export function KycFormEditorPage() {
         formalComments: latestSectionH.dmlroComments || reason || conditions
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
-      const normalized = normalizeForm(formData);
+      const normalized = normalizeForm(formData, caseData);
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
@@ -1197,10 +1198,6 @@ export function KycFormEditorPage() {
     }
     if (!finalRiskClassification || !riskExplanation) {
       setError('Select the final risk classification and add a risk explanation before submitting the final decision.');
-      return;
-    }
-    if (decision === 'SEND_TO_SEF' && finalRiskClassification !== 'HIGH') {
-      setError('SEF management approval is only available for high-risk KYC files. Select High as the final risk classification first.');
       return;
     }
     if (finalRiskClassification === 'HIGH' && ['APPROVE', 'APPROVE_WITH_CONDITIONS'].includes(decision)) {
@@ -1236,7 +1233,7 @@ export function KycFormEditorPage() {
         formalComments: latestSectionH.mlroComments || ''
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
-      const normalized = normalizeForm(formData);
+      const normalized = normalizeForm(formData, caseData);
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
@@ -1283,7 +1280,7 @@ export function KycFormEditorPage() {
         formalComments: latestSectionH.sefComments || ''
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
-      const normalized = normalizeForm(formData);
+      const normalized = normalizeForm(formData, caseData);
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
@@ -1447,8 +1444,8 @@ export function KycFormEditorPage() {
           <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
           <section className="rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
-              <p className="text-sm font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</p>
-              <p className="text-xs text-slate-500">Changes update the preview immediately. Save each section when ready.</p>
+              <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
+      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready.'}</p>
             </div>
             <div className="max-h-[calc(100vh-230px)] overflow-auto p-5">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
@@ -1513,7 +1510,7 @@ function SectionAForm({ data, onChange }: FormProps) {
   return (
     <FormGrid>
       <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-      <Field label="Reference" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
+      <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
       <Field label="Legal Name of Company" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
       <Field label="Commercial Registration No." value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
       <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
@@ -1570,19 +1567,19 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
     <div className="space-y-5">
       <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
       <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
-        Direct ownership percentage: {total.toFixed(2)}%
-        {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more ownership layers exceed 100%.</span> : null}
+        Direct interest percentage: {total.toFixed(2)}%
+        {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more control layers exceed 100%.</span> : null}
       </div>
       {!hasUbo ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
-          No UBO is marked yet. You can save the draft, but mark the UBO before finalizing the KYC file.
+          No beneficial person is marked yet. You can save the draft, but mark the beneficial person before finalizing the KYC file.
         </div>
       ) : null}
       <OwnershipStructureDiagram rootName={rootName} rows={shareholders} ubos={data.ubos || []} />
-      <Choice label="UBO different from shareholders" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
-      <Field label="UBO group structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
-      <DynamicRows title="UBO rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Ownership %', 'number'], ['residenceAddress', 'Residence address']
+      <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
+      <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
+      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['ownershipPercentage', 'Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -1592,7 +1589,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
   const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
-  const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate shareholder ${index + 1}`]));
+  const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate party ${index + 1}`]));
 
   function rowId(row: Row, index: number) {
     return row.id || String(index);
@@ -1644,8 +1641,8 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-slate-950">Ownership rows</p>
-          <p className="text-xs text-slate-500">Add each direct or layered owner. Corporate rows can be selected as a parent for the next layer.</p>
+          <p className="text-sm font-semibold text-slate-950">Control / interest rows</p>
+          <p className="text-xs text-slate-500">Add each direct or layered party. Corporate rows can be selected as a parent for the next layer.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {rows.length ? (
@@ -1660,14 +1657,14 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
           ) : null}
           <button type="button" onClick={addOwner} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700">
             <Plus className="h-4 w-4" />
-            Owner
+            Party
           </button>
         </div>
       </div>
       {rows.map((row, index) => {
         const rowKey = rowId(row, index);
         const isExpanded = expandedRows[rowKey] ?? rows.length <= 2;
-        const parentText = row.parentRowId ? `Owned by ${parentLabels.get(row.parentRowId) || 'corporate shareholder'}` : `Direct shareholder of ${rootName || 'client company'}`;
+        const parentText = row.parentRowId ? `Linked under ${parentLabels.get(row.parentRowId) || 'corporate party'}` : `Direct party of ${rootName || 'client company'}`;
         const nationalityText = Array.isArray(row.nationality) ? row.nationality.join(', ') : row.nationality || '';
         return (
           <div key={rowKey} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -1675,7 +1672,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
               <button type="button" onClick={() => toggleRow(rowKey)} className="inline-flex min-w-0 flex-1 items-center gap-3 text-left">
                 <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">{row.fullName || `Owner ${index + 1}`}</p>
+                  <p className="truncate text-sm font-semibold text-slate-950">{row.fullName || `Party ${index + 1}`}</p>
                   <p className="truncate text-xs text-slate-500">{parentText}</p>
                 </div>
               </button>
@@ -1683,15 +1680,15 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                 <span className="rounded-full border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-700">{row.shareholderType || 'Individual'}</span>
                 {row.ownershipPercentage ? <span className="rounded-full bg-brand-50 px-2 py-1 font-semibold text-brand-700">{row.ownershipPercentage}%</span> : null}
                 {nationalityText ? <span className="max-w-[180px] truncate rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600">{nationalityText}</span> : null}
-                {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">UBO</span> : null}
+                {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">Beneficial</span> : null}
                 {row.linkedClientId ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">Linked client</span> : null}
               </div>
               <button
                 type="button"
                 onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-                title="Remove owner"
-                aria-label={`Remove ${row.fullName || `owner ${index + 1}`}`}
+                title="Remove party"
+                aria-label={`Remove ${row.fullName || `party ${index + 1}`}`}
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -1699,22 +1696,22 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
             {isExpanded ? (
               <div className="p-4">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <Select label="Shareholder type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
+                  <Select label="Party type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
                   <label className="text-sm font-medium text-slate-700">
-                    Parent owner / owned entity
+                    Parent / linked entity
                     <select
                       value={row.parentRowId || ''}
                       onChange={(event) => patchRow(index, { parentRowId: event.target.value })}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                     >
-                      <option value="">Direct shareholder of {rootName || 'client company'}</option>
+                      <option value="">Direct party of {rootName || 'client company'}</option>
                       {corporateParents
                         .filter((parent, parentIndex) => (parent.id || String(parentIndex)) !== rowKey)
                         .map((parent, parentIndex) => {
                           const parentId = parent.id || String(parentIndex);
                           return (
                             <option key={parentId} value={parentId}>
-                              {parent.fullName || `Corporate shareholder ${parentIndex + 1}`}
+                              {parent.fullName || `Corporate party ${parentIndex + 1}`}
                             </option>
                           );
                         })}
@@ -1742,11 +1739,11 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
                   </div>
-                  <Field label="Ownership %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
+                  <Field label="Interest %" type="number" value={row.ownershipPercentage} onChange={(value) => patchRow(index, { ownershipPercentage: value })} />
                   <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
                   <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked })} />
-                    Mark as UBO
+                    Mark as beneficial person
                   </label>
                 </div>
               </div>
@@ -1754,7 +1751,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
           </div>
         );
       })}
-      {!rows.length ? <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">No ownership rows added yet.</div> : null}
+      {!rows.length ? <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">No control / interest rows added yet.</div> : null}
     </div>
   );
 }
@@ -1811,14 +1808,14 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 
   return (
     <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <p className="text-sm font-semibold text-slate-950">Ownership Structure</p>
+      <p className="text-sm font-semibold text-slate-950">Control Structure</p>
       {!hasRows ? (
-        <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No ownership structure generated.</p>
+        <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No control structure generated.</p>
       ) : (
         <div className="mt-4 overflow-x-auto rounded-md border-2 border-slate-800 bg-white p-3">
           <div className="relative mx-auto" style={{ width: diagramWidth, height: diagramHeight }}>
             <h4 className="absolute left-0 right-0 top-3 text-center text-lg font-bold uppercase tracking-wide text-slate-950">
-              {rootName || 'Client company'} - Ownership Structure
+              {rootName || 'Client company'} - Control Structure
             </h4>
             {Array.from({ length: layerCount }).map((_, depth) => (
               <div
@@ -1860,10 +1857,10 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
                   className={`absolute flex flex-col items-center justify-center rounded-md border px-8 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
                   style={{ width: nodeWidth, height: nodeHeight, left, top }}
                 >
-                  <p className="line-clamp-2 min-h-[28px] font-bold uppercase leading-tight">{node.fullName || 'Unnamed owner'}</p>
+                  <p className="line-clamp-2 min-h-[28px] font-bold uppercase leading-tight">{node.fullName || 'Unnamed party'}</p>
                   <p className={`mt-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{node.shareholderType || 'Individual'}</p>
                   <p className={`mt-0.5 line-clamp-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{nodeDetail(node)}</p>
-                  {isUbo ? <span className="absolute right-2 top-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold leading-none text-cyan-800">UBO</span> : null}
+                  {isUbo ? <span className="absolute right-2 top-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold leading-none text-cyan-800">Beneficial</span> : null}
                 </div>
               );
             })}
@@ -2093,7 +2090,7 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
                 </div>
                 <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
                   <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
-                  Provided
+                  Received
                 </label>
                 <MultiFileUploadControl
                   names={names}
@@ -2215,24 +2212,21 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   const showMlro = mode === 'MLRO' || mode === 'ALL';
   const showSef = mode === 'SEF' || mode === 'ALL';
   const mlroFinalRisk = data.mlroFinalRiskClassification || data.riskClassification || '';
-  const mlroDecisionValues = mlroFinalRisk === 'HIGH' ? highRiskMlroDecisionOptions : mlroFinalRisk ? standardMlroDecisionOptions : [''];
+  const mlroDecisionValues = mlroDecisionOptions;
   const mlroDecisionValue = mlroDecisionValues.includes(data.mlroDecision || '') ? data.mlroDecision || '' : '';
 
   function updateMlroFinalRisk(value: string) {
-    const nextDecisionOptions = value === 'HIGH' ? highRiskMlroDecisionOptions : value ? standardMlroDecisionOptions : [''];
     onChange({
       ...data,
       reviewPart: mode,
       mlroFinalRiskClassification: value,
-      mlroDecision: nextDecisionOptions.includes(data.mlroDecision || '') ? data.mlroDecision : ''
+      mlroDecision: data.mlroDecision || ''
     });
   }
 
   return <FormGrid>
     {showAml ? (
       <>
-        <Choice label="Accuracy checked by AML Supervisor" value={data.amlAccuracyChecked ? 'Yes' : 'No'} onChange={(value) => onChange({ ...data, reviewPart: mode, amlAccuracyChecked: value === 'Yes' })} />
-        <Field label="Clarification / findings" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
         <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
         <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
         <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlName', value)} />
@@ -2307,16 +2301,16 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         <h2 className="mt-5 text-center text-base font-bold uppercase text-slate-950">Know Your Customer Form</h2>
         <PreviewSection title="A. General Company Information">
           <PreviewGrid rows={[
-            ['Date', form.sectionA.date], ['Reference', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]
+            ['Date', form.sectionA.date], ['KYC Number', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]
           ]} />
         </PreviewSection>
-        <PreviewSection title="B. Ownership / Shareholders">
-          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Ownership %', 'Address', 'Linked client', 'UBO']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
-          <p className="mt-2 font-semibold">Total ownership percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
-          <p>UBO different from shareholders: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
-          <p>UBO group structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
+        <PreviewSection title="B. Control / Interest Details">
+          <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Interest %', 'Address', 'Linked client', 'Beneficial person']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
+          <p className="mt-2 font-semibold">Total interest percentage: {form.sectionB.totalOwnershipPercentage || 0}%</p>
+          <p>Beneficial person different from listed parties: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
+          <p>Beneficial structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
           <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
-          <PreviewTable headers={['UBO name', 'Nationality', 'DOB', 'Identity No.', 'Ownership %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'Interest %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
           <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
@@ -2338,7 +2332,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
-          <PreviewTable headers={['Document', 'Provided', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
+          <PreviewTable headers={['Document', 'Received', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
           <PreviewTable headers={['Additional uploaded file']} rows={(form.sectionF.additionalDocuments || []).map((row: Row) => [row.fileName])} />
           <PreviewGrid rows={[['Additional notes for KYC preparation documents', form.sectionF.uploadedFilesNote || '-']]} />
         </PreviewSection>
@@ -2346,7 +2340,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Accuracy checked', form.sectionH?.amlAccuracyChecked ? 'Yes' : 'No'], ['Clarification / findings', form.sectionH?.amlClarificationFindings], ['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
+          <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -2985,11 +2979,14 @@ function normalizeAdditionalDocumentRows(rows: Row[] | undefined): Row[] {
     });
 }
 
-function normalizeForm(form: KycFormData): KycFormData {
+function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycFormData {
   const sectionA = {
     ...emptyForm.sectionA,
     ...(form.sectionA || {})
   };
+  if (!sectionA.reference && kycCase?.kycNumber) {
+    sectionA.reference = kycCase.kycNumber;
+  }
   sectionA.telephone = applyCountryDialCode(sectionA.telephone || '', sectionA.countryOfIncorporation || '');
   const sectionE = {
     ...emptyForm.sectionE,

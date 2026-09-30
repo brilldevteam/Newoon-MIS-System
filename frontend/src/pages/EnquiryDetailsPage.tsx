@@ -5,6 +5,7 @@ import {
   addEnquiryComment,
   convertEnquiryToKyc,
   downloadEnquiryAttachment,
+  downloadEnquiryAttachmentGroup,
   Enquiry,
   EnquiryAttachment,
   EnquiryStatus,
@@ -27,13 +28,22 @@ const enquiryStatusLabels: Record<string, string> = {
   SUBMITTED_TO_AML_SUPERVISOR: 'Submitted to AML Supervisor',
   RETURNED_TO_BD: 'Returned to BD',
   READY_FOR_KYC: 'Ready for KYC',
-  CONVERTED_TO_KYC: 'Converted to KYC',
+  CONVERTED_TO_KYC: 'Pending with AML Supervisor',
   CLOSED: 'Closed'
 };
 
 function actorName(actor?: { firstName: string; lastName: string; email: string } | null) {
   if (!actor) return 'System';
   return `${actor.firstName} ${actor.lastName}`.trim() || actor.email;
+}
+
+function groupedAttachments(attachments: EnquiryAttachment[] = []) {
+  const groups = new Map<string, EnquiryAttachment[]>();
+  attachments.forEach((attachment) => {
+    const documentType = attachment.documentType || 'Other attachments';
+    groups.set(documentType, [...(groups.get(documentType) || []), attachment]);
+  });
+  return Array.from(groups.entries()).map(([documentType, items]) => ({ documentType, items }));
 }
 
 export function EnquiryDetailsPage() {
@@ -131,6 +141,27 @@ export function EnquiryDetailsPage() {
     }
   }
 
+  async function saveAttachmentGroup(documentType: string, attachments: EnquiryAttachment[]) {
+    if (!enquiry) return;
+    const downloadable = attachments.filter((attachment) => attachment.storagePath);
+    if (!downloadable.length) {
+      setError('No uploaded files are available for this attachment group.');
+      return;
+    }
+
+    setError('');
+    try {
+      if (downloadable.length === 1) {
+        await downloadEnquiryAttachment(enquiry.id, downloadable[0]);
+        return;
+      }
+
+      await downloadEnquiryAttachmentGroup(enquiry.id, documentType);
+    } catch (requestError: any) {
+      setError(requestError.response?.data?.message || 'Unable to download all files for this attachment group.');
+    }
+  }
+
   if (!enquiry) {
     return (
       <div className="space-y-3">
@@ -142,7 +173,14 @@ export function EnquiryDetailsPage() {
 
   const title = enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry';
   const details = enquiry.details || {};
-  const canSubmitToAmlSupervisor = hasAnyRole(user, workflowRoles.caseCreation);
+  const enquiryReturnedOrDraft = ['DRAFT', 'RETURNED_TO_BD'].includes(enquiry.status);
+  const canEditEnquiry =
+    hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM']) ||
+    (hasAnyRole(user, ['OPERATING_TEAM']) && enquiryReturnedOrDraft);
+  const canSubmitToAmlSupervisor = hasAnyRole(user, workflowRoles.caseCreation) && enquiryReturnedOrDraft;
+  const canAmlManageStatus = hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
+  const generatedKycCase = enquiry.generatedKycCases?.[0];
+  const attachmentGroups = groupedAttachments(enquiry.attachments || []);
 
   return (
     <div className="space-y-6">
@@ -152,10 +190,12 @@ export function EnquiryDetailsPage() {
           <h1 className="mt-1 text-2xl font-semibold text-slate-950">{title}</h1>
           <p className="mt-1 text-sm text-slate-500">{enquiryTypeLabels[enquiry.enquiryType]} | {enquiryStatusLabels[enquiry.status]}</p>
         </div>
-        <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-          <Edit3 className="h-4 w-4" />
-          Edit Enquiry
-        </Link>
+        {canEditEnquiry ? (
+          <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            <Edit3 className="h-4 w-4" />
+            Edit Enquiry
+          </Link>
+        ) : null}
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
@@ -183,7 +223,11 @@ export function EnquiryDetailsPage() {
           <Info label="Contact phone" value={enquiry.keyContactPhone} />
           <Info label="Contact position" value={enquiry.keyContactPosition} />
           <Info label="Contact nationality" value={String(details.keyContactNationality || '')} />
-          <Info label="QID / Passport number" value={String(details.keyContactIdentityNumber || '')} />
+          <Info label="Passport number" value={String(details.keyContactPassportNumber || '')} />
+          <Info label="Passport expiry date" value={String(details.keyContactPassportExpiryDate || '')} />
+          <Info label="QID number" value={String(details.keyContactQidNumber || '')} />
+          <Info label="QID expiry date" value={String(details.keyContactQidExpiryDate || '')} />
+          <Info label="QID / Passport number" value={!details.keyContactPassportNumber && !details.keyContactQidNumber ? String(details.keyContactIdentityNumber || '') : ''} />
           <Info label="Head office" value={enquiry.headOfficeCountry} />
           <Info label="Branch" value={enquiry.branchCountry} />
           <Info label="Area of operation" value={enquiry.areaOfOperation} wide />
@@ -200,40 +244,64 @@ export function EnquiryDetailsPage() {
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-base font-semibold text-slate-950">Attachments</h2>
         </div>
-        <div className="divide-y divide-slate-100">
-          {enquiry.attachments?.length ? (
-            enquiry.attachments.map((attachment) => (
-              <div key={attachment.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="font-medium text-slate-950">{attachment.documentType}</p>
-                  <p className="text-sm text-slate-500">{attachment.fileName}</p>
+        <div className="space-y-3 p-5">
+          {attachmentGroups.length ? (
+            attachmentGroups.map((group) => {
+              const downloadableCount = group.items.filter((attachment) => attachment.storagePath).length;
+              return (
+                <div key={group.documentType} className="rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-950">{group.documentType}</p>
+                      <p className="text-xs text-slate-500">{group.items.length} file{group.items.length === 1 ? '' : 's'} attached</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => saveAttachmentGroup(group.documentType, group.items)}
+                      disabled={!downloadableCount}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      {downloadableCount > 1 ? 'Download ZIP' : 'Download'}
+                    </button>
+                  </div>
+                  <div className="divide-y divide-slate-200 bg-white">
+                    {group.items.map((attachment) => (
+                      <div key={attachment.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-medium text-slate-950">{attachment.fileName}</p>
+                          <p className="text-xs text-slate-500">{attachment.storagePath ? 'Uploaded file available' : 'Metadata only'}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openAttachment(attachment)}
+                            disabled={!attachment.storagePath}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            title={attachment.storagePath ? 'View' : 'File unavailable'}
+                            aria-label={`View ${attachment.fileName}`}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => saveAttachment(attachment)}
+                            disabled={!attachment.storagePath}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            title={attachment.storagePath ? 'Download' : 'File unavailable'}
+                            aria-label={`Download ${attachment.fileName}`}
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openAttachment(attachment)}
-                    disabled={!attachment.storagePath}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    title={attachment.storagePath ? 'View' : 'File unavailable'}
-                    aria-label={`View ${attachment.fileName}`}
-                  >
-                    <Eye className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => saveAttachment(attachment)}
-                    disabled={!attachment.storagePath}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    title={attachment.storagePath ? 'Download' : 'File unavailable'}
-                    aria-label={`Download ${attachment.fileName}`}
-                  >
-                    <Download className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
-            <p className="px-5 py-6 text-sm text-slate-500">No attachment metadata captured yet.</p>
+            <p className="text-sm text-slate-500">No attachment metadata captured yet.</p>
           )}
         </div>
       </section>
@@ -248,18 +316,28 @@ export function EnquiryDetailsPage() {
               Submit to AML Supervisor
             </button>
           ) : null}
-          <button type="button" disabled={saving} onClick={() => setStatus('RETURNED_TO_BD')} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-            Return to BD
-          </button>
-          <button type="button" disabled={saving} onClick={() => setStatus('READY_FOR_KYC')} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-            <ClipboardCheck className="h-4 w-4" />
-            Mark Ready for KYC
-          </button>
-          {enquiry.status === 'READY_FOR_KYC' ? (
+          {canAmlManageStatus && enquiry.status === 'SUBMITTED_TO_AML_SUPERVISOR' ? (
+            <>
+              <button type="button" disabled={saving} onClick={() => setStatus('RETURNED_TO_BD')} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                Return to BD
+              </button>
+              <button type="button" disabled={saving} onClick={() => setStatus('READY_FOR_KYC')} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                <ClipboardCheck className="h-4 w-4" />
+                Mark Ready for KYC
+              </button>
+            </>
+          ) : null}
+          {canAmlManageStatus && enquiry.status === 'READY_FOR_KYC' ? (
             <button type="button" disabled={saving} onClick={createKycFromEnquiry} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
               <FilePlus2 className="h-4 w-4" />
               Create KYC Case
             </button>
+          ) : null}
+          {enquiry.status === 'CONVERTED_TO_KYC' && generatedKycCase ? (
+            <Link to={`/kyc/${generatedKycCase.id}`} className="inline-flex items-center gap-2 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
+              <ClipboardCheck className="h-4 w-4" />
+              Open KYC Case {generatedKycCase.kycNumber}
+            </Link>
           ) : null}
         </div>
       </section>

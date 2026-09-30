@@ -23,6 +23,7 @@ import { kycStatusLabel } from '../utils/kyc-status-labels';
 import { SIGNED_KYC_ACCEPT, SIGNED_KYC_HINT, validateSignedKycDocuments } from '../utils/upload-security';
 
 const stages: Array<{ id: ReviewStage; title: string; submitLabel: string }> = [
+  { id: 'SUPERVISOR', title: 'AML Supervisor Review', submitLabel: 'Submit to DMLRO' },
   { id: 'DMLRO', title: 'DMLRO Review', submitLabel: 'Submit to MLRO' },
   { id: 'MLRO', title: 'MLRO Final Review', submitLabel: 'Submit MLRO Decision' },
   { id: 'SEF', title: 'SEF Management Decision', submitLabel: 'Submit SEF Decision' }
@@ -45,6 +46,7 @@ function decisionSuccessMessage(stage: ReviewStage, decision: string) {
   if (stage === 'DMLRO') {
     if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'DMLRO requested additional information from AML Supervisor.';
     if (decision === 'RETURN_TO_SUPERVISOR') return 'KYC file returned to AML Supervisor.';
+    if (decision === 'DMLRO_FINAL_APPROVE') return 'DMLRO final approval recorded with the MLRO absence reason.';
     if (decision === 'APPROVE_WITH_CONDITIONS') return 'DMLRO approval with conditions submitted to MLRO.';
     return 'DMLRO review submitted to MLRO.';
   }
@@ -134,7 +136,7 @@ export function InternalReviewWorkspacePage() {
     if (firstAllowedStage && !stageAccess[activeStage]) {
       setActiveStage(firstAllowedStage);
     }
-  }, [activeStage, stageAccess.DMLRO, stageAccess.MLRO, stageAccess.SEF]);
+  }, [activeStage, stageAccess.SUPERVISOR, stageAccess.DMLRO, stageAccess.MLRO, stageAccess.SEF]);
 
   function updateField(key: string, value: string) {
     setForms((current) => ({ ...current, [activeStage]: { ...current[activeStage], [key]: value } }));
@@ -225,6 +227,8 @@ export function InternalReviewWorkspacePage() {
         {canOpenKycPart1 ? (
           <Link
             to={`/kyc/${workspace.kycCase.id}/form`}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             <FileText className="h-4 w-4" />
@@ -293,6 +297,9 @@ export function InternalReviewWorkspacePage() {
           <form onSubmit={saveDraft} className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="Reviewer name" value={activeForm.reviewerName} disabled={!canEdit} onChange={(value) => updateField('reviewerName', value)} />
             <Field label="Review date" type="date" value={activeForm.reviewDate} disabled={!canEdit} onChange={(value) => updateField('reviewDate', value)} />
+            {activeStage === 'DMLRO' ? (
+              <Select label="DMLRO decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR']} onChange={(value) => updateField('decision', value)} />
+            ) : null}
             {activeStage === 'MLRO' ? (
               <>
                 <Select label="Final decision" value={activeForm.decision} disabled={!canEdit} options={['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF']} onChange={(value) => updateField('decision', value)} />
@@ -345,6 +352,8 @@ export function InternalReviewWorkspacePage() {
             {canOpenKycPart1 ? (
               <Link
                 to={`/kyc/${workspace.kycCase.id}/form`}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <FileText className="h-4 w-4" />
@@ -434,8 +443,9 @@ export function InternalReviewWorkspacePage() {
 }
 
 function PackageLink({ to, icon, title, description }: { to: string; icon: ReactNode; title: string; description: string }) {
+  const openInNewTab = /\/form$/.test(to);
   return (
-    <Link to={to} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-left hover:border-brand-200 hover:bg-brand-50">
+    <Link to={to} target={openInNewTab ? '_blank' : undefined} rel={openInNewTab ? 'noopener noreferrer' : undefined} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-left hover:border-brand-200 hover:bg-brand-50">
       <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-brand-700 shadow-sm">{icon}</span>
       <span className="min-w-0">
         <span className="block font-semibold text-slate-950">{title}</span>

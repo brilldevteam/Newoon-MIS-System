@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { KycGeneratedDocumentType, ReviewStage } from '@prisma/client';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -191,6 +191,18 @@ export class KycController {
     return this.kycService.uploadLegalDocumentFile(user, id, documentType, file);
   }
 
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/legal-documents/upload-many')
+  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions()))
+  uploadLegalDocumentFiles(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('documentType') documentType: string,
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }>
+  ) {
+    return this.kycService.uploadLegalDocumentFiles(user, id, documentType, files);
+  }
+
   @Get(':id/legal-documents/:documentId/view')
   async viewLegalDocument(
     @CurrentUser() user: RequestUser,
@@ -203,6 +215,20 @@ export class KycController {
     response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${safeResponseFileName(document.fileName)}`);
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(document.content);
+  }
+
+  @Get(':id/legal-documents/download-group')
+  async downloadLegalDocumentGroup(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Query('documentType') documentType: string,
+    @Res() response: Response
+  ) {
+    const archive = await this.kycService.getLegalDocumentGroupZip(user, id, documentType);
+    response.setHeader('Content-Type', 'application/zip');
+    response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeResponseFileName(archive.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.send(archive.content);
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
@@ -310,6 +336,24 @@ export class KycController {
   @Post(':id/comments')
   addComment(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: AddWorkflowCommentDto) {
     return this.kycService.addComment(user, id, dto);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/engagement-decision')
+  completeEngagementDecision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.completeEngagementDecision(user, id, dto);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/final-kyc-decision')
+  completeFinalKycDecision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.completeFinalKycDecision(user, id, dto);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/amendments')
+  startAmendment(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.startAmendment(user, id, dto);
   }
 
   @Get(':id/timeline')

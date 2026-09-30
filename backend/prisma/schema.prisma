@@ -128,6 +128,7 @@ model Enquiry {
   attachments         EnquiryAttachment[]
   comments            EnquiryComment[]
   statusHistory       EnquiryStatusHistory[]
+  generatedKycCases   KycCase[]              @relation("EnquiryGeneratedKycCases")
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
 
@@ -333,6 +334,7 @@ enum ReviewSubmissionStatus {
 enum ReviewDecision {
   APPROVE
   APPROVE_WITH_CONDITIONS
+  DMLRO_FINAL_APPROVE
   REJECT
   REQUEST_ADDITIONAL_INFORMATION
   RETURN_TO_SUPERVISOR
@@ -528,9 +530,12 @@ model KycCase {
   tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   clientId          String
   client            Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceEnquiryId   String?                @unique
+  sourceEnquiry     Enquiry?               @relation("EnquiryGeneratedKycCases", fields: [sourceEnquiryId], references: [id], onDelete: SetNull)
   serviceId         String?
   service           ClientService?         @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   title             String
+  kycNumber         String
   status            KycCaseStatus          @default(INQUIRY_RECEIVED)
   proposalStatus    ProposalStatus         @default(NOT_REQUIRED)
   createdById       String?
@@ -567,7 +572,9 @@ model KycCase {
 
   @@index([tenantId])
   @@index([clientId])
+  @@index([sourceEnquiryId])
   @@index([status])
+  @@unique([tenantId, kycNumber])
 }
 
 model KycForm {
@@ -1110,6 +1117,7 @@ model ScreeningCheck {
   screeningRecordId String
   screeningRecord   ScreeningRecord       @relation(fields: [screeningRecordId], references: [id], onDelete: Cascade)
   checkType         ScreeningCheckType
+  isSelected        Boolean               @default(false)
   resultStatus      ScreeningResultStatus @default(NOT_CHECKED)
   notes             String?
   documents         ScreeningDocument[]
