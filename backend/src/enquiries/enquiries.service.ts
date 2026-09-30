@@ -1,4 +1,13 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException
+} from '@nestjs/common';
 import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, NotificationType, Prisma } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
@@ -31,9 +40,9 @@ export class EnquiriesService {
     try {
       const tenantId = this.getTenantId(user);
       await this.assertClientTenant(user, dto.clientId);
-      const enquiryCode = await this.nextEnquiryCode(tenantId);
 
       const enquiryId = await this.prisma.$transaction(async (prisma) => {
+        const enquiryCode = await this.nextEnquiryCode(prisma, tenantId);
         const enquiry = await prisma.enquiry.create({
           data: {
             tenantId,
@@ -109,12 +118,12 @@ export class EnquiriesService {
     } catch (error) {
       this.logCreateFailure(user, dto, error);
       if (error instanceof HttpException) throw error;
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError ||
-        error instanceof Prisma.PrismaClientValidationError
-      ) {
-        throw new BadRequestException(
-          'Unable to create enquiry. Confirm this Operating Team user is assigned to a tenant and the latest enquiry database migrations are applied.'
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        throw this.enquiryCreateDatabaseException(error);
+      }
+      if (error instanceof Prisma.PrismaClientValidationError) {
+        throw new ServiceUnavailableException(
+          'Unable to create the enquiry because the application and database schema are not compatible. Please contact the system administrator.'
         );
       }
       throw error;
@@ -667,17 +676,25 @@ export class EnquiriesService {
     return { id: existing.id };
   }
 
-  private async nextEnquiryCode(tenantId: string) {
+  private async nextEnquiryCode(prisma: Prisma.TransactionClient, tenantId: string) {
     const year = new Date().getFullYear();
     const prefix = `ENQ-${year}-`;
-    const count = await this.prisma.enquiry.count({
+
+    await prisma.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), CAST(${year} AS INTEGER))`;
+    const latest = await prisma.enquiry.findFirst({
       where: {
         tenantId,
         enquiryCode: { startsWith: prefix }
-      }
+      },
+      orderBy: { enquiryCode: 'desc' },
+      select: { enquiryCode: true }
     });
 
-    return `${prefix}${String(count + 1).padStart(4, '0')}`;
+    const latestSequence = latest?.enquiryCode.startsWith(prefix)
+      ? Number.parseInt(latest.enquiryCode.slice(prefix.length), 10)
+      : 0;
+    const nextSequence = Number.isFinite(latestSequence) ? latestSequence + 1 : 1;
+    return `${prefix}${String(nextSequence).padStart(4, '0')}`;
   }
 
   private async nextKycNumber(prisma: Prisma.TransactionClient, tenantId: string) {
@@ -799,6 +816,30 @@ export class EnquiriesService {
       prospectiveService: enquiry.requestedServices || [],
       formVariant: enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? 'PRELIMINARY_PROPOSED_COMPANY' : 'STANDARD'
     };
+  }
+
+  private enquiryCreateDatabaseException(error: Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2021' || error.code === 'P2022') {
+      return new ServiceUnavailableException(
+        'Unable to create the enquiry because the enquiry database schema is not up to date. Please contact the system administrator.'
+      );
+    }
+
+    if (error.code === 'P2002') {
+      return new ConflictException(
+        'An enquiry with the generated reference already exists. Please submit the enquiry again.'
+      );
+    }
+
+    if (error.code === 'P2003' || error.code === 'P2025') {
+      return new BadRequestException(
+        'A linked tenant, client, or user record is no longer available. Refresh the page and try again.'
+      );
+    }
+
+    return new BadRequestException(
+      `The database rejected the enquiry request (reference ${error.code}). Please contact the system administrator.`
+    );
   }
 
   private enquirySectionE(enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>, details: Record<string, unknown>) {
