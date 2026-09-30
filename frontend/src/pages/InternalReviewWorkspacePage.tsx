@@ -314,8 +314,44 @@ export function InternalReviewWorkspacePage() {
                 <Field label="Management decision rationale" value={activeForm.riskExplanation} disabled={!canEdit} onChange={(value) => updateField('riskExplanation', value)} textarea />
               </>
             ) : null}
-            <Field label="Recommendation / comments" value={activeForm.comments} disabled={!canEdit} onChange={(value) => updateField('comments', value)} textarea wide />
-            <Field label="Conditions" value={activeForm.conditions} disabled={!canEdit} onChange={(value) => updateField('conditions', value)} textarea wide />
+            <Field label={activeStage === 'DMLRO' ? 'DMLRO comment' : 'Recommendation / comments'} value={activeForm.comments} disabled={!canEdit} onChange={(value) => updateField('comments', value)} textarea wide />
+            {activeStage !== 'DMLRO' ? <Field label="Conditions" value={activeForm.conditions} disabled={!canEdit} onChange={(value) => updateField('conditions', value)} textarea wide /> : null}
+            {activeStage === 'DMLRO' ? (
+              <div className="md:col-span-2">
+                <p className="text-sm font-medium text-slate-700">Optional DMLRO review attachment</p>
+                <div className="mt-1 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+                  <label className={`inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 ${canUploadSignedDocuments ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}>
+                    <FileUp className="h-4 w-4" />
+                    Upload
+                    <input
+                      disabled={!canUploadSignedDocuments}
+                      type="file"
+                      className="hidden"
+                      accept={SIGNED_KYC_ACCEPT}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0] || null;
+                        const validationError = file ? validateSignedKycDocuments([file]) : '';
+                        if (validationError) {
+                          setError(validationError);
+                          setSignedFile(null);
+                        } else {
+                          setError('');
+                          setSignedFile(file);
+                        }
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </label>
+                  <div className="flex h-10 min-w-0 items-center rounded-md border border-slate-300 bg-slate-50 px-3 text-sm text-slate-600">
+                    <span className="truncate">{signedFile?.name || 'No file selected'}</span>
+                  </div>
+                  <button type="button" disabled={!canUploadSignedDocuments || !signedFile} onClick={submitSignedDocument} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                    <FileUp className="h-4 w-4" /> Save attachment
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">Optional. This attachment is not required to submit the DMLRO decision.</p>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-3 md:col-span-2">
               <button disabled={!canEdit} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Save className="h-4 w-4" /> Save draft</button>
               <button type="button" disabled={!canEdit} onClick={submitStage} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"><Send className="h-4 w-4" /> {stages.find((stage) => stage.id === activeStage)?.submitLabel}</button>
@@ -324,7 +360,7 @@ export function InternalReviewWorkspacePage() {
         </section>
 
         <aside className="space-y-6">
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
+          {activeStage !== 'DMLRO' ? <section className="rounded-lg border border-slate-200 bg-white p-5">
             <h2 className="text-base font-semibold text-slate-950">Review Filled KYC Document</h2>
             <p className="mt-1 text-sm text-slate-500">
               Download the latest saved KYC form before approving, returning, or escalating this file.
@@ -360,7 +396,7 @@ export function InternalReviewWorkspacePage() {
                 Open KYC Form
               </Link>
             ) : null}
-          </section>
+          </section> : null}
 
           <section className="rounded-lg border border-slate-200 bg-white p-5">
             <h2 className="text-base font-semibold text-slate-950">Activation Readiness</h2>

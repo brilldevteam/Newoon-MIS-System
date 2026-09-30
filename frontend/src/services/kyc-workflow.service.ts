@@ -115,6 +115,7 @@ export type ScreeningCaseCheck = {
   id: string;
   checkType: ScreeningCheckType;
   resultStatus: ScreeningResultStatus;
+  notes?: string | null;
   documents: ScreeningDocument[];
 };
 
@@ -214,6 +215,7 @@ export type ScreeningContext = {
   resultRequiredChecks: ScreeningCheckType[];
   individualFilterChecks: ScreeningCheckType[];
   mergedEvidenceChecks: ScreeningCheckType[];
+  mergedResultChecks: ScreeningCheckType[];
   individualEvidenceChecks: ScreeningCheckType[];
   mergedChecks: ScreeningCaseCheck[];
   mergedDocuments: ScreeningDocument[];
@@ -704,7 +706,7 @@ export function uploadMergedScreeningDocuments(caseId: string, payload: { checkT
     .then((response) => response.data);
 }
 
-export function updateMergedScreeningCheck(caseId: string, checkType: ScreeningCheckType, payload: { resultStatus: ScreeningResultStatus }) {
+export function updateMergedScreeningCheck(caseId: string, checkType: ScreeningCheckType, payload: { resultStatus: ScreeningResultStatus; notes?: string }) {
   return api.patch<ScreeningContext>(`/kyc/${caseId}/screening/merged-checks/${checkType}`, payload).then((response) => response.data);
 }
 

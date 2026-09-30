@@ -239,10 +239,11 @@ export function KycCaseDetailsPage() {
     return <p className="text-sm text-slate-500">Loading KYC case...</p>;
   }
 
-  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation);
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const canUploadDocuments =
     hasAnyRole(user, workflowRoles.documentUpload) &&
-    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
   const canDeleteDocuments = hasAnyRole(user, workflowRoles.documentDelete);
   const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
   const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
@@ -250,12 +251,15 @@ export function KycCaseDetailsPage() {
   const canSubmitToAml =
     canPrepareKyc &&
     kycCase.legalDocuments.length > 0 &&
-    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
+  const finalDecisionRole = kycCase.status === 'SEF_APPROVED' ? 'SEF' : 'MLRO';
   const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
-  const canCompleteFinalKycDecision = finalDecisionPending && hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
+  const canCompleteFinalKycDecision =
+    (['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
+    (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);
 
@@ -322,7 +326,7 @@ export function KycCaseDetailsPage() {
               </p>
               <p className="mt-1 text-sm text-emerald-700">
                 {finalDecisionPending
-                  ? 'AML Team or AML Supervisor must confirm this approved KYC as final or open an amendment before activation.'
+                  ? `${finalDecisionRole} must confirm this approved KYC as final or open an amendment before activation.`
                   : 'Client details, KYC form data, approval signatures, uploaded preparation documents, workflow comments, and generated documents are stored against this case.'}
               </p>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
@@ -574,7 +578,7 @@ export function KycCaseDetailsPage() {
               className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
             >
               <Send className="h-4 w-4" />
-              Submit to DMLRO
+              {['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ? 'Resubmit to DMLRO' : 'Submit to DMLRO'}
             </Link>
           ) : null}
         </div>

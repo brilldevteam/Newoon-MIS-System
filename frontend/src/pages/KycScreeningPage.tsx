@@ -11,6 +11,7 @@ import {
   deleteScreeningRecord,
   getScreeningContext,
   ScreeningCheck,
+  ScreeningCaseCheck,
   ScreeningCheckType,
   ScreeningConclusionStatus,
   ScreeningContext,
@@ -75,6 +76,20 @@ function errorMessage(error: any, fallback: string) {
   const message = error?.response?.data?.message;
   if (Array.isArray(message)) return message.join(' ');
   return typeof message === 'string' ? message : fallback;
+}
+
+type MergedScreeningDraft = {
+  resultStatus: ScreeningResultStatus;
+  notes: string;
+};
+
+function mergedDraftsFromContext(screeningContext: ScreeningContext) {
+  return Object.fromEntries(
+    screeningContext.mergedChecks.map((check) => [
+      check.checkType,
+      { resultStatus: check.resultStatus, notes: check.notes || '' }
+    ])
+  ) as Record<ScreeningCheckType, MergedScreeningDraft>;
 }
 
 function DocumentList({
@@ -142,12 +157,16 @@ export function KycScreeningPage() {
   const [busyKey, setBusyKey] = useState('');
   const [busyDocumentId, setBusyDocumentId] = useState('');
   const [expandedRecordIds, setExpandedRecordIds] = useState<Set<string>>(new Set());
+  const [mergedDrafts, setMergedDrafts] = useState<Record<ScreeningCheckType, MergedScreeningDraft>>({} as Record<ScreeningCheckType, MergedScreeningDraft>);
+  const [dirtyMergedChecks, setDirtyMergedChecks] = useState<Set<ScreeningCheckType>>(new Set());
 
   useEffect(() => {
     if (!id) return;
     getScreeningContext(id)
       .then((screeningContext) => {
         setContext(screeningContext);
+        setMergedDrafts(mergedDraftsFromContext(screeningContext));
+        setDirtyMergedChecks(new Set());
         setExpandedRecordIds((current) => {
           if (current.size || !screeningContext.records[0]) return current;
           return new Set([screeningContext.records[0].id]);
@@ -170,8 +189,8 @@ export function KycScreeningPage() {
     return groups;
   }, [context?.mergedDocuments]);
   const mergedChecksByType = useMemo(() => {
-    const groups = new Map<ScreeningCheckType, ScreeningResultStatus>();
-    context?.mergedChecks.forEach((check) => groups.set(check.checkType, check.resultStatus));
+    const groups = new Map<ScreeningCheckType, ScreeningCaseCheck>();
+    context?.mergedChecks.forEach((check) => groups.set(check.checkType, check));
     return groups;
   }, [context?.mergedChecks]);
   const hasRequiredMergedEvidence = useMemo(
@@ -368,16 +387,43 @@ export function KycScreeningPage() {
     }
   }
 
-  async function updateMergedResult(checkType: ScreeningCheckType, resultStatus: ScreeningResultStatus) {
-    if (!id) return;
+  function updateMergedDraft(checkType: ScreeningCheckType, patch: Partial<MergedScreeningDraft>) {
+    setMergedDrafts((drafts) => ({
+      ...drafts,
+      [checkType]: { ...(drafts[checkType] || { resultStatus: 'NOT_CHECKED' as ScreeningResultStatus, notes: '' }), ...patch }
+    }));
+    setDirtyMergedChecks((currentChecks) => new Set([...currentChecks, checkType]));
+  }
+
+  async function saveMergedResults() {
+    if (!id || !dirtyMergedChecks.size) return;
+    const missingComment = Array.from(dirtyMergedChecks).find((checkType) => {
+      const draft = mergedDrafts[checkType];
+      return draft && ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(draft.resultStatus) && !draft.notes.trim();
+    });
+    if (missingComment) {
+      setError(`Add match comments for ${checkLabels[missingComment]} before saving.`);
+      return;
+    }
+
     setError('');
     setMessage('');
-    setBusyKey(`result-merged-${checkType}`);
+    setBusyKey('save-merged-results');
     try {
-      setContext(await updateMergedScreeningCheck(id, checkType, { resultStatus }));
-      setMessage('Screening PDF result saved.');
+      let nextContext = context;
+      for (const checkType of dirtyMergedChecks) {
+        const draft = mergedDrafts[checkType];
+        if (!draft) continue;
+        nextContext = await updateMergedScreeningCheck(id, checkType, draft);
+      }
+      if (nextContext) {
+        setContext(nextContext);
+        setMergedDrafts(mergedDraftsFromContext(nextContext));
+      }
+      setDirtyMergedChecks(new Set());
+      setMessage('Common screening results saved.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to save screening PDF result.'));
+      setError(errorMessage(requestError, 'Unable to save common screening results.'));
     } finally {
       setBusyKey('');
     }
@@ -495,26 +541,38 @@ export function KycScreeningPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-950">Screening PDF Files</h2>
-          <p className="mt-1 text-sm text-slate-500">Upload combined evidence for the common screening lists before finalizing individual screening records. {PDF_ONLY_HINT}</p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-950">Screening PDF Files</h2>
+              <p className="mt-1 text-sm text-slate-500">Upload combined evidence for required common screening lists. World-Check and Google require a result and match comment only.</p>
+            </div>
+            {canEditScreening ? <button type="button" onClick={saveMergedResults} disabled={!dirtyMergedChecks.size || busyKey === 'save-merged-results'} className="inline-flex h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <Save className="h-4 w-4" />
+              {busyKey === 'save-merged-results' ? 'Saving...' : 'Save common results'}
+            </button> : null}
+          </div>
         </div>
         <div className="grid gap-3 p-5 xl:grid-cols-5">
-          {context.mergedEvidenceChecks.map((checkType) => {
+          {context.mergedResultChecks.map((checkType) => {
             const documents = mergedDocumentsByCheck.get(checkType) || [];
+            const mergedCheck = mergedChecksByType.get(checkType);
+            const requiresEvidence = context.mergedEvidenceChecks.includes(checkType);
+            const draft = mergedDrafts[checkType] || { resultStatus: mergedCheck?.resultStatus || 'NOT_CHECKED', notes: mergedCheck?.notes || '' };
+            const requiresMatchComment = ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(draft.resultStatus);
             return (
               <div key={checkType} className="rounded-lg border border-slate-200 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-semibold text-slate-950">{checkLabels[checkType]}</p>
-                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${documents.length ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-600'}`}>
-                    {documents.length ? `${documents.length} attached` : 'Required'}
+                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${requiresEvidence ? (documents.length ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-600') : 'bg-slate-100 text-slate-600'}`}>
+                    {requiresEvidence ? (documents.length ? `${documents.length} attached` : 'Required') : 'Result only'}
                   </span>
                 </div>
                 <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Result
                   <select
-                    value={mergedChecksByType.get(checkType) || 'NOT_CHECKED'}
-                    onChange={(event) => updateMergedResult(checkType, event.target.value as ScreeningResultStatus)}
-                    disabled={!canEditScreening || busyKey === `result-merged-${checkType}`}
+                    value={draft.resultStatus}
+                    onChange={(event) => updateMergedDraft(checkType, { resultStatus: event.target.value as ScreeningResultStatus })}
+                    disabled={!canEditScreening || busyKey === 'save-merged-results'}
                     className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium normal-case tracking-normal text-slate-700"
                   >
                     {resultOptions.map((option) => (
@@ -524,7 +582,19 @@ export function KycScreeningPage() {
                     ))}
                   </select>
                 </label>
-                {canEditScreening ? (
+                {requiresMatchComment ? (
+                  <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Match comments
+                    <input
+                      value={draft.notes}
+                      onChange={(event) => updateMergedDraft(checkType, { notes: event.target.value })}
+                      disabled={!canEditScreening || busyKey === 'save-merged-results'}
+                      placeholder="Comments required for this result"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal normal-case tracking-normal text-slate-700"
+                    />
+                  </label>
+                ) : null}
+                {canEditScreening && requiresEvidence ? (
                   <label className="mt-3 inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     <Upload className={`h-4 w-4 ${busyKey === `upload-merged-${checkType}` ? 'animate-pulse' : ''}`} />
                     Upload PDF
@@ -540,7 +610,7 @@ export function KycScreeningPage() {
                     />
                   </label>
                 ) : null}
-                <div className="mt-3">
+                  <div className="mt-3">
                   <DocumentList
                     documents={documents}
                     caseId={id}
@@ -734,7 +804,7 @@ export function KycScreeningPage() {
 
                   <fieldset className="rounded-lg border border-slate-200 p-4">
                     <legend className="px-1 text-sm font-semibold text-slate-900">Individual screening tools</legend>
-                    <p className="mb-3 text-xs text-slate-500">Select only the tools needed for this individual. Selected tools will be added below and require a result and evidence.</p>
+                    <p className="mb-3 text-xs text-slate-500">Select only the tools needed for this individual. Selected tools require a result; supporting evidence is optional.</p>
                     <div className="flex flex-wrap gap-3">
                       {checks.map((check) => (
                         <label key={check.checkType} className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium ${check.isSelected ? 'border-brand-300 bg-brand-50 text-brand-800' : 'border-slate-300 bg-white text-slate-700'}`}>
@@ -766,8 +836,7 @@ export function KycScreeningPage() {
                     <div className="divide-y divide-slate-100">
                       {selectedChecks.map((check) => {
                         const isResultOnly = false;
-                        const isSelectedFilter = context.individualFilterChecks.includes(check.checkType) && check.resultStatus !== 'NOT_CHECKED';
-                        const showMatchComment = isResultOnly && ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus);
+                        const showMatchComment = ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus);
                         return (
                         <div key={check.checkType} className="grid gap-3 px-4 py-4 lg:grid-cols-[1fr_180px_1.2fr_260px] lg:items-start">
                           <p className="font-semibold text-slate-900">{checkLabels[check.checkType]}</p>
@@ -793,7 +862,7 @@ export function KycScreeningPage() {
                             />
                           ) : (
                             <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                              {isResultOnly ? 'Comments open for potential or confirmed matches.' : 'Optional filter'}
+                              Comments required for potential or confirmed matches.
                             </p>
                           )}
                           <div className="space-y-3">
@@ -816,9 +885,7 @@ export function KycScreeningPage() {
                             <p className="text-xs text-slate-500">
                               {isResultOnly
                                 ? 'Result only. No individual file upload is required.'
-                                : isSelectedFilter
-                                  ? `Evidence required for this selected filter. ${check.checkType === 'OTHER' ? STANDARD_DOCUMENT_HINT : PDF_ONLY_HINT}`
-                                  : 'Select a result only when this filter is used.'}
+                                : `Optional supporting evidence. ${check.checkType === 'OTHER' ? STANDARD_DOCUMENT_HINT : PDF_ONLY_HINT}`}
                             </p>
                             <DocumentList documents={check.documents} caseId={id} onDelete={removeDocument} busyDocumentId={busyDocumentId} canDelete={canEditScreening} />
                           </div>

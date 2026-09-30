@@ -192,7 +192,7 @@ export function CrrfWorkspacePage() {
             <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-950">CRRF Documents</h3>
-                <p className="mt-1 text-xs text-slate-500">Optional supporting documents. {CRRF_DOCUMENT_HINT}</p>
+                <p className="mt-1 text-xs text-slate-500">At least one supporting document is required before saving. {CRRF_DOCUMENT_HINT}</p>
               </div>
               <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100">
                 <Upload className={`h-4 w-4 ${busyKey === 'upload' ? 'animate-pulse' : ''}`} />
