@@ -76,6 +76,7 @@ export class ClientsService {
     const normalizedType = String(type || '').toLowerCase();
     const value = String(identifier || '').trim();
     const excludedClientId = String(excludeClientId || '').trim();
+    const comparableValue = this.normalizedIdentifier(value);
 
     if (!value) {
       return { match: null };
@@ -94,13 +95,60 @@ export class ClientsService {
         return { match: this.clientMatch(client, 'client-registration') };
       }
 
+      const normalizedClient = await this.matchClientRegistrationByNormalizedValue(user, comparableValue, excludedClientId);
+      if (normalizedClient) {
+        return { match: this.clientMatch(normalizedClient, 'client-registration') };
+      }
+
+      const kycCompany = await this.matchKycCompanyRegistration(user, comparableValue, excludedClientId);
+      if (kycCompany) {
+        return { match: this.clientMatch(kycCompany, 'kyc-general-company') };
+      }
+
       return { match: await this.matchKycOwnerByIdentifier(user, value, excludedClientId) };
     }
 
     return { match: await this.matchKycOwnerByIdentifier(user, value, excludedClientId) };
   }
 
+  private async matchClientRegistrationByNormalizedValue(user: RequestUser, value: string, excludeClientId?: string) {
+    if (!value) return null;
+
+    const clients = await this.prisma.client.findMany({
+      where: {
+        ...this.tenantWhere(user),
+        ...(excludeClientId ? { id: { not: excludeClientId } } : {}),
+        registrationNumber: { not: null }
+      },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    return clients.find((client) => this.normalizedIdentifier(client.registrationNumber) === value) || null;
+  }
+
+  private async matchKycCompanyRegistration(user: RequestUser, value: string, excludeClientId?: string) {
+    if (!value) return null;
+
+    const sectionData = await this.prisma.kycSectionData.findMany({
+      where: {
+        ...this.tenantWhere(user),
+        sectionKey: 'GENERAL_COMPANY',
+        ...(excludeClientId ? { kycCase: { clientId: { not: excludeClientId } } } : {})
+      },
+      include: { kycCase: { include: { client: true } } },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    const match = sectionData.find((section) => {
+      const data = this.recordValue(section.data);
+      return this.normalizedIdentifier(data.commercialRegistrationNo) === value;
+    });
+
+    return match?.kycCase.client || null;
+  }
+
   private async matchKycOwnerByIdentifier(user: RequestUser, value: string, excludeClientId?: string) {
+    const comparableValue = this.normalizedIdentifier(value);
     const shareholder = await this.prisma.kycShareholder.findFirst({
       where: {
         ...this.tenantWhere(user),
@@ -115,6 +163,9 @@ export class ClientsService {
       return this.clientMatch(shareholder.kycCase.client, 'kyc-shareholder');
     }
 
+    const normalizedShareholder = await this.matchKycOwnerByNormalizedValue(user, comparableValue, 'shareholder', excludeClientId);
+    if (normalizedShareholder) return normalizedShareholder;
+
     const ubo = await this.prisma.kycUbo.findFirst({
       where: {
         ...this.tenantWhere(user),
@@ -125,7 +176,31 @@ export class ClientsService {
       orderBy: { createdAt: 'desc' }
     });
 
-    return ubo?.kycCase.client ? this.clientMatch(ubo.kycCase.client, 'kyc-ubo') : null;
+    if (ubo?.kycCase.client) {
+      return this.clientMatch(ubo.kycCase.client, 'kyc-ubo');
+    }
+
+    return this.matchKycOwnerByNormalizedValue(user, comparableValue, 'ubo', excludeClientId);
+  }
+
+  private async matchKycOwnerByNormalizedValue(user: RequestUser, value: string, source: 'shareholder' | 'ubo', excludeClientId?: string) {
+    if (!value) return null;
+
+    const where = {
+      ...this.tenantWhere(user),
+      identityNumber: { not: null },
+      ...(excludeClientId ? { kycCase: { clientId: { not: excludeClientId } } } : {})
+    };
+    const include = { kycCase: { include: { client: true } } };
+    const orderBy = { createdAt: 'desc' as const };
+
+    const rows =
+      source === 'shareholder'
+        ? await this.prisma.kycShareholder.findMany({ where, include, orderBy })
+        : await this.prisma.kycUbo.findMany({ where, include, orderBy });
+    const match = rows.find((row) => this.normalizedIdentifier(row.identityNumber) === value);
+
+    return match?.kycCase.client ? this.clientMatch(match.kycCase.client, source === 'shareholder' ? 'kyc-shareholder' : 'kyc-ubo') : null;
   }
 
   async update(user: RequestUser, id: string, dto: UpdateClientDto) {
@@ -208,5 +283,16 @@ export class ClientsService {
       status: client.status,
       source
     };
+  }
+
+  private normalizedIdentifier(value: unknown) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  private recordValue(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   }
 }
