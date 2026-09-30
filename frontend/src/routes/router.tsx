@@ -12,11 +12,13 @@ import { EnquiryDetailsPage } from '../pages/EnquiryDetailsPage';
 import { EnquiryListPage } from '../pages/EnquiryListPage';
 import { KycCaseDetailsPage } from '../pages/KycCaseDetailsPage';
 import { KycFormEditorPage } from '../pages/KycFormEditorPage';
+import { KycScreeningPage } from '../pages/KycScreeningPage';
 import { InternalReviewWorkspacePage } from '../pages/InternalReviewWorkspacePage';
 import { KycWorkflowPage } from '../pages/KycWorkflowPage';
 import { LoginPage } from '../pages/LoginPage';
 import { ModulesPage } from '../pages/ModulesPage';
 import { ReviewTasksPage } from '../pages/ReviewTasksPage';
+import { ScreeningListPage } from '../pages/ScreeningListPage';
 import { SubmitToAmlPage } from '../pages/SubmitToAmlPage';
 import { TenantsPage } from '../pages/TenantsPage';
 import { UploadLegalDocumentsPage } from '../pages/UploadLegalDocumentsPage';
@@ -97,6 +99,13 @@ export const router = createBrowserRouter([
           {
             element: <RequireRoles roles={workflowRoles.documentUpload} />,
             children: [{ path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> }]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.screening} />,
+            children: [
+              { path: '/screening', element: <ScreeningListPage /> },
+              { path: '/kyc/:id/screening', element: <KycScreeningPage /> }
+            ]
           },
           {
             element: <RequireRoles roles={workflowRoles.reviewTasks} />,

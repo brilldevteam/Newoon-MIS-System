@@ -1,4 +1,4 @@
-import { Download, Eye, FileText, MessageSquare, Send, Trash2, Upload } from 'lucide-react';
+import { Download, Eye, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
@@ -156,6 +156,7 @@ export function KycCaseDetailsPage() {
   const canUploadDocuments = hasAnyRole(user, workflowRoles.documentUpload);
   const canDeleteDocuments = hasAnyRole(user, workflowRoles.documentDelete);
   const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
+  const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
   const canSubmitToAml =
     canPrepareKyc &&
     kycCase.legalDocuments.length > 0 &&
@@ -194,6 +195,15 @@ export function KycCaseDetailsPage() {
           >
             <FileText className="h-4 w-4" />
             Internal Review
+          </Link>
+        ) : null}
+        {canOpenScreening ? (
+          <Link
+            to={`/kyc/${kycCase.id}/screening`}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <SearchCheck className="h-4 w-4" />
+            Screening
           </Link>
         ) : null}
       </div>
