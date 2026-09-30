@@ -254,11 +254,13 @@ export function KycCaseDetailsPage() {
     ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
+  const isPreliminaryProposedCompany = kycCase.sourceEnquiry?.enquiryType === 'PROPOSED_COMPANY';
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
-  const finalDecisionRole = kycCase.status === 'SEF_APPROVED' ? 'SEF' : 'MLRO';
+  const finalDecisionRole = isPreliminaryProposedCompany ? 'AML Supervisor' : kycCase.status === 'SEF_APPROVED' ? 'SEF' : 'MLRO';
   const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const canCompleteFinalKycDecision =
-    (['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
+    (isPreliminaryProposedCompany && finalDecisionPending && hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
+    (!isPreliminaryProposedCompany && ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
     (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);
@@ -280,8 +282,6 @@ export function KycCaseDetailsPage() {
         {canOpenKycForm ? (
           <Link
             to={`/kyc/${kycCase.id}/form`}
-            target="_blank"
-            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
           >
             <FileText className="h-4 w-4" />
@@ -313,6 +313,15 @@ export function KycCaseDetailsPage() {
           >
             <FileSpreadsheet className="h-4 w-4" />
             CRRF
+          </Link>
+        ) : null}
+        {canSubmitToAml ? (
+          <Link
+            to={`/kyc/${kycCase.id}/submit`}
+            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <Send className="h-4 w-4" />
+            {['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ? 'Resubmit to DMLRO' : 'Submit to DMLRO'}
           </Link>
         ) : null}
       </div>
@@ -402,12 +411,12 @@ export function KycCaseDetailsPage() {
       {canCompleteFinalKycDecision ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Final KYC Decision</h2>
-          <p className="mt-1 text-sm text-slate-500">Confirm the approved KYC as final or reopen the same populated form as an amendment.</p>
+          <p className="mt-1 text-sm text-slate-500">{isPreliminaryProposedCompany ? 'Confirm the approved Preliminary KYC as final, or open the same populated full KYC form for completion.' : 'Confirm the approved KYC as final or reopen the same populated form as an amendment.'}</p>
           <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr_1fr_auto] lg:items-end">
             <label className="text-sm font-medium text-slate-700">Decision
               <select value={finalKycDecision} onChange={(event) => setFinalKycDecision(event.target.value as 'SAME_KYC_FINAL' | 'AMENDMENT_REQUIRED')} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-                <option value="SAME_KYC_FINAL">Use approved KYC as final</option>
-                <option value="AMENDMENT_REQUIRED">Amendment required</option>
+                <option value="SAME_KYC_FINAL">{isPreliminaryProposedCompany ? 'Use Preliminary KYC as final' : 'Use approved KYC as final'}</option>
+                <option value="AMENDMENT_REQUIRED">{isPreliminaryProposedCompany ? 'Complete full KYC form' : 'Amendment required'}</option>
               </select>
             </label>
             {finalKycDecision === 'AMENDMENT_REQUIRED' ? <label className="text-sm font-medium text-slate-700">Sections to amend
@@ -423,7 +432,7 @@ export function KycCaseDetailsPage() {
         </section>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[1.4fr_0.8fr]">
+      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)]">
         <div className="space-y-6">
           {canPrepareKyc ? (
             <section className="rounded-lg border border-slate-200 bg-white p-5">
@@ -572,15 +581,6 @@ export function KycCaseDetailsPage() {
             </div>
           </section>
 
-          {canSubmitToAml ? (
-            <Link
-              to={`/kyc/${kycCase.id}/submit`}
-              className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-            >
-              <Send className="h-4 w-4" />
-              {['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ? 'Resubmit to DMLRO' : 'Submit to DMLRO'}
-            </Link>
-          ) : null}
         </div>
 
         <aside className="space-y-6">

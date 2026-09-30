@@ -243,6 +243,7 @@ export type StatusHistory = {
 
 export type KycCase = {
   id: string;
+  sourceEnquiry?: { enquiryType: EnquiryType } | null;
   title: string;
   kycNumber?: string;
   status: KycCaseStatus;
@@ -315,6 +316,21 @@ export type Enquiry = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type PreliminaryKycData = {
+  companyName?: string;
+  proposedLegalForm?: string;
+  jurisdiction?: string;
+  businessActivity?: string;
+  registeredOfficeAddress?: string;
+  sourceOfFunds?: string;
+  shareholders?: Array<{ fullName?: string; nationality?: string; identityNumber?: string; address?: string; ownershipPercentage?: string; isUbo?: boolean }>;
+  management?: Array<{ fullName?: string; identityNumber?: string; nationality?: string; position?: string }>;
+  documents?: Array<{ documentType?: string; description?: string; available?: boolean }>;
+  completedAt?: string;
+};
+
+export type PreliminaryKycWorkspace = { enquiry: Enquiry; data: PreliminaryKycData; completedAt?: string | null };
 
 export type EnquiryPayload = {
   enquiryType?: EnquiryType;
@@ -482,6 +498,18 @@ export function updateEnquiryStatus(id: string, payload: { status: EnquiryStatus
 
 export function convertEnquiryToKyc(id: string) {
   return api.post<KycCase>(`/enquiries/${id}/convert-to-kyc`).then((response) => response.data);
+}
+
+export function getPreliminaryKyc(id: string) {
+  return api.get<PreliminaryKycWorkspace>(`/enquiries/${id}/preliminary-kyc`).then((response) => response.data);
+}
+
+export function savePreliminaryKyc(id: string, payload: PreliminaryKycData) {
+  return api.patch<PreliminaryKycWorkspace>(`/enquiries/${id}/preliminary-kyc`, payload).then((response) => response.data);
+}
+
+export function completePreliminaryKyc(id: string, payload: PreliminaryKycData) {
+  return api.post<PreliminaryKycWorkspace>(`/enquiries/${id}/preliminary-kyc/complete`, payload).then((response) => response.data);
 }
 
 export function addEnquiryComment(id: string, payload: { body: string }) {

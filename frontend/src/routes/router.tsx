@@ -47,7 +47,7 @@ export const router = createBrowserRouter([
             element: <RequireRoles roles={workflowRoles.enquiries} />,
             children: [
               { path: '/enquiries', element: <EnquiryListPage /> },
-              { path: '/enquiries/:id', element: <EnquiryDetailsPage /> }
+              { path: '/enquiries/:id', element: <EnquiryDetailsPage /> },
             ]
           },
           {

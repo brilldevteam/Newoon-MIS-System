@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Int
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
+  EnquiryType,
   KycCaseStatus,
   KycFormSectionKey,
   KycGeneratedDocumentType,
@@ -800,6 +801,11 @@ export class KycService {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, dto);
       const targetStatus = this.mlroDecisionStatus(decision);
       await this.recordStatus(tx, kycCase, user, targetStatus, this.mlroStatusNote(decision));
+      const finalReviewForm = await tx.kycForm.findUnique({ where: { kycCaseId: id }, select: { status: true } });
+      if (finalReviewForm?.status === 'PRELIMINARY_FINAL_REVIEW' && (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)) {
+        await tx.kycForm.update({ where: { kycCaseId: id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
+        await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Final DMLRO and MLRO approval completed for the Preliminary KYC.');
+      }
       await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
@@ -1093,11 +1099,21 @@ export class KycService {
   async completeFinalKycDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const decision = this.enumValue(dto.decision, ['SAME_KYC_FINAL', 'AMENDMENT_REQUIRED'], 'final KYC decision');
 
+    const kycCase = await this.findOne(user, id);
+    const isPreliminaryCase = await this.isPreliminaryProposedCompanyCase(kycCase.sourceEnquiryId);
+    if (isPreliminaryCase) {
+      this.assertFinalApprovalReceived(kycCase.status);
+      if (!this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+        throw new ForbiddenException('Only AML Supervisor can decide whether the approved Preliminary KYC is final.');
+      }
+      if (decision === 'AMENDMENT_REQUIRED') return this.startPreliminaryFullKyc(user, kycCase, dto);
+      return this.routePreliminaryFinalKycForApproval(user, kycCase);
+    }
+
     if (decision === 'AMENDMENT_REQUIRED') {
       return this.startAmendment(user, id, dto);
     }
 
-    const kycCase = await this.findOne(user, id);
     this.assertFinalApprovalReceived(kycCase.status);
     const approvalOwnerRoles = kycCase.status === KycCaseStatus.SEF_APPROVED ? ['SEF'] : ['MLRO'];
     if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
@@ -1145,6 +1161,37 @@ export class KycService {
       await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'KYC_AMENDMENT_STARTED', sections, reason });
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     });
+  }
+
+  private async routePreliminaryFinalKycForApproval(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.kycForm.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: 'PRELIMINARY_FINAL_REVIEW', isLocked: true, updatedBy: user.id } });
+      await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
+      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } } });
+      await tx.internalReviewTask.createMany({ data: [ReviewStage.DMLRO, ReviewStage.MLRO].map((stage) => ({ tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage, createdBy: user.id, updatedBy: user.id })) });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.DMLRO_REVIEW_PENDING, 'AML Supervisor marked the approved Preliminary KYC as final and sent it for final DMLRO and MLRO approval.');
+      await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final DMLRO approval.`);
+      await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final MLRO approval.`);
+      return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
+    });
+  }
+
+  private async startPreliminaryFullKyc(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>, dto: Record<string, unknown>) {
+    const reason = this.optionalText(dto.reason) || 'AML Supervisor requested completion of the full KYC form after Preliminary KYC approval.';
+    return this.prisma.$transaction(async (tx) => {
+      await tx.kycForm.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: 'AMENDMENT_DRAFT', isLocked: false, version: { increment: 1 }, updatedBy: user.id } });
+      await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
+      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id } });
+      await tx.workflowComment.create({ data: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, authorId: user.id, body: reason } });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.AML_REVIEW_STARTED, 'AML Supervisor opened the populated full KYC form for completion.');
+      return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
+    });
+  }
+
+  private async isPreliminaryProposedCompanyCase(sourceEnquiryId?: string | null) {
+    if (!sourceEnquiryId) return false;
+    const enquiry = await this.prisma.enquiry.findUnique({ where: { id: sourceEnquiryId }, select: { enquiryType: true } });
+    return enquiry?.enquiryType === EnquiryType.PROPOSED_COMPANY;
   }
 
   private assertFinalApprovalReceived(status: KycCaseStatus) {
@@ -2763,6 +2810,7 @@ export class KycService {
   private internalReviewData(dto: Record<string, unknown>): ReviewPatch {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
     const dmlroDecision = this.enumValue(dto.dmlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision');
+    const dmlroRiskClassification = this.enumValue(dto.dmlroRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'DMLRO risk classification');
     const mlroDecision = this.enumValue(dto.mlroDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO final decision');
     const sefDecision = this.enumValue(dto.sefDecision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT'], 'SEF management decision');
     const mlroFinalRiskClassification = this.enumValue(dto.mlroFinalRiskClassification, ['LOW', 'MEDIUM', 'HIGH'], 'Final risk classification');
@@ -2785,6 +2833,7 @@ export class KycService {
         dmlroSignatureFileName: this.optionalText(dto.dmlroSignatureFileName),
         dmlroSignatureDataUrl: this.optionalText(dto.dmlroSignatureDataUrl),
         dmlroDate: this.dateValue(dto.dmlroDate),
+        dmlroRiskClassification: dmlroRiskClassification as RiskClassification | null,
         dmlroDecision: dmlroDecision as ReviewDecision | null,
         dmlroConditions: this.optionalText(dto.dmlroConditions),
         dmlroReason: this.optionalText(dto.dmlroReason),
@@ -2815,6 +2864,7 @@ export class KycService {
         dmlroSignatureFileName: this.optionalText(dto.dmlroSignatureFileName),
         dmlroSignatureDataUrl: this.optionalText(dto.dmlroSignatureDataUrl),
         dmlroDate: this.dateValue(dto.dmlroDate),
+        dmlroRiskClassification: dmlroRiskClassification as RiskClassification | null,
         dmlroDecision: dmlroDecision as ReviewDecision | null,
         dmlroConditions: this.optionalText(dto.dmlroConditions),
         dmlroReason: this.optionalText(dto.dmlroReason),
@@ -3160,10 +3210,12 @@ export class KycService {
       dmlroName: this.text(sectionH.dmlroName),
       dmlroSignatureFileName: this.signatureDisplay('dmlroSignature', sectionH.dmlroSignatureFileName, sectionH.dmlroSignatureDataUrl),
       dmlroDate: this.text(sectionH.dmlroDate),
+      dmlroRiskClassification: this.text(sectionH.dmlroRiskClassification),
       dmlroDecision: this.reviewDecisionText(sectionH.dmlroDecision),
       dmlroConditions: this.text(sectionH.dmlroConditions),
       dmlroReason: this.text(sectionH.dmlroReason),
       dmlroComments: this.reviewConclusionText([
+        ['Risk classification', this.text(sectionH.dmlroRiskClassification)],
         ['Decision', this.reviewDecisionText(sectionH.dmlroDecision)],
         ['Conditions', this.text(sectionH.dmlroConditions)],
         ['Reason / additional information', this.text(sectionH.dmlroReason)],
@@ -3759,7 +3811,7 @@ ${this.docxParagraph('G. Client Declaration')}
 ${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
 ${this.docxParagraph('H. Internal Use Only')}
 ${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML Supervisor date: {amlDate}')}
-${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Decision: {dmlroDecision} | Conditions: {dmlroConditions} | Reason: {dmlroReason} | Comments: {dmlroComments}')}
+${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Risk classification: {dmlroRiskClassification} | Decision: {dmlroDecision} | Conditions: {dmlroConditions} | Reason: {dmlroReason} | Comments: {dmlroComments}')}
 ${this.docxParagraph('MLRO: {mlroName} | Signature: {mlroSignatureFileName} | Date: {mlroDate} | Final decision: {mlroDecision} | Final risk: {mlroFinalRiskClassification} | Risk reason: {mlroRiskReasonCategory} | Risk explanation: {mlroRiskExplanation} | Conditions: {mlroConditions} | Comments: {mlroComments}')}
 ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>
@@ -3914,6 +3966,7 @@ ${this.docxParagraph('Newoon Corporate Services - Footer service line')}
 
   private caseInclude() {
     return {
+      sourceEnquiry: { select: { enquiryType: true } },
       client: { include: { contacts: true } },
       service: true,
       legalDocuments: { orderBy: { createdAt: 'desc' as const } },
@@ -3957,6 +4010,7 @@ type ReviewPatch = {
   dmlroSignatureFileName?: string | null;
   dmlroSignatureDataUrl?: string | null;
   dmlroDate?: Date | null;
+  dmlroRiskClassification?: RiskClassification | null;
   dmlroDecision?: ReviewDecision | null;
   dmlroConditions?: string | null;
   dmlroReason?: string | null;

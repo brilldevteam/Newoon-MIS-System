@@ -14,7 +14,7 @@ import { CrrfService } from './crrf.service';
 export class CrrfController {
   constructor(private readonly crrfService: CrrfService) {}
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get()
   getWorkspace(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string) {
     return this.crrfService.getWorkspace(user, kycCaseId);
@@ -37,7 +37,7 @@ export class CrrfController {
     return this.crrfService.uploadDocuments(user, kycCaseId, files || []);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('documents/:documentId/view')
   async viewDocument(
     @CurrentUser() user: RequestUser,
@@ -58,7 +58,7 @@ export class CrrfController {
     return this.crrfService.deleteDocument(user, kycCaseId, documentId);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('export/excel')
   async exportExcel(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string, @Res() response: Response) {
     const exportFile = await this.crrfService.exportExcel(user, kycCaseId);
@@ -67,7 +67,7 @@ export class CrrfController {
     response.send(exportFile.content);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('export/pdf')
   async exportPdf(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string, @Res() response: Response) {
     const exportFile = await this.crrfService.exportPdf(user, kycCaseId);
@@ -82,7 +82,7 @@ export class CrrfController {
 export class CrrfListController {
   constructor(private readonly crrfService: CrrfService) {}
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get()
   listRecords(@CurrentUser() user: RequestUser) {
     return this.crrfService.listRecords(user);

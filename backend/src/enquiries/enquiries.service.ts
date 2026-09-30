@@ -200,7 +200,7 @@ export class EnquiriesService {
           headOfficeCountry: dto.headOfficeCountry,
           branchCountry: dto.branchCountry,
           areaOfOperation: dto.areaOfOperation,
-          details: this.jsonValue(dto.details),
+          details: this.jsonValue({ ...this.objectValue(existing.details), ...this.objectValue(dto.details) }),
           notes: dto.notes,
           ...(dto.attachments
             ? {
@@ -252,6 +252,9 @@ export class EnquiriesService {
         const submittableStatuses: EnquiryStatus[] = [EnquiryStatus.DRAFT, EnquiryStatus.RETURNED_TO_BD];
         if (!submittableStatuses.includes(existing.status)) {
           throw new BadRequestException('This enquiry has already been submitted to AML Supervisor.');
+        }
+        if (existing.enquiryType === EnquiryType.PROPOSED_COMPANY) {
+          this.assertCompletePreliminaryKyc(this.objectValue(this.objectValue(existing.details).preliminaryKyc));
         }
 
         const recipients = await prisma.user.findMany({
@@ -447,6 +450,34 @@ export class EnquiriesService {
         }
       });
 
+      const preliminaryKyc = this.objectValue(details.preliminaryKyc);
+      const preliminaryShareholders = this.asArray<Record<string, unknown>>(preliminaryKyc.shareholders);
+      const preliminaryUbos = this.asArray<Record<string, unknown>>(preliminaryKyc.ubos);
+      const preliminaryManagement = this.asArray<Record<string, unknown>>(preliminaryKyc.management);
+      if (preliminaryShareholders.length) {
+        await prisma.kycShareholder.createMany({
+          data: preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
+            tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
+            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage) || null,
+            sortOrder: index, createdBy: user.id, updatedBy: user.id
+          }))
+        });
+        const ubos = (preliminaryUbos.length ? preliminaryUbos : preliminaryShareholders.filter((row) => Boolean(row.isUbo))).filter((row) => this.optionalText(row.fullName));
+        if (ubos.length) {
+          await prisma.kycUbo.createMany({ data: ubos.map((row, index) => ({
+            tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
+            identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage) || null,
+            sortOrder: index, createdBy: user.id, updatedBy: user.id
+          })) });
+        }
+      }
+      if (preliminaryManagement.length) {
+        await prisma.kycManager.createMany({ data: preliminaryManagement.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
+          tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', identityNumber: this.optionalText(row.identityNumber),
+          nationality: this.optionalText(row.nationality), position: this.optionalText(row.position), sortOrder: index, createdBy: user.id, updatedBy: user.id
+        })) });
+      }
+
       const sectionA = this.enquirySectionA(enquiry, details);
       const sectionE = this.enquirySectionE(enquiry, details);
       const requiredRows = this.requiredDocumentRows(legalDocuments);
@@ -558,6 +589,38 @@ export class EnquiriesService {
   ) {
     const updated = await this.uploadAttachmentFiles(user, id, documentType, file ? [file] : []);
     return updated;
+  }
+
+  async getPreliminaryKyc(user: RequestUser, id: string) {
+    const enquiry = await this.findOne(user, id);
+    this.assertProposedCompanyEnquiry(enquiry);
+    const details = this.objectValue(enquiry.details);
+    return { enquiry, data: this.objectValue(details.preliminaryKyc), completedAt: this.optionalText(this.objectValue(details.preliminaryKyc).completedAt) };
+  }
+
+  async savePreliminaryKyc(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const enquiry = await this.findOne(user, id);
+    this.assertProposedCompanyEnquiry(enquiry);
+    if (!this.canModifyEnquiry(user, enquiry.status)) {
+      throw new BadRequestException('The Preliminary KYC form is locked after the enquiry is submitted. AML must return the enquiry before it can be edited.');
+    }
+    const data = this.preliminaryKycData(dto, enquiry);
+    await this.prisma.enquiry.update({
+      where: { id: enquiry.id },
+      data: { details: this.requiredJsonValue({ ...this.objectValue(enquiry.details), preliminaryKyc: data }) }
+    });
+    return this.getPreliminaryKyc(user, id);
+  }
+
+  async completePreliminaryKyc(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    const saved = await this.savePreliminaryKyc(user, id, dto);
+    this.assertCompletePreliminaryKyc(saved.data);
+    const data = { ...saved.data, completedAt: new Date().toISOString(), completedById: user.id };
+    await this.prisma.enquiry.update({
+      where: { id },
+      data: { details: this.requiredJsonValue({ ...this.objectValue(saved.enquiry.details), preliminaryKyc: data }) }
+    });
+    return this.getPreliminaryKyc(user, id);
   }
 
   async uploadAttachmentFiles(
@@ -755,6 +818,54 @@ export class EnquiriesService {
     return editableStatuses.includes(status);
   }
 
+  private assertProposedCompanyEnquiry(enquiry: { enquiryType: EnquiryType }) {
+    if (enquiry.enquiryType !== EnquiryType.PROPOSED_COMPANY) {
+      throw new BadRequestException('Preliminary KYC is available only for Proposed Company - No Legal Status Yet enquiries.');
+    }
+  }
+
+  private preliminaryKycData(dto: Record<string, unknown>, enquiry: { proposedCompanyName: string | null; details: unknown }) {
+    const existing = this.objectValue(this.objectValue(enquiry.details).preliminaryKyc);
+    return {
+      ...existing,
+      companyName: this.optionalText(dto.companyName) || enquiry.proposedCompanyName || '',
+      proposedLegalForm: this.optionalText(dto.proposedLegalForm),
+      jurisdiction: this.optionalText(dto.jurisdiction),
+      businessActivity: this.optionalText(dto.businessActivity),
+      registeredOfficeAddress: this.optionalText(dto.registeredOfficeAddress),
+      sourceOfFunds: this.optionalText(dto.sourceOfFunds),
+      shareholders: this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
+        fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
+        address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)
+      })),
+      management: this.asArray<Record<string, unknown>>(dto.management).map((row) => ({
+        fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), position: this.optionalText(row.position)
+      })),
+      documents: this.asArray<Record<string, unknown>>(dto.documents).map((row) => ({
+        documentType: this.optionalText(row.documentType), description: this.optionalText(row.description), available: Boolean(row.available)
+      })),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  private assertCompletePreliminaryKyc(data: Record<string, unknown>) {
+    const required = ['companyName', 'proposedLegalForm', 'jurisdiction', 'businessActivity', 'registeredOfficeAddress', 'sourceOfFunds'];
+    if (required.some((key) => !this.optionalText(data[key]))) {
+      throw new BadRequestException('Complete all Preliminary KYC company details before submitting the enquiry.');
+    }
+    const shareholders = this.asArray<Record<string, unknown>>(data.shareholders);
+    if (!shareholders.length || shareholders.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.ownershipPercentage))) {
+      throw new BadRequestException('Add at least one proposed shareholder with name and ownership percentage.');
+    }
+    const management = this.asArray<Record<string, unknown>>(data.management);
+    if (!management.length || management.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.position))) {
+      throw new BadRequestException('Add at least one proposed management or control person with name and position.');
+    }
+    if (!this.asArray<Record<string, unknown>>(data.documents).some((row) => Boolean(row.available))) {
+      throw new BadRequestException('Confirm at least one required Preliminary KYC document is available.');
+    }
+  }
+
   private hasAnyRole(user: RequestUser, roles: string[]) {
     return user.roles.some((role) => roles.includes(role));
   }
@@ -797,6 +908,10 @@ export class EnquiriesService {
     return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   }
 
+  private asArray<T>(value: unknown): T[] {
+    return Array.isArray(value) ? (value as T[]) : [];
+  }
+
   private optionalText(value: unknown) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   }
@@ -805,14 +920,16 @@ export class EnquiriesService {
     enquiry: Awaited<ReturnType<EnquiriesService['findOne']>>,
     details: Record<string, unknown>
   ) {
+    const preliminary = this.objectValue(details.preliminaryKyc);
     return {
-      legalName: enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
-      countryOfIncorporation: enquiry.headOfficeCountry || enquiry.branchCountry || '',
-      registeredOfficeAddress: this.optionalText(details.proposedRegisteredOfficeAddress) || '',
+      legalName: this.optionalText(preliminary.companyName) || enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
+      countryOfIncorporation: this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
+      legalForm: this.optionalText(preliminary.proposedLegalForm) || '',
+      registeredOfficeAddress: this.optionalText(preliminary.registeredOfficeAddress) || this.optionalText(details.proposedRegisteredOfficeAddress) || '',
       telephone: enquiry.keyContactPhone || '',
       email: enquiry.keyContactEmail || '',
-      businessNature: this.optionalText(details.proposedBusinessActivity) || '',
-      licenseActivities: this.optionalText(details.proposedBusinessActivity) || '',
+      businessNature: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || '',
+      licenseActivities: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || '',
       relatedIndustry: this.optionalText(details.relatedIndustry) || '',
       prospectiveService: enquiry.requestedServices || [],
       formVariant: enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? 'PRELIMINARY_PROPOSED_COMPANY' : 'STANDARD'
