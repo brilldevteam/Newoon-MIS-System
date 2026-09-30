@@ -1,4 +1,4 @@
-import { ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Send } from 'lucide-react';
+import { ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Printer, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -317,9 +317,15 @@ export function EnquiryDetailsPage() {
         <textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} placeholder="Optional status note" className="mt-4 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
         <div className="mt-3 flex flex-wrap gap-2">
           {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? (
-            <button type="button" onClick={() => document.getElementById('preliminary-kyc-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
-              View Preliminary KYC
-            </button>
+            <>
+              <button type="button" onClick={() => document.getElementById('preliminary-kyc-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
+                View Preliminary KYC
+              </button>
+              <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <Printer className="h-4 w-4" />
+                Print Preliminary KYC
+              </button>
+            </>
           ) : null}
           {canSubmitToAmlSupervisor ? (
             <button type="button" disabled={saving} onClick={() => setStatus('SUBMITTED_TO_AML_SUPERVISOR')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
@@ -407,6 +413,9 @@ function Info({ label, value, wide = false }: { label: string; value?: string | 
 function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
   const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
   const value = (item: unknown) => String(item || '-');
+  const totalOwnership = (items: Array<Record<string, any>>) => items.reduce((total, item) => total + (Number.parseFloat(String(item.ownershipPercentage || '')) || 0), 0).toFixed(2);
+  const contact = data.contact && typeof data.contact === 'object' ? data.contact as Record<string, any> : {};
+  const declaration = data.declaration && typeof data.declaration === 'object' ? data.declaration as Record<string, any> : {};
   return <section id="preliminary-kyc-form" className="scroll-mt-6 max-h-[calc(100vh-150px)] min-w-0 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
     <article className="mx-auto max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
       <p>Date: {data.completedAt ? new Date(data.completedAt).toLocaleDateString('en-GB') : '-'}</p>
@@ -419,8 +428,20 @@ function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
       ]} />
       <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
       <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.ubos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
-      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.position)])} />
+      <p className="mt-1 font-bold">Total UBO %: {totalOwnership(rows(data.ubos))}%</p>
+      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />
       <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
+      <PreliminaryTable title="Section E: Key Contact Person" headers={['No.', 'Field', 'Details']} rows={[
+        ['1', 'Full Name', value(contact.fullName)], ['2', 'Position', value(contact.position)], ['3', 'Nationality', value(contact.nationality)],
+        ['4', 'Passport Number', value(contact.passportNumber)], ['5', 'Passport Expiry Date', value(contact.passportExpiryDate)],
+        ['6', 'QID Number', value(contact.qidNumber)], ['7', 'QID Expiry Date', value(contact.qidExpiryDate)],
+        ['8', 'Mobile Number', value(contact.mobileNumber)], ['9', 'Email', value(contact.email)]
+      ]} />
+      <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">Section F: Client Declaration</h3><p className="mt-1">By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorised to represent and sign this document on behalf of the proposed entity.</p></section>
+      <PreliminaryTable title="" headers={['Field', 'Details']} rows={[
+        ['Full Name', value(declaration.fullName)], ['Position', value(declaration.position)], ['Date', value(declaration.date)],
+        ['Authorised signature', value(declaration.authorizedSignature)], ['Company Stamp', value(declaration.companyStamp)]
+      ]} />
     </article>
   </section>;
 }

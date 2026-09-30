@@ -53,7 +53,9 @@ export function CrrfWorkspacePage() {
       setWorkspace(
         await saveCrrfWorkspace(id, {
           riskRating: workspace.record.riskRating || '',
-          internalComment: workspace.record.internalComment || ''
+          internalComment: workspace.record.internalComment || '',
+          dmlroComment: workspace.record.dmlroComment || '',
+          mlroComment: workspace.record.mlroComment || ''
         })
       );
       setMessage('CRRF record saved.');
@@ -194,6 +196,8 @@ export function CrrfWorkspacePage() {
             helpText="Internal reference only. These comments are not included in CRRF Excel/PDF exports."
             disabled={!canEdit}
           />
+          {hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="DMLRO comments" value={workspace.record.dmlroComment || ''} onChange={(value) => patchRecord({ dmlroComment: value })} disabled={!canEdit} /> : null}
+          {hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="MLRO comments" value={workspace.record.mlroComment || ''} onChange={(value) => patchRecord({ mlroComment: value })} disabled={!canEdit} /> : null}
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
               <div>

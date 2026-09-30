@@ -5,7 +5,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
+import { safeResponseFileName, standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { ScreeningService } from './screening.service';
 
@@ -51,7 +51,7 @@ export class ScreeningController {
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post('merged-documents/upload')
-  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions(['pdf'])))
+  @UseInterceptors(FilesInterceptor('files', 20, uploadInterceptorOptions(standardDocumentKinds)))
   uploadMergedDocuments(
     @CurrentUser() user: RequestUser,
     @Param('kycCaseId') kycCaseId: string,

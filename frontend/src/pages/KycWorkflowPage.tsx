@@ -1,6 +1,6 @@
 import { Download, Edit3, Eye, FilePlus2, FileText, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCase, KycCaseStatus, listKycCases } from '../services/kyc-workflow.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
@@ -25,6 +25,7 @@ const documentReadyStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_
 
 export function KycWorkflowPage() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [cases, setCases] = useState<KycCase[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
@@ -32,6 +33,12 @@ export function KycWorkflowPage() {
   const [error, setError] = useState('');
   const canCreateCases = hasAnyRole(user, workflowRoles.caseCreation);
   const canEditOrDeleteCases = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
+  const activeFilter = searchParams.get('filter') || '';
+  const visibleCases = cases.filter((kycCase) => {
+    if (activeFilter === 'pending-kyc') return ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED'].includes(kycCase.status);
+    if (activeFilter === 'pending-approvals') return ['SUPERVISOR_REVIEW_PENDING', 'DMLRO_REVIEW_PENDING', 'MLRO_REVIEW_PENDING', 'SEF_DECISION_PENDING'].includes(kycCase.status);
+    return true;
+  });
 
   useEffect(() => {
     loadCases();
@@ -97,6 +104,7 @@ export function KycWorkflowPage() {
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {activeFilter ? <p className="text-sm text-slate-600">Showing {activeFilter === 'pending-kyc' ? 'KYC preparation' : 'approval'} cases. <Link to="/kyc-workflow" className="font-semibold text-brand-700 hover:text-brand-800">Clear filter</Link></p> : null}
 
       <section className="rounded-lg border border-slate-200 bg-white">
         <div className="overflow-x-auto">
@@ -118,8 +126,8 @@ export function KycWorkflowPage() {
                     Loading KYC cases...
                   </td>
                 </tr>
-              ) : cases.length ? (
-                cases.map((kycCase) => (
+              ) : visibleCases.length ? (
+                visibleCases.map((kycCase) => (
                   <tr key={kycCase.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
                       <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/kyc/${kycCase.id}`}>

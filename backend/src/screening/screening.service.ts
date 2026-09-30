@@ -350,7 +350,7 @@ export class ScreeningService {
   ) {
     const kycCase = await this.findCase(user, kycCaseId);
     if (!files.length) {
-      throw new BadRequestException('Select at least one merged screening PDF to upload.');
+      throw new BadRequestException('Select at least one merged screening evidence document to upload.');
     }
 
     const checkType = this.enumValue(ScreeningCheckType, dto.checkType);
@@ -358,7 +358,7 @@ export class ScreeningService {
       throw new BadRequestException('Upload common screening evidence only for NCTC, UN, OFAC, EU, or PPO List. World-Check and Google are result-only checks.');
     }
 
-    validateUploadFiles(files, ['pdf'], 'merged screening PDF');
+    validateUploadFiles(files, ['pdf', 'word', 'excel', 'image'], 'merged screening evidence document');
 
     const root = this.screeningUploadRoot();
     const folder = join(root, kycCase.tenantId, kycCaseId, 'merged');
@@ -384,7 +384,7 @@ export class ScreeningService {
           kycCaseId,
           screeningCaseCheckId: caseCheck.id,
           checkType,
-          documentType: `${this.checkLabel(checkType)} merged PDF evidence`,
+          documentType: `${this.checkLabel(checkType)} merged screening evidence`,
           fileName,
           storagePath: `${kycCase.tenantId}/${kycCaseId}/merged/${storedFileName}`,
           mimeType: file.mimetype || 'application/pdf',
