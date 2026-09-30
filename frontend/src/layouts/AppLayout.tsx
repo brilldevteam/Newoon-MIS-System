@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   SearchCheck,
+  ShieldCheck,
   UserCircle,
   UserRoundPlus,
   Users
@@ -27,6 +28,7 @@ const navItems = [
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake },
   { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks] },
   { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening },
+  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf },
   { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks },
   { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
   { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },

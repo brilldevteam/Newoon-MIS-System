@@ -18,6 +18,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ScreeningModule } from './screening/screening.module';
+import { CrrfModule } from './crrf/crrf.module';
 
 @Module({
   imports: [
@@ -38,7 +39,8 @@ import { ScreeningModule } from './screening/screening.module';
     NotificationsModule,
     AuditLogsModule,
     DashboardModule,
-    ScreeningModule
+    ScreeningModule,
+    CrrfModule
   ],
   controllers: [AppController]
 })

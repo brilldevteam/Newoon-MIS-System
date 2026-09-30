@@ -89,6 +89,8 @@ export type ScreeningConclusionStatus = 'CLEAR' | 'NOT_CLEAR' | 'NO_SANCTION_FOU
 
 export type ScreeningRecordStatus = 'DRAFT' | 'COMPLETED';
 
+export type CrrfRiskRating = 'LOW' | 'MEDIUM' | 'HIGH';
+
 export type ScreeningDocument = {
   id: string;
   documentType: string;
@@ -138,6 +140,50 @@ export type ScreeningListItem = ScreeningRecord & {
   completedChecks: number;
   totalChecks: number;
   documentCount: number;
+};
+
+export type CrrfDocument = {
+  id: string;
+  fileName: string;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
+  createdAt: string;
+};
+
+export type CrrfRecord = {
+  id: string;
+  kycCaseId: string;
+  riskRating?: CrrfRiskRating | null;
+  internalComment?: string | null;
+  dmlroComment?: string | null;
+  mlroComment?: string | null;
+  documents: CrrfDocument[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CrrfWorkspace = {
+  clientInfo: {
+    caseId: string;
+    caseTitle: string;
+    clientId: string;
+    clientName: string;
+    clientCode?: string | null;
+    crNumber?: string | null;
+    country?: string | null;
+    serviceName?: string | null;
+  };
+  record: CrrfRecord;
+};
+
+export type CrrfListItem = CrrfRecord & {
+  clientInfo: CrrfWorkspace['clientInfo'];
+  documentCount: number;
+  kycCase: Pick<KycCase, 'id' | 'title' | 'status' | 'createdAt'> & {
+    client: Pick<Client, 'id' | 'name' | 'registrationNumber' | 'country'>;
+    service?: ClientService | null;
+  };
 };
 
 export type ScreeningEntityOption = {
@@ -658,6 +704,60 @@ export function deleteScreeningDocument(caseId: string, documentId: string) {
 
 export function deleteMergedScreeningDocument(caseId: string, documentId: string) {
   return api.delete<ScreeningContext>(`/kyc/${caseId}/screening/merged-documents/${documentId}`).then((response) => response.data);
+}
+
+export function listCrrfRecords() {
+  return api.get<CrrfListItem[]>('/crrf').then((response) => response.data);
+}
+
+export function getCrrfWorkspace(caseId: string) {
+  return api.get<CrrfWorkspace>(`/kyc/${caseId}/crrf`).then((response) => response.data);
+}
+
+export function saveCrrfWorkspace(caseId: string, payload: { riskRating?: CrrfRiskRating | ''; internalComment?: string; dmlroComment?: string; mlroComment?: string }) {
+  return api.patch<CrrfWorkspace>(`/kyc/${caseId}/crrf`, payload).then((response) => response.data);
+}
+
+export function uploadCrrfDocuments(caseId: string, files: File[]) {
+  const data = new FormData();
+  files.forEach((file) => data.append('files', file));
+  return api
+    .post<CrrfWorkspace>(`/kyc/${caseId}/crrf/documents/upload`, data, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    .then((response) => response.data);
+}
+
+export async function viewCrrfDocument(caseId: string, document: CrrfDocument) {
+  const response = await api.get(`/kyc/${caseId}/crrf/documents/${document.id}/view`, {
+    responseType: 'blob'
+  });
+  const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
+  const url = window.URL.createObjectURL(blob);
+  const canPreview = blob.type.toLowerCase().startsWith('image/') || blob.type.toLowerCase() === 'application/pdf' || blob.type.toLowerCase().startsWith('text/');
+  if (canPreview) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+  downloadBlob(url, document.fileName);
+  window.URL.revokeObjectURL(url);
+}
+
+export function deleteCrrfDocument(caseId: string, documentId: string) {
+  return api.delete<CrrfWorkspace>(`/kyc/${caseId}/crrf/documents/${documentId}`).then((response) => response.data);
+}
+
+export async function exportCrrf(caseId: string, type: 'excel' | 'pdf') {
+  const response = await api.get(`/kyc/${caseId}/crrf/export/${type}`, {
+    responseType: 'blob'
+  });
+  const contentDisposition = String(response.headers['content-disposition'] || '');
+  const match = contentDisposition.match(/filename="?([^"]+)"?/i);
+  const fileName = match?.[1] || `crrf-report.${type === 'excel' ? 'xls' : 'pdf'}`;
+  const url = window.URL.createObjectURL(response.data);
+  downloadBlob(url, fileName);
+  window.URL.revokeObjectURL(url);
 }
 
 export function submitToAml(id: string) {
