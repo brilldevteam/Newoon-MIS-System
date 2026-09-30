@@ -59,6 +59,8 @@ model Tenant {
   clientActivationChecklists ClientActivationChecklist[]
   kycGeneratedDocuments KycGeneratedDocument[]
   screeningRecords ScreeningRecord[]
+  screeningCaseChecks ScreeningCaseCheck[]
+  screeningCaseDocuments ScreeningCaseDocument[]
   screeningChecks ScreeningCheck[]
   screeningDocuments ScreeningDocument[]
   statusHistory KycCaseStatusHistory[]
@@ -356,6 +358,13 @@ enum ScreeningResultStatus {
   CONFIRMED_MATCH
 }
 
+enum ScreeningConclusionStatus {
+  CLEAR
+  NOT_CLEAR
+  NO_SANCTION_FOUND
+  SANCTION_FOUND
+}
+
 enum ScreeningRecordStatus {
   DRAFT
   COMPLETED
@@ -540,6 +549,8 @@ model KycCase {
   activationChecklist ClientActivationChecklist?
   kycGeneratedDocuments KycGeneratedDocument[]
   screeningRecords  ScreeningRecord[]
+  screeningCaseChecks ScreeningCaseCheck[]
+  screeningCaseDocuments ScreeningCaseDocument[]
   submittedToAmlAt  DateTime?
   amlReviewStartedAt DateTime?
   createdAt         DateTime               @default(now())
@@ -1027,6 +1038,7 @@ model ScreeningRecord {
   identifier     String?
   country        String?
   status         ScreeningRecordStatus @default(DRAFT)
+  conclusionStatus ScreeningConclusionStatus?
   remarks        String?
   createdById    String?
   updatedById    String?
@@ -1039,6 +1051,47 @@ model ScreeningRecord {
   @@index([kycCaseId])
   @@index([clientId])
   @@index([status])
+}
+
+model ScreeningCaseDocument {
+  id           String             @id @default(uuid())
+  tenantId     String
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase            @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  screeningCaseCheckId String?
+  screeningCaseCheck   ScreeningCaseCheck? @relation(fields: [screeningCaseCheckId], references: [id], onDelete: SetNull)
+  checkType    ScreeningCheckType
+  documentType String
+  fileName     String
+  storagePath  String?
+  mimeType     String?
+  size         Int?
+  uploadedById String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([tenantId])
+  @@index([kycCaseId])
+  @@index([screeningCaseCheckId])
+  @@index([checkType])
+}
+
+model ScreeningCaseCheck {
+  id           String                @id @default(uuid())
+  tenantId     String
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kycCaseId    String
+  kycCase      KycCase               @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  checkType    ScreeningCheckType
+  resultStatus ScreeningResultStatus @default(NOT_CHECKED)
+  documents    ScreeningCaseDocument[]
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([kycCaseId, checkType])
+  @@index([tenantId])
+  @@index([kycCaseId])
 }
 
 model ScreeningCheck {
