@@ -17,7 +17,7 @@ import {
   uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
-import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
@@ -175,7 +175,7 @@ export function KycCaseDetailsPage() {
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'}
           </p>
         </div>
-        <span className="w-fit rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
+        <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
           {kycStatusLabel(kycCase.status)}
         </span>
       </div>
@@ -219,29 +219,29 @@ export function KycCaseDetailsPage() {
       </div>
 
       {isApproved ? (
-        <section className="rounded-lg border border-brand-200 bg-brand-50 p-5">
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <p className="text-base font-semibold text-brand-900">KYC fully approved and ready for activation</p>
-              <p className="mt-1 text-sm text-brand-700">
+              <p className="text-base font-semibold text-emerald-900">KYC fully approved and ready for activation</p>
+              <p className="mt-1 text-sm text-emerald-700">
                 Client details, KYC form data, approval signatures, uploaded preparation documents, workflow comments, and generated documents are stored against this case.
               </p>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
                 <div>
-                  <dt className="font-semibold text-brand-900">Client</dt>
-                  <dd className="text-brand-700">{kycCase.client.name}</dd>
+                  <dt className="font-semibold text-emerald-900">Client</dt>
+                  <dd className="text-emerald-700">{kycCase.client.name}</dd>
                 </div>
                 <div>
-                  <dt className="font-semibold text-brand-900">Primary contact</dt>
-                  <dd className="text-brand-700">{primaryContact?.name || 'Not assigned'}</dd>
+                  <dt className="font-semibold text-emerald-900">Primary contact</dt>
+                  <dd className="text-emerald-700">{primaryContact?.name || 'Not assigned'}</dd>
                 </div>
                 <div>
-                  <dt className="font-semibold text-brand-900">Uploaded documents</dt>
-                  <dd className="text-brand-700">{kycCase.legalDocuments.length}</dd>
+                  <dt className="font-semibold text-emerald-900">Uploaded documents</dt>
+                  <dd className="text-emerald-700">{kycCase.legalDocuments.length}</dd>
                 </div>
                 <div>
-                  <dt className="font-semibold text-brand-900">Current status</dt>
-                  <dd className="text-brand-700">{kycStatusLabel(kycCase.status)}</dd>
+                  <dt className="font-semibold text-emerald-900">Current status</dt>
+                  <dd className="text-emerald-700">{kycStatusLabel(kycCase.status)}</dd>
                 </div>
               </dl>
               {downloadError ? <p className="mt-3 text-sm text-red-700">{downloadError}</p> : null}
@@ -277,7 +277,11 @@ export function KycCaseDetailsPage() {
             <div
               key={step}
               className={`rounded-md border p-3 ${
-                index <= currentStep ? 'border-brand-200 bg-brand-50 text-brand-800' : 'border-slate-200 text-slate-500'
+                index < currentStep
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : index === currentStep
+                    ? 'border-blue-200 bg-blue-50 text-blue-800'
+                    : 'border-slate-200 text-slate-500'
               }`}
             >
               <p className="text-xs font-semibold">Step {index + 1}</p>

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCase, KycCaseStatus, listKycCases } from '../services/kyc-workflow.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
-import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 function getRequestErrorMessage(error: any, fallback: string) {
   const message = error.response?.data?.message;
@@ -121,7 +121,7 @@ export function KycWorkflowPage() {
                 cases.map((kycCase) => (
                   <tr key={kycCase.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
-                      <Link className="font-medium text-brand-700 hover:text-brand-800" to={`/kyc/${kycCase.id}`}>
+                      <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/kyc/${kycCase.id}`}>
                         {kycCase.title}
                       </Link>
                     </td>
@@ -129,7 +129,7 @@ export function KycWorkflowPage() {
                     <td className="px-4 py-3 text-slate-600">{kycCase.service?.name || 'Not selected'}</td>
                     <td className="px-4 py-3 text-slate-600">{kycCase.legalDocuments.length}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
                         {kycStatusLabel(kycCase.status)}
                       </span>
                     </td>

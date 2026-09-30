@@ -1,5 +1,5 @@
-import { Download, FileText, FileUp, MessageSquare, Save, Send } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { Download, FileSpreadsheet, FileText, FileUp, MessageSquare, Save, SearchCheck, Send } from 'lucide-react';
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { getApiErrorMessage } from '../services/api';
@@ -121,6 +121,8 @@ export function InternalReviewWorkspacePage() {
   const canUseActiveStage = stageAccess[activeStage];
   const canEdit = canUseActiveStage && !submittedStages.has(activeStage);
   const canOpenKycPart1 = hasAnyRole(user, workflowRoles.kycFormBuilder);
+  const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
+  const canOpenCrrf = hasAnyRole(user, workflowRoles.crrf);
   const signedUploadStage = getSignedUploadStage(user, activeStage);
   const canUploadSignedDocuments = Boolean(signedUploadStage);
   const signedDocumentStageLabel = signedUploadStage === 'DMLRO_SIGNED_KYC' ? 'DMLRO signed KYC' : signedUploadStage === 'MLRO_SIGNED_KYC' ? 'MLRO signed KYC' : 'Final signed KYC';
@@ -232,6 +234,22 @@ export function InternalReviewWorkspacePage() {
 
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-base font-semibold text-slate-950">Review Package</h2>
+        <p className="mt-1 text-sm text-slate-500">Review the KYC form, screening evidence, and CRRF together before taking the next decision.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {canOpenKycPart1 ? (
+            <PackageLink to={`/kyc/${workspace.kycCase.id}/form`} icon={<FileText className="h-5 w-5" />} title="KYC Form" description="Client KYC sections and generated documents" />
+          ) : null}
+          {canOpenScreening ? (
+            <PackageLink to={`/kyc/${workspace.kycCase.id}/screening`} icon={<SearchCheck className="h-5 w-5" />} title="Screening" description="Screening records, results, and evidence" />
+          ) : null}
+          {canOpenCrrf ? (
+            <PackageLink to={`/kyc/${workspace.kycCase.id}/crrf`} icon={<FileSpreadsheet className="h-5 w-5" />} title="CRRF" description="Risk rating, internal comments, and CRRF files" />
+          ) : null}
+        </div>
+      </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-base font-semibold text-slate-950">Approval Sequence</h2>
@@ -402,6 +420,18 @@ export function InternalReviewWorkspacePage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function PackageLink({ to, icon, title, description }: { to: string; icon: ReactNode; title: string; description: string }) {
+  return (
+    <Link to={to} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-left hover:border-brand-200 hover:bg-brand-50">
+      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-brand-700 shadow-sm">{icon}</span>
+      <span className="min-w-0">
+        <span className="block font-semibold text-slate-950">{title}</span>
+        <span className="mt-1 block text-sm text-slate-500">{description}</span>
+      </span>
+    </Link>
   );
 }
 

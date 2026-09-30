@@ -18,6 +18,13 @@ const enquiryStatusLabels: Record<string, string> = {
   CLOSED: 'Closed'
 };
 
+function enquiryStatusToneClass(value: string) {
+  if (['READY_FOR_KYC', 'CONVERTED_TO_KYC'].includes(value)) return 'bg-emerald-50 text-emerald-700';
+  if (value === 'SUBMITTED_TO_AML_SUPERVISOR') return 'bg-blue-50 text-blue-700';
+  if (value === 'RETURNED_TO_BD') return 'bg-amber-50 text-amber-700';
+  return 'bg-slate-100 text-slate-700';
+}
+
 export function EnquiryListPage() {
   const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,7 +102,7 @@ export function EnquiryListPage() {
                   <tr key={enquiry.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-medium text-slate-950">{enquiry.enquiryCode}</td>
                     <td className="px-4 py-3">
-                      <Link className="font-medium text-brand-700 hover:text-brand-800" to={`/enquiries/${enquiry.id}`}>
+                      <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/enquiries/${enquiry.id}`}>
                         {enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry'}
                       </Link>
                       <p className="text-xs text-slate-500">{enquiry.keyContactName || 'Contact not captured'}</p>
@@ -103,7 +110,7 @@ export function EnquiryListPage() {
                     <td className="px-4 py-3 text-slate-600">{enquiryTypeLabels[enquiry.enquiryType] || enquiry.enquiryType}</td>
                     <td className="max-w-md truncate px-4 py-3 text-slate-600">{enquiry.requestedServices?.join(', ') || 'Not selected'}</td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${enquiryStatusToneClass(enquiry.status)}`}>
                         {enquiryStatusLabels[enquiry.status] || enquiry.status}
                       </span>
                     </td>

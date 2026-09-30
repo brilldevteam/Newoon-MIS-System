@@ -2,7 +2,7 @@ import { FilePlus2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Client, getClient } from '../services/kyc-workflow.service';
-import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 export function ClientDetailsPage() {
   const { id } = useParams();
@@ -82,7 +82,7 @@ export function ClientDetailsPage() {
                     <p className="font-medium text-slate-950">{kycCase.title}</p>
                     <p className="text-sm text-slate-500">{kycCase.service?.name || 'Service not selected'}</p>
                   </div>
-                  <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
                     {kycStatusLabel(kycCase.status)}
                   </span>
                 </div>

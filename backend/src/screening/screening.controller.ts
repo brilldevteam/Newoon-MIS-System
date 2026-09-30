@@ -13,7 +13,7 @@ import { ScreeningService } from './screening.service';
 export class ScreeningController {
   constructor(private readonly screeningService: ScreeningService) {}
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('context')
   getContext(@CurrentUser() user: RequestUser, @Param('kycCaseId') kycCaseId: string) {
     return this.screeningService.getContext(user, kycCaseId);
@@ -71,7 +71,7 @@ export class ScreeningController {
     return this.screeningService.updateMergedCheck(user, kycCaseId, checkType, dto);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('merged-documents/:documentId/view')
   async viewMergedDocument(
     @CurrentUser() user: RequestUser,
@@ -104,7 +104,7 @@ export class ScreeningController {
     return this.screeningService.uploadDocuments(user, kycCaseId, recordId, dto, files || []);
   }
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get('documents/:documentId/view')
   async viewDocument(
     @CurrentUser() user: RequestUser,
@@ -130,7 +130,7 @@ export class ScreeningController {
 export class ScreeningListController {
   constructor(private readonly screeningService: ScreeningService) {}
 
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get()
   listRecords(@CurrentUser() user: RequestUser) {
     return this.screeningService.listRecords(user);

@@ -40,6 +40,48 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-09-08 - Review Package Access for KYC, Screening, and CRRF
+
+Module:
+- Internal review workflow
+- Screening workspace
+- CRRF workflow
+
+Summary:
+- Added a Review Package panel inside the Internal Review Workspace so reviewers can open the KYC Form, Screening, and CRRF sections together from one place.
+- Added the same Review Package panel to the KYC Form review screen so DMLRO, MLRO, and SEF users see the KYC Form, Screening, and CRRF together when opening a review task.
+- Changed the KYC Form Review Package Screening and CRRF actions into in-page detail panels instead of redirecting reviewers away from the review screen.
+- Hid the KYC form editor and document preview while the Screening or CRRF package tab is selected, giving reviewers a cleaner focused view of the selected section.
+- Added file-level view actions, Screening result notes, record remarks, and CRRF internal comments to the in-page review package so reviewers can inspect evidence before approval.
+- Refined the in-page Review Package UI with softer grouping, clearer active states, readable evidence rows, and result badges so DMLRO/MLRO reviewers can scan the package more comfortably.
+- Added collapsible Screening record cards in the review package with Collapse all and Expand all controls so large Screening packages do not force excessive page scrolling.
+- Separated Newoon brand red from semantic UI states so success/approved statuses use green, pending/in-progress statuses use amber or blue, errors remain red, and selected review package tabs no longer look like warnings.
+- Updated DMLRO, MLRO, and SEF notification clicks to open the modern KYC Form Review Package screen instead of the older internal review workspace.
+- Allowed DMLRO, MLRO, and SEF users to view Screening records and screening evidence after AML prepares the screening section.
+- Kept Screening edit, upload, delete, save, and finalize actions limited to AML/admin roles so reviewer access is read-only.
+- Updated role-based navigation so Screening appears for DMLRO, MLRO, and SEF review users.
+
+Changed Files:
+- `backend/src/screening/screening.controller.ts`
+- `frontend/src/pages/InternalReviewWorkspacePage.tsx`
+- `frontend/src/pages/KycFormEditorPage.tsx`
+- `frontend/src/pages/KycScreeningPage.tsx`
+- `frontend/src/utils/access-control.ts`
+- `docs/CHANGE_LOG_REPORT.md`
+
+Database Changes:
+- None
+
+Verification:
+- `npm.cmd run build` passed.
+
+Git:
+- Branch: `feat/review-package-ui-evidence`
+- Commit: Branch head after push
+
+Deployment Notes:
+- Frontend and backend rebuild required.
+
 ## 2026-09-03 - CRRF Internal Comments and Client Info Fallback
 
 Module:
