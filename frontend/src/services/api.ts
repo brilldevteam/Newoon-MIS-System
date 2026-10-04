@@ -17,6 +17,10 @@ export function getApiErrorMessage(error: any, fallback: string) {
   if (typeof data === 'string') return data;
   if (typeof data?.message === 'string') return data.message;
   if (Array.isArray(data?.message)) return data.message.join(', ');
+  // The API exception filter wraps Nest exception responses in `error`.
+  // Read the nested message so users receive a useful action instead of a generic failure.
+  if (typeof data?.error?.message?.message === 'string') return data.error.message.message;
+  if (Array.isArray(data?.error?.message?.message)) return data.error.message.message.join(', ');
   if (typeof data?.error?.message === 'string') return data.error.message;
   if (Array.isArray(data?.error?.message)) return data.error.message.join(', ');
   if (typeof data?.error === 'string') return data.error;

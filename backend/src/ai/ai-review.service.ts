@@ -1,4 +1,4 @@
-import { BadGatewayException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RequestUser } from '../common/types/request-user.type';
 
@@ -14,6 +14,8 @@ export type AiAssistantMessage = { role: 'user' | 'assistant'; content: string }
 
 @Injectable()
 export class AiReviewService {
+  private readonly logger = new Logger(AiReviewService.name);
+
   constructor(private readonly config: ConfigService) {}
 
   async reviewKycForm(kycForm: Record<string, unknown>): Promise<AiKycReview> {
@@ -85,6 +87,7 @@ export class AiReviewService {
 
       const body = await response.json() as { output_text?: string; error?: { message?: string } };
       if (!response.ok) {
+        this.logger.warn(`OpenAI KYC review request failed with HTTP ${response.status}.`);
         throw new BadGatewayException(body.error?.message || 'The AI review service could not complete the request.');
       }
       if (!body.output_text) {
@@ -94,8 +97,10 @@ export class AiReviewService {
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
+        this.logger.warn('OpenAI KYC review request timed out.');
         throw new BadGatewayException('The AI review took too long. Please try again.');
       }
+      this.logger.error('OpenAI KYC review request failed before a response was received.', error instanceof Error ? error.stack : undefined);
       throw new BadGatewayException('Unable to contact the AI review service. Confirm the API key and server internet connection, then try again.');
     } finally {
       clearTimeout(timeout);
@@ -144,12 +149,19 @@ export class AiReviewService {
         })
       });
       const body = await response.json() as { output_text?: string; error?: { message?: string } };
-      if (!response.ok) throw new BadGatewayException(body.error?.message || 'The AI Assistant could not answer that question.');
+      if (!response.ok) {
+        this.logger.warn(`OpenAI Assistant request failed with HTTP ${response.status}.`);
+        throw new BadGatewayException(body.error?.message || 'The AI Assistant could not answer that question.');
+      }
       if (!body.output_text) throw new BadGatewayException('The AI Assistant returned no answer. Please try again.');
       return { message: body.output_text.trim() };
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
-      if (error instanceof Error && error.name === 'AbortError') throw new BadGatewayException('The AI Assistant took too long to respond. Please try again.');
+      if (error instanceof Error && error.name === 'AbortError') {
+        this.logger.warn('OpenAI Assistant request timed out.');
+        throw new BadGatewayException('The AI Assistant took too long to respond. Please try again.');
+      }
+      this.logger.error('OpenAI Assistant request failed before a response was received.', error instanceof Error ? error.stack : undefined);
       throw new BadGatewayException('Unable to contact the AI Assistant. Confirm the API key and server internet connection, then try again.');
     } finally {
       clearTimeout(timeout);
