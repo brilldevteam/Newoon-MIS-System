@@ -123,7 +123,7 @@ export class AiReviewService {
       }
       return JSON.parse(body.output_text) as AiKycReview;
     } catch (error) {
-      if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
+      if (error instanceof HttpException) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
         this.logger.warn('OpenAI KYC review request timed out.');
         throw new BadGatewayException('The AI review took too long. Please try again.');
@@ -183,7 +183,7 @@ export class AiReviewService {
       if (!body.output_text) throw new BadGatewayException('The AI Assistant returned no answer. Please try again.');
       return { message: body.output_text.trim() };
     } catch (error) {
-      if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
+      if (error instanceof HttpException) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
         this.logger.warn('OpenAI Assistant request timed out.');
         throw new BadGatewayException('The AI Assistant took too long to respond. Please try again.');
