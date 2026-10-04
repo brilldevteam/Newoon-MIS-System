@@ -1,9 +1,9 @@
 import PizZip from 'pizzip';
 
 // Build native Word tables with automatic heights, rather than inheriting template geometry.
-export function buildKycDocx(data: Record<string, any>, payload: Record<string, any>) {
+export function buildKycDocx(data: Record<string, any>, payload: Record<string, any>, letterheadTemplate?: Buffer) {
   const xml = (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const p = (value: unknown, heading = false) => `<w:p><w:pPr><w:spacing w:before="${heading ? 180 : 0}" w:after="${heading ? 90 : 60}" w:line="260" w:lineRule="auto"/>${heading ? '<w:keepNext/>' : ''}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="${heading ? 24 : 20}"/>${heading ? '<w:b/>' : ''}</w:rPr><w:t xml:space="preserve">${xml(value || '-')}</w:t></w:r></w:p>`;
+  const p = (value: unknown, heading = false) => `<w:p><w:pPr><w:spacing w:before="${heading ? 180 : 0}" w:after="${heading ? 90 : 60}" w:line="260" w:lineRule="auto"/>${heading ? '<w:keepNext/><w:shd w:fill="DCE6F1"/>' : ''}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:sz w:val="${heading ? 24 : 20}"/>${heading ? '<w:b/>' : ''}</w:rPr><w:t xml:space="preserve">${xml(value || '-')}</w:t></w:r></w:p>`;
   const table = (headers: string[], rows: unknown[][], widths: number[]) => {
     const row = (cells: unknown[], header = false) => `<w:tr><w:trPr>${header ? '<w:tblHeader/>' : ''}</w:trPr>${cells.map((cell, i) => `<w:tc><w:tcPr><w:tcW w:w="${widths[i]}" w:type="dxa"/><w:vAlign w:val="top"/>${header ? '<w:shd w:fill="E8EDF2"/>' : ''}</w:tcPr>${String(cell || '-').split('\n').map(line => p(line)).join('')}</w:tc>`).join('')}</w:tr>`;
     return `<w:tbl><w:tblPr><w:tblW w:w="10206" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="85" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="85" w:type="dxa"/></w:tblCellMar><w:tblBorders>${['top','left','bottom','right','insideH','insideV'].map(edge => `<w:${edge} w:val="single" w:sz="4" w:color="94A3B8"/>`).join('')}</w:tblBorders></w:tblPr><w:tblGrid>${widths.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${row(headers, true)}${rows.map(cells => row(cells)).join('')}</w:tbl>${p(' ')}`;
@@ -11,7 +11,9 @@ export function buildKycDocx(data: Record<string, any>, payload: Record<string, 
   const fields = (pairs: string[][]) => table(['Field', 'Details'], pairs.map(([label,key]) => [label,data[key]]), [3000,7206]);
   const a = payload.sectionA || {}, b = payload.sectionB || {}, d = payload.sectionD || {}, f = payload.sectionF || {};
   const people = (rows: any[], prefix: string) => table(['Full name','Nationality','Date of birth','QID / Passport / CR','Ownership %','Address'], rows.map(r => [r[`${prefix}FullName`],r[`${prefix}Nationality`],r[`${prefix}DateOfBirth`],r[`${prefix}IdentityNumber`],r[`${prefix}OwnershipPercentage`],r[`${prefix}ResidenceAddress`]]), [2000,1200,1300,1900,1200,2606]);
-  const parts = [p('NEWOON',true),p('Know Your Customer Form',true),p(`Date: ${data.date || '-'}    Reference: ${data.reference || '-'}`),
+  const parts = [p(`Date: ${data.date || '-'}    Reference: ${data.reference || '-'}`),
+    `<w:p><w:pPr><w:jc w:val="center"/><w:keepNext/><w:spacing w:before="160" w:after="160"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="28"/></w:rPr><w:t>Know Your Client (KYC)</w:t></w:r></w:p>`,
+    p('Newoon LLC, as a registered business support services provider in the Qatar Financial Centre (QFC), is required to obtain, maintain and keep up to date Know Your Client information for all clients in line with applicable regulatory and compliance requirements. We request the following information and supporting documentation to understand your business and complete our due diligence.'),
     p('A. General Company Information',true),fields([['Legal name','legalName'],['Commercial registration number','commercialRegistrationNo'],['Tax identification number','taxIdentificationNo'],['Date of incorporation','dateOfIncorporation'],['Country of incorporation','countryOfIncorporation'],['Legal form','legalForm'],['Registered office address','registeredOfficeAddress'],['Telephone','telephone'],['Email','email'],['Website','website'],['Business nature','businessNature'],['License activities','licenseActivities'],['Related industry','relatedIndustry'],['Requested services','prospectiveService']]),
     p('B. Ownership and Beneficial Owners',true),people(data.shareholders || [],'shareholder'),p(`Total shareholder ownership: ${data.totalOwnershipPercentage || '0'}%`),p('Ultimate Beneficial Owners',true),people(data.ubos || [],'ubo'),p(`Total UBO ownership: ${data.totalUboPercentage || '0'}%`),p(`Beneficial owners differ from shareholders: ${b.uboDifferentFromShareholders || '-'}`),p(b.uboGroupStructureNotes),
     p('Ownership Structure',true),
@@ -25,9 +27,18 @@ export function buildKycDocx(data: Record<string, any>, payload: Record<string, 
     p('G. Client Declaration',true),p('I confirm that the information and documents provided are true, complete and up to date, and that I am authorised to represent the entity.'),fields([['Full name','declarationFullName'],['Position','declarationPosition'],['Date','declarationDate'],['Authorized signature','signatureFileName'],['Company stamp','stampFileName']]),
     p('H. Internal Use Only',true),fields([['Accuracy confirmed','amlAccuracyChecked'],['Clarification / findings','amlClarificationFindings'],['Risk classification','riskClassification'],['Due diligence type','dueDiligenceType']]));
   for (const [prefix,label] of [['aml','AML Supervisor'],['dmlro','DMLRO'],['mlro','MLRO'],['sef','SEF']]) parts.push(p(label,true),fields([['Name',`${prefix}Name`],['Signature',`${prefix}SignatureFileName`],['Date',`${prefix}Date`],['Decision',`${prefix}Decision`],['Conditions',`${prefix}Conditions`],['Reason',`${prefix}Reason`],['Comments',`${prefix}Comments`]]));
-  const zip = new PizZip();
-  zip.file('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  const zip = letterheadTemplate ? new PizZip(letterheadTemplate) : new PizZip();
+  if (!letterheadTemplate) zip.file('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
   zip.file('_rels/.rels','<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${parts.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="850" w:right="850" w:bottom="850" w:left="850"/></w:sectPr></w:body></w:document>`);
+  let refs = '';
+  let relationships = zip.file('word/_rels/document.xml.rels')?.asText() || '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  for (const kind of ['header', 'footer']) {
+    if (!zip.file(`word/${kind}1.xml`)) continue;
+    const id = `rIdKycLetterhead${kind}`;
+    relationships = relationships.replace('</Relationships>', `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${kind}" Target="${kind}1.xml"/></Relationships>`);
+    refs += `<w:${kind}Reference w:type="default" r:id="${id}"/>`;
+  }
+  zip.file('word/_rels/document.xml.rels', relationships);
+  zip.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${parts.join('')}<w:sectPr>${refs}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="2000" w:right="850" w:bottom="1000" w:left="850" w:header="300" w:footer="535"/></w:sectPr></w:body></w:document>`);
   return zip;
 }

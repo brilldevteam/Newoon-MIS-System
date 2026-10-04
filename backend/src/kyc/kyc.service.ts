@@ -3012,7 +3012,7 @@ export class KycService {
 
   private buildDocx(payload: SerializedKycForm) {
     const templateData = this.templateData(payload);
-    const zip = buildKycDocx(templateData, payload);
+    const zip = buildKycDocx(templateData, payload, this.loadDocxTemplate());
     this.applyDocxImages(zip, this.docxImageReplacements(templateData));
     return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
