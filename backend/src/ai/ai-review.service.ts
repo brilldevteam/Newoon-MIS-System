@@ -1,4 +1,10 @@
-import { BadGatewayException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  TooManyRequestsException
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RequestUser } from '../common/types/request-user.type';
 
@@ -11,12 +17,33 @@ export type AiKycReview = {
 };
 
 export type AiAssistantMessage = { role: 'user' | 'assistant'; content: string };
+type OpenAiError = { message?: string; code?: string; type?: string };
 
 @Injectable()
 export class AiReviewService {
   private readonly logger = new Logger(AiReviewService.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  private providerException(feature: 'AI review' | 'AI Assistant', status: number, error?: OpenAiError) {
+    const code = error?.code || error?.type || 'no-provider-code';
+    this.logger.warn(`OpenAI ${feature} request failed with HTTP ${status} (${code}).`);
+
+    if (status === 429) {
+      const isQuotaIssue = error?.code === 'insufficient_quota' || /quota|billing|credit/i.test(error?.message || '');
+      return new TooManyRequestsException(
+        isQuotaIssue
+          ? 'AI service is unavailable because the configured OpenAI project has no available API credits. Add billing or credits to that OpenAI project, then try again.'
+          : 'AI service is temporarily rate-limited. Wait one minute and try again.'
+      );
+    }
+
+    if (status === 401 || status === 403) {
+      return new ServiceUnavailableException('AI service authentication failed. Replace OPENAI_API_KEY in backend/.env with an active key from the correct OpenAI project, then restart the backend.');
+    }
+
+    return new BadGatewayException(error?.message || `The ${feature} service could not complete the request.`);
+  }
 
   async reviewKycForm(kycForm: Record<string, unknown>): Promise<AiKycReview> {
     const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim();
@@ -85,10 +112,9 @@ export class AiReviewService {
         })
       });
 
-      const body = await response.json() as { output_text?: string; error?: { message?: string } };
+      const body = await response.json() as { output_text?: string; error?: OpenAiError };
       if (!response.ok) {
-        this.logger.warn(`OpenAI KYC review request failed with HTTP ${response.status}.`);
-        throw new BadGatewayException(body.error?.message || 'The AI review service could not complete the request.');
+        throw this.providerException('AI review', response.status, body.error);
       }
       if (!body.output_text) {
         throw new BadGatewayException('The AI review service returned no review result. Please try again.');
@@ -148,10 +174,9 @@ export class AiReviewService {
           ]
         })
       });
-      const body = await response.json() as { output_text?: string; error?: { message?: string } };
+      const body = await response.json() as { output_text?: string; error?: OpenAiError };
       if (!response.ok) {
-        this.logger.warn(`OpenAI Assistant request failed with HTTP ${response.status}.`);
-        throw new BadGatewayException(body.error?.message || 'The AI Assistant could not answer that question.');
+        throw this.providerException('AI Assistant', response.status, body.error);
       }
       if (!body.output_text) throw new BadGatewayException('The AI Assistant returned no answer. Please try again.');
       return { message: body.output_text.trim() };

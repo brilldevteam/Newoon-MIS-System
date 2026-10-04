@@ -14,15 +14,22 @@ api.interceptors.request.use((config) => {
 
 export function getApiErrorMessage(error: any, fallback: string) {
   const data = error?.response?.data;
-  if (typeof data === 'string') return data;
-  if (typeof data?.message === 'string') return data.message;
-  if (Array.isArray(data?.message)) return data.message.join(', ');
-  // The API exception filter wraps Nest exception responses in `error`.
-  // Read the nested message so users receive a useful action instead of a generic failure.
-  if (typeof data?.error?.message?.message === 'string') return data.error.message.message;
-  if (Array.isArray(data?.error?.message?.message)) return data.error.message.message.join(', ');
-  if (typeof data?.error?.message === 'string') return data.error.message;
-  if (Array.isArray(data?.error?.message)) return data.error.message.join(', ');
-  if (typeof data?.error === 'string') return data.error;
+  const message = findErrorMessage(data);
+  if (message) return message;
+  if (error?.response?.status === 429) return 'AI service is temporarily rate-limited. Wait one minute and try again.';
   return fallback;
+}
+
+function findErrorMessage(value: unknown, depth = 0): string {
+  if (depth > 5 || value == null) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map((item) => findErrorMessage(item, depth + 1)).filter(Boolean).join(', ');
+  if (typeof value !== 'object') return '';
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['message', 'error', 'detail']) {
+    const message = findErrorMessage(record[key], depth + 1);
+    if (message && !['Bad Gateway', 'Too Many Requests', 'Internal Server Error'].includes(message)) return message;
+  }
+  return '';
 }
