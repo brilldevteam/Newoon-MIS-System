@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KYC Export Review</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px Arial, sans-serif; color: #172033; background: #eef1f4; }
+    header { padding: 20px 24px; background: white; border-bottom: 1px solid #cbd2d9; }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    nav { display: flex; gap: 24px; flex-wrap: wrap; }
+    a { color: #8d2428; }
+    main { max-width: 1020px; padding: 24px; margin: auto; }
+    figure { margin: 0 0 28px; }
+    figcaption { margin-bottom: 8px; font-weight: bold; }
+    img { display: block; width: 100%; height: auto; border: 1px solid #cbd2d9; background: white; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>KYC Export Review</h1>
+    <nav><a href="kyc-sample.docx">Sample DOCX</a><a href="kyc-sample.pdf">Word-rendered PDF</a><a href="ownership-diagram.png">Ownership diagram</a></nav>
+  </header>
+  <main id="pages"></main>
+  <script>
+    // The render script updates this count from Word's PDF output.
+    for (let number = 1; number <= 4; number++) {
+      const figure = document.createElement('figure');
+      const label = document.createElement('figcaption');
+      label.textContent = `Page ${number}`;
+      const image = document.createElement('img');
+      image.src = `page-${number}.png`;
+      image.alt = `Word-rendered KYC sample page ${number}`;
+      figure.append(label, image);
+      document.getElementById('pages').append(figure);
+    }
+  </script>
+</body>
+</html>

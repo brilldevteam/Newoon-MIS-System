@@ -38,6 +38,7 @@ import { UpdateKycCaseDto } from './dto/update-kyc-case.dto';
 import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
 import { buildKycDocx } from './kyc-docx';
+import { renderOwnershipDiagram } from './ownership-diagram';
 
 const execFileAsync = promisify(execFile);
 
@@ -3453,7 +3454,7 @@ ${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date',
       contentTypesXml = this.ensureContentType(contentTypesXml, replacement.image.extension, replacement.image.mimeType);
       documentXml = documentXml.replace(
         new RegExp(`<w:t[^>]*>${this.escapeRegExp(replacement.token)}</w:t>`, 'g'),
-        this.docxImageDrawing(relId, replacement.size)
+        this.docxImageDrawing(relId, replacement.size).replace('<wp:docPr id="1"', `<wp:docPr id="${10000 + index}"`)
       );
     });
 
@@ -3558,74 +3559,9 @@ ${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date',
 
   private ownershipStructureImageDataUrl(rootName: string, rows: RowPayload[]) {
     const nodes = this.ownershipDiagramNodes(rootName || 'Client company', rows);
-    const palette = ['#dbeafe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
-    const labelPalette = ['#0f172a', '#bfdbfe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
-    const framePadding = 18;
-    const labelWidth = 110;
-    const diagramLeft = framePadding + labelWidth + 50;
-    const diagramRight = 38;
-    const paddingTop = 74;
-    const paddingBottom = 36;
-    const levelGap = 116;
-    const nodeWidth = 220;
-    const nodeHeight = 64;
-    const width = Math.max(1120, diagramLeft + diagramRight + nodes.leafCount * 245);
-    const height = Math.max(360, paddingTop + paddingBottom + (nodes.maxDepth + 1) * levelGap + nodeHeight);
-    const contentWidth = width - diagramLeft - diagramRight;
-    const centerY = (depth: number) => paddingTop + depth * levelGap;
-    const centerX = (x: number) => diagramLeft + x * contentWidth;
-
-    const image = this.createPngCanvas(width, height, '#ffffff');
-    this.drawRect(image, 8, 8, width - 16, height - 16, '#ffffff', '#111827');
-    this.drawRect(image, 14, 14, width - 28, 1, '#111827', '#111827');
-    this.drawText(image, `${rootName || 'CLIENT'} - OWNERSHIP STRUCTURE`, Math.max(22, Math.round(width / 2) - 170), 32, '#0f172a', 2);
-
-    for (let depth = 0; depth <= nodes.maxDepth; depth++) {
-      const y = Math.round(centerY(depth) + 10);
-      const isRootLayer = depth === 0;
-      this.drawRect(image, framePadding + 10, y, labelWidth, 42, labelPalette[depth] || '#e2e8f0', '#64748b');
-      this.drawText(image, `LAYER ${depth}`, framePadding + 30, y + 14, isRootLayer ? '#ffffff' : '#0f172a', 1);
-    }
-
-    for (const item of nodes.items.filter((item) => item.parentId)) {
-      const parent = nodes.items.find((candidate) => candidate.id === item.parentId);
-      if (!parent) continue;
-      const x1 = Math.round(centerX(parent.x));
-      const y1 = Math.round(centerY(parent.depth) + nodeHeight);
-      const x2 = Math.round(centerX(item.x));
-      const y2 = Math.round(centerY(item.depth));
-      const elbowY = Math.round((y1 + y2) / 2);
-      this.drawLine(image, x1, y1, x1, elbowY, '#111827');
-      this.drawLine(image, x1, elbowY, x2, elbowY, '#111827');
-      this.drawLine(image, x2, elbowY, x2, y2, '#111827');
-      this.drawLine(image, x2, y2, x2 - 5, y2 - 9, '#111827');
-      this.drawLine(image, x2, y2, x2 + 5, y2 - 9, '#111827');
-      if (item.ownership) this.drawText(image, `${item.ownership}%`, x2 + 8, Math.max(y2 - 22, elbowY + 4), '#0f172a', 1);
-    }
-
-    for (const item of nodes.items) {
-      const x = Math.round(centerX(item.x) - nodeWidth / 2);
-      const y = Math.round(centerY(item.depth));
-      const isRoot = item.id === 'ROOT';
-      const fill = isRoot ? '#0f172a' : item.isUbo ? '#e0f2fe' : palette[(item.depth - 1) % palette.length] || '#f8fafc';
-      const stroke = isRoot ? '#0f172a' : item.isUbo ? '#0891b2' : '#64748b';
-      this.drawRect(image, x + 4, y + 5, nodeWidth, nodeHeight, '#e2e8f0', '#e2e8f0');
-      this.drawRect(image, x, y, nodeWidth, nodeHeight, fill, stroke);
-      const name = this.textLines(item.name || 'Unnamed party', 24);
-      const primaryText = isRoot ? '#ffffff' : '#0f172a';
-      const secondaryText = isRoot ? '#ccfbf1' : '#475569';
-      this.drawText(image, name[0], x + 12, y + 11, primaryText, 1);
-      if (name[1]) this.drawText(image, name[1], x + 12, y + 23, primaryText, 1);
-      this.drawText(image, item.type, x + 12, y + 39, secondaryText, 1);
-      if (item.detail) this.drawText(image, this.textLines(item.detail, 24)[0], x + 12, y + 52, secondaryText, 1);
-      if (item.isUbo) {
-        this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 18, 42, 13, '#ccfbf1', '#67e8f9');
-        this.drawText(image, 'Beneficial', x + nodeWidth - 74, y + nodeHeight - 16, '#155e75', 1);
-      }
-    }
-
-    return `data:image/png;base64,${this.encodePng(image).toString('base64')}`;
+    return renderOwnershipDiagram(nodes.items, nodes.maxDepth, nodes.leafCount);
   }
+
 
   private ownershipDiagramNodes(rootName: string, rows: RowPayload[]) {
     type DiagramNode = {
