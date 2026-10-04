@@ -3048,25 +3048,42 @@ export class KycService {
     const workDir = mkdtempSync(join(tmpdir(), 'newoon-kyc-pdf-'));
     const htmlPath = join(workDir, 'kyc-form.html');
     const pdfPath = join(workDir, 'kyc-form.pdf');
+    const profilePath = join(workDir, 'chromium-profile');
 
     try {
       writeFileSync(htmlPath, html, 'utf8');
       const command = await this.resolveChromiumCommand();
-      await execFileAsync(command, [
-        '--headless=new',
+      const sharedArgs = [
         '--disable-gpu',
         '--no-sandbox',
         '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-default-browser-check',
+        `--user-data-dir=${profilePath}`,
         '--no-pdf-header-footer',
         '--print-to-pdf-no-header',
         `--print-to-pdf=${pdfPath}`,
         pathToFileURL(htmlPath).href
-      ], { timeout: 60000, windowsHide: true });
+      ];
+      let rendererError: unknown;
 
-      if (!existsSync(pdfPath)) {
-        throw new BadRequestException('The PDF renderer did not create a file. Confirm Chromium is installed and try again.');
+      for (const headlessMode of ['--headless=new', '--headless']) {
+        try {
+          await execFileAsync(command, [headlessMode, ...sharedArgs], {
+            timeout: 60000,
+            windowsHide: true,
+            cwd: workDir
+          });
+          if (existsSync(pdfPath)) return readFileSync(pdfPath);
+        } catch (error) {
+          rendererError = error;
+        }
       }
-      return readFileSync(pdfPath);
+
+      if (rendererError) {
+        throw new BadRequestException('The PDF renderer could not start Chromium. Confirm Chromium is installed and CHROMIUM_PATH points to its executable.');
+      }
+      throw new BadRequestException('The PDF renderer started but did not create a file. Confirm Chromium can run headless on the server and try again.');
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
