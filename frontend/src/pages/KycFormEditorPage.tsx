@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
@@ -8,7 +8,6 @@ import { TypedDateInput } from '../components/TypedDateInput';
 import { useAuth } from '../hooks/useAuth';
 import {
   autoSaveKycForm,
-  AiKycReview,
   CrrfWorkspace,
   downloadGeneratedKycDocument,
   decideMlroReview,
@@ -21,7 +20,6 @@ import {
   KycCase,
   KycFormData,
   matchClientByIdentifier,
-  reviewKycWithAi,
   saveKycFormSection,
   ScreeningContext,
   submitDmlroReview,
@@ -961,19 +959,6 @@ const crrfRiskLabels: Record<string, string> = {
   HIGH: 'High'
 };
 
-function AiReviewList({ title, items, emptyLabel }: { title: string; items: string[]; emptyLabel: string }) {
-  return (
-    <div>
-      <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      {items.length ? (
-        <ul className="mt-2 space-y-2 text-sm text-slate-700">
-          {items.map((item, index) => <li key={`${title}-${index}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">{item}</li>)}
-        </ul>
-      ) : <p className="mt-2 text-sm text-slate-500">{emptyLabel}</p>}
-    </div>
-  );
-}
-
 export function KycFormEditorPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -989,8 +974,6 @@ export function KycFormEditorPage() {
   const [crrfWorkspace, setCrrfWorkspace] = useState<CrrfWorkspace | null>(null);
   const [reviewPackageError, setReviewPackageError] = useState('');
   const [loadingReviewPackage, setLoadingReviewPackage] = useState<ReviewPackageTab | ''>('');
-  const [aiReview, setAiReview] = useState<AiKycReview | null>(null);
-  const [aiReviewing, setAiReviewing] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -1130,20 +1113,6 @@ export function KycFormEditorPage() {
       setError(getApiErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function runAiReview() {
-    if (!id) return;
-    setAiReviewing(true);
-    setError('');
-    try {
-      setAiReview(await reviewKycWithAi(id));
-      setMessage('AI review completed. Review each suggestion before taking any action.');
-    } catch (requestError: any) {
-      setError(getApiErrorMessage(requestError, 'Unable to complete the AI review.'));
-    } finally {
-      setAiReviewing(false);
     }
   }
 
@@ -1386,10 +1355,6 @@ export function KycFormEditorPage() {
           </p>
         </div>
         <div className="flex max-w-full flex-wrap gap-2">
-          <button onClick={runAiReview} disabled={aiReviewing} className="inline-flex items-center gap-2 rounded-md border border-brand-300 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60">
-            <Sparkles className="h-4 w-4" />
-            {aiReviewing ? 'Reviewing...' : 'AI Review'}
-          </button>
           {canEditVisibleForm ? <button onClick={saveDraft} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
@@ -1426,22 +1391,6 @@ export function KycFormEditorPage() {
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {!canEditVisibleForm ? <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">KYC preparation is locked while this case is under review. Only the assigned review role can record its decision.</p> : null}
-
-      {aiReview ? (
-        <section className="rounded-lg border border-brand-200 bg-white">
-          <div className="border-b border-brand-100 bg-brand-50 px-5 py-4">
-            <div className="flex items-center gap-2 text-brand-900"><Sparkles className="h-5 w-5" /><h2 className="text-base font-semibold">AI KYC Review</h2></div>
-            <p className="mt-2 text-sm text-slate-700">{aiReview.summary}</p>
-            <p className="mt-2 text-xs text-slate-500">AI suggestions only. An authorized reviewer must verify every item and make all workflow decisions.</p>
-          </div>
-          <div className="grid gap-5 p-5 xl:grid-cols-2">
-            <AiReviewList title="Missing or incomplete items" emptyLabel="No missing items identified." items={aiReview.missingItems.map((item) => `${item.section} - ${item.field}: ${item.reason}`)} />
-            <AiReviewList title="Possible inconsistencies" emptyLabel="No inconsistencies identified." items={aiReview.inconsistencies.map((item) => `${item.severity === 'REVIEW' ? 'Review' : 'Info'}: ${item.subject} - ${item.details}`)} />
-            <AiReviewList title="Reviewer questions" emptyLabel="No follow-up questions suggested." items={aiReview.reviewerQuestions} />
-            <AiReviewList title="Recommended next actions" emptyLabel="No additional actions suggested." items={aiReview.recommendedActions} />
-          </div>
-        </section>
-      ) : null}
 
       {showReviewPackage ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

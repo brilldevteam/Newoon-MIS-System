@@ -21,7 +21,6 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { ScreeningModule } from './screening/screening.module';
 import { CrrfModule } from './crrf/crrf.module';
 import { AccessControlModule } from './access-control/access-control.module';
-import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -47,8 +46,7 @@ import { AiModule } from './ai/ai.module';
     DashboardModule,
     ScreeningModule,
     CrrfModule,
-    AccessControlModule,
-    AiModule
+    AccessControlModule
   ],
   controllers: [AppController]
 })

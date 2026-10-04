@@ -140,12 +140,6 @@ export class KycController {
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
-  @Post(':id/ai-review')
-  reviewWithAi(@CurrentUser() user: RequestUser, @Param('id') id: string) {
-    return this.kycService.reviewWithAi(user, id);
-  }
-
-  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id/form/generated-documents/:documentId/download')
   async downloadGeneratedDocument(
     @CurrentUser() user: RequestUser,

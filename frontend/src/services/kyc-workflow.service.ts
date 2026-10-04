@@ -403,14 +403,6 @@ export type KycGeneratedDocument = {
   createdAt: string;
 };
 
-export type AiKycReview = {
-  summary: string;
-  missingItems: Array<{ section: string; field: string; reason: string }>;
-  inconsistencies: Array<{ subject: string; details: string; severity: 'INFO' | 'REVIEW' }>;
-  reviewerQuestions: string[];
-  recommendedActions: string[];
-};
-
 export type KycFormData = {
   id: string;
   tenantId: string;
@@ -956,10 +948,6 @@ export function saveKycFormSection(caseId: string, section: string, payload: Rec
 
 export function generateKycDocument(caseId: string, type: 'docx' | 'pdf') {
   return api.post<KycGeneratedDocument>(`/kyc/${caseId}/form/generate-${type}`).then((response) => response.data);
-}
-
-export function reviewKycWithAi(caseId: string) {
-  return api.post<AiKycReview>(`/kyc/${caseId}/ai-review`).then((response) => response.data);
 }
 
 export async function downloadGeneratedKycDocument(caseId: string, documentId: string, fileName: string) {

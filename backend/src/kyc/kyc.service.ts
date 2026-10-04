@@ -30,7 +30,6 @@ import { promisify } from 'util';
 import { deflateSync } from 'zlib';
 import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
-import { AiReviewService } from '../ai/ai-review.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
 import { AssignServiceDto } from './dto/assign-service.dto';
@@ -107,7 +106,7 @@ const REQUIRED_DOCUMENT_TYPES = [
 
 @Injectable()
 export class KycService {
-  constructor(private readonly prisma: PrismaService, private readonly aiReviewService: AiReviewService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async findAll(user: RequestUser) {
     const where: Prisma.KycCaseWhereInput = this.tenantWhere(user);
@@ -1709,19 +1708,6 @@ export class KycService {
       mimeType: generated.mimeType,
       createdAt: generated.createdAt
     };
-  }
-
-  async reviewWithAi(user: RequestUser, id: string) {
-    const form = await this.getFormRecord(user, id);
-    const payload = this.serializeForm(form);
-    return this.aiReviewService.reviewKycForm(this.aiReviewPayload(payload));
-  }
-
-  private aiReviewPayload(payload: SerializedKycForm) {
-    return JSON.parse(JSON.stringify(payload, (key, value) => {
-      const normalizedKey = key.toLowerCase();
-      return normalizedKey.includes('dataurl') || normalizedKey.includes('generateddocuments') ? undefined : value;
-    })) as Record<string, unknown>;
   }
 
   async downloadGeneratedDocument(user: RequestUser, id: string, documentId: string) {
