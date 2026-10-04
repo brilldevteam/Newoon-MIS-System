@@ -1,5 +1,5 @@
 import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, Save, Trash2, Upload } from 'lucide-react';
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   CrrfDocument,
@@ -31,6 +31,7 @@ export function CrrfWorkspacePage() {
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const errorRef = useRef<HTMLDivElement>(null);
   const canEdit = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
 
   useEffect(() => {
@@ -39,6 +40,11 @@ export function CrrfWorkspacePage() {
       .then(setWorkspace)
       .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load CRRF workspace.')));
   }, [id]);
+
+  useEffect(() => {
+    if (!error) return;
+    requestAnimationFrame(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [error]);
 
   async function save() {
     if (!id || !workspace) return;
@@ -164,7 +170,7 @@ export function CrrfWorkspacePage() {
       </div>
 
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <div ref={errorRef} tabIndex={-1} className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <InfoCard label="KYC number" value={workspace.clientInfo.kycNumber || '-'} />

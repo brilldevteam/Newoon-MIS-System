@@ -98,6 +98,10 @@ export class ScreeningService {
     const sectionData = await this.prisma.kycSectionData.findMany({
       where: { kycCaseId, ...this.sectionTenantWhere(user) }
     });
+    const managers = await this.prisma.kycManager.findMany({
+      where: { kycCaseId },
+      orderBy: { sortOrder: 'asc' }
+    });
     const sections = this.sectionMap(sectionData);
     const records = await this.prisma.screeningRecord.findMany({
       where: { kycCaseId, ...this.recordTenantWhere(user) },
@@ -112,7 +116,7 @@ export class ScreeningService {
 
     return {
       clientInfo: this.clientInfo(kycCase, sections.sectionA),
-      entities: this.extractEntities(kycCase, sections),
+      entities: this.extractEntities(kycCase, sections, managers),
       mandatoryChecks: MANDATORY_CHECKS,
       resultRequiredChecks: RESULT_REQUIRED_CHECKS,
       individualFilterChecks: INDIVIDUAL_FILTER_CHECKS,
@@ -559,12 +563,14 @@ export class ScreeningService {
     return record;
   }
 
-  private extractEntities(kycCase: Awaited<ReturnType<ScreeningService['findCase']>>, sections: Record<string, JsonRecord>) {
+  private extractEntities(
+    kycCase: Awaited<ReturnType<ScreeningService['findCase']>>,
+    sections: Record<string, JsonRecord>,
+    managers: Array<{ id: string; fullName: string; identityNumber: string | null; nationality: string | null; position: string | null }>
+  ) {
     const entities: ScreeningEntityOption[] = [];
     const sectionA = sections.sectionA || {};
     const sectionB = sections.sectionB || {};
-    const sectionC = sections.sectionC || {};
-    const sectionE = sections.sectionE || {};
 
     this.pushEntity(entities, {
       sourceId: `client:${kycCase.clientId}`,
@@ -602,25 +608,15 @@ export class ScreeningService {
       });
     });
 
-    this.listValue(sectionC.managers).forEach((row, index) => {
-      if (!this.isRecord(row)) return;
+    managers.forEach((manager) => {
       this.pushEntity(entities, {
-        sourceId: `manager:${this.stringValue(row.id) || index}`,
+        sourceId: `manager:${manager.id}`,
         entityType: ScreeningEntityType.MANAGER,
-        name: this.stringValue(row.fullName),
-        identifier: this.stringValue(row.identityNumber),
-        country: this.firstText(row.nationality),
-        role: this.firstText(row.position) || 'Manager / authorized signatory'
+        name: manager.fullName,
+        identifier: manager.identityNumber,
+        country: manager.nationality,
+        role: manager.position || 'Manager / authorized signatory'
       });
-    });
-
-    this.pushEntity(entities, {
-      sourceId: 'communication-person',
-      entityType: ScreeningEntityType.MANAGER,
-      name: this.stringValue(sectionE.fullName),
-      identifier: this.stringValue(sectionE.identityNumber),
-      country: this.firstText(sectionE.nationality),
-      role: this.firstText(sectionE.position) || 'Key communication person'
     });
 
     return entities;
