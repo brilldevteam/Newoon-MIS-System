@@ -1,9 +1,10 @@
 import {
   BadGatewayException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
-  ServiceUnavailableException,
-  TooManyRequestsException
+  ServiceUnavailableException
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RequestUser } from '../common/types/request-user.type';
@@ -31,10 +32,11 @@ export class AiReviewService {
 
     if (status === 429) {
       const isQuotaIssue = error?.code === 'insufficient_quota' || /quota|billing|credit/i.test(error?.message || '');
-      return new TooManyRequestsException(
+      return new HttpException(
         isQuotaIssue
           ? 'AI service is unavailable because the configured OpenAI project has no available API credits. Add billing or credits to that OpenAI project, then try again.'
-          : 'AI service is temporarily rate-limited. Wait one minute and try again.'
+          : 'AI service is temporarily rate-limited. Wait one minute and try again.',
+        HttpStatus.TOO_MANY_REQUESTS
       );
     }
 
