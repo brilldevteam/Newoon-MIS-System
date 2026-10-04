@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
@@ -37,6 +37,7 @@ import { CreateKycCaseDto } from './dto/create-kyc-case.dto';
 import { UpdateKycCaseDto } from './dto/update-kyc-case.dto';
 import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
+import { buildKycDocx } from './kyc-docx';
 
 const execFileAsync = promisify(execFile);
 
@@ -106,6 +107,7 @@ const REQUIRED_DOCUMENT_TYPES = [
 
 @Injectable()
 export class KycService {
+  private readonly logger = new Logger(KycService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(user: RequestUser) {
@@ -3009,16 +3011,8 @@ export class KycService {
   }
 
   private buildDocx(payload: SerializedKycForm) {
-    const template = this.loadDocxTemplate();
     const templateData = this.templateData(payload);
-    const doc = new Docxtemplater(new PizZip(template), {
-      paragraphLoop: true,
-      linebreaks: true,
-      nullGetter: () => ''
-    });
-
-    doc.render(templateData);
-    const zip = doc.getZip();
+    const zip = buildKycDocx(templateData, payload);
     this.applyDocxImages(zip, this.docxImageReplacements(templateData));
     return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
@@ -3069,14 +3063,16 @@ export class KycService {
 
       for (const headlessMode of ['--headless=new', '--headless']) {
         try {
-          await execFileAsync(command, [headlessMode, ...sharedArgs], {
+          const result = await execFileAsync(command, [headlessMode, ...sharedArgs], {
             timeout: 60000,
             windowsHide: true,
             cwd: workDir
           });
           if (existsSync(pdfPath)) return readFileSync(pdfPath);
+          this.logger.warn(`PDF renderer ${command} (${headlessMode}) returned without a PDF: ${result.stderr.slice(-2000)}`);
         } catch (error) {
           rendererError = error;
+          this.logger.warn(`PDF renderer ${command} (${headlessMode}) failed: ${String((error as { stderr?: string }).stderr || (error as Error).message).slice(-2000)}`);
         }
       }
 
