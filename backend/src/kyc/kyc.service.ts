@@ -3409,7 +3409,16 @@ ${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date',
     for (const [key, value] of Object.entries(images)) {
       const image = this.parseImageDataUrl(this.text(value));
       if (image) {
-        replacements.push({ key, token: this.imageToken(key), image, size: this.docxImageSize(key) });
+        let size = this.docxImageSize(key);
+        if (key === 'ownershipStructure' && image.extension === 'png' && image.buffer.length >= 24) {
+          const width = image.buffer.readUInt32BE(16);
+          const height = image.buffer.readUInt32BE(20);
+          if (width && height) {
+            const scale = Math.min(6480000 / width, 4500000 / height);
+            size = { cx: Math.round(width * scale), cy: Math.round(height * scale) };
+          }
+        }
+        replacements.push({ key, token: this.imageToken(key), image, size });
       }
     }
 
