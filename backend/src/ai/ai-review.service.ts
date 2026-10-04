@@ -19,12 +19,41 @@ export type AiKycReview = {
 
 export type AiAssistantMessage = { role: 'user' | 'assistant'; content: string };
 type OpenAiError = { message?: string; code?: string; type?: string };
+type OpenAiResponse = { output_text?: string; error?: OpenAiError };
 
 @Injectable()
 export class AiReviewService {
   private readonly logger = new Logger(AiReviewService.name);
 
   constructor(private readonly config: ConfigService) {}
+
+  private async requestOpenAi(feature: 'AI review' | 'AI Assistant', request: RequestInit): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch('https://api.openai.com/v1/responses', request);
+        if (response.ok || ![502, 503, 504].includes(response.status) || attempt === 2) return response;
+
+        this.logger.warn(`OpenAI ${feature} request received HTTP ${response.status}; retrying (${attempt + 1}/2).`);
+      } catch (error) {
+        lastError = error;
+        if (attempt === 2) throw error;
+        this.logger.warn(`OpenAI ${feature} request could not connect; retrying (${attempt + 1}/2).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+    }
+    throw lastError || new Error('OpenAI request could not be started.');
+  }
+
+  private async readOpenAiResponse(response: Response): Promise<OpenAiResponse> {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text) as OpenAiResponse;
+    } catch {
+      return { error: { message: `OpenAI returned HTTP ${response.status} with an unreadable response.` } };
+    }
+  }
 
   private providerException(feature: 'AI review' | 'AI Assistant', status: number, error?: OpenAiError) {
     const code = error?.code || error?.type || 'no-provider-code';
@@ -44,6 +73,10 @@ export class AiReviewService {
       return new ServiceUnavailableException('AI service authentication failed. Replace OPENAI_API_KEY in backend/.env with an active key from the correct OpenAI project, then restart the backend.');
     }
 
+    if ([502, 503, 504].includes(status)) {
+      return new ServiceUnavailableException('AI service provider is temporarily unavailable. The request was retried automatically. Wait a few minutes and try again.');
+    }
+
     return new BadGatewayException(error?.message || `The ${feature} service could not complete the request.`);
   }
 
@@ -56,7 +89,7 @@ export class AiReviewService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     try {
-      const response = await fetch('https://api.openai.com/v1/responses', {
+      const response = await this.requestOpenAi('AI review', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -114,7 +147,7 @@ export class AiReviewService {
         })
       });
 
-      const body = await response.json() as { output_text?: string; error?: OpenAiError };
+      const body = await this.readOpenAiResponse(response);
       if (!response.ok) {
         throw this.providerException('AI review', response.status, body.error);
       }
@@ -154,7 +187,7 @@ export class AiReviewService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45000);
     try {
-      const response = await fetch('https://api.openai.com/v1/responses', {
+      const response = await this.requestOpenAi('AI Assistant', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -176,7 +209,7 @@ export class AiReviewService {
           ]
         })
       });
-      const body = await response.json() as { output_text?: string; error?: OpenAiError };
+      const body = await this.readOpenAiResponse(response);
       if (!response.ok) {
         throw this.providerException('AI Assistant', response.status, body.error);
       }
