@@ -15,18 +15,13 @@ import {
 import { CRRF_DOCUMENT_ACCEPT, CRRF_DOCUMENT_HINT, validateCrrfDocuments } from '../utils/upload-security';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole } from '../utils/access-control';
+import { getApiErrorMessage } from '../services/api';
 
 const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'LOW', label: 'Low' },
   { value: 'MEDIUM', label: 'Medium' },
   { value: 'HIGH', label: 'High' }
 ];
-
-function errorMessage(error: any, fallback: string) {
-  const message = error?.response?.data?.message;
-  if (Array.isArray(message)) return message.join(' ');
-  return typeof message === 'string' ? message : fallback;
-}
 
 export function CrrfWorkspacePage() {
   const { id = '' } = useParams();
@@ -42,13 +37,17 @@ export function CrrfWorkspacePage() {
     if (!id) return;
     getCrrfWorkspace(id)
       .then(setWorkspace)
-      .catch((requestError) => setError(errorMessage(requestError, 'Unable to load CRRF workspace.')));
+      .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load CRRF workspace.')));
   }, [id]);
 
   async function save() {
     if (!id || !workspace) return;
     if (!workspace.record.riskRating) {
-      setError('Select a risk rating before saving the CRRF draft.');
+      setError('Cannot save CRRF yet. Select a risk rating, then click Save Draft.');
+      return;
+    }
+    if (!workspace.record.documents.length && !pendingFiles.length) {
+      setError('Cannot save CRRF yet. Upload at least one supporting CRRF document, then click Save Draft.');
       return;
     }
     setError('');
@@ -70,7 +69,7 @@ export function CrrfWorkspacePage() {
       );
       setMessage('CRRF draft saved.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to save CRRF record.'));
+      setError(getApiErrorMessage(requestError, 'Unable to save CRRF record.'));
     } finally {
       setBusyKey('');
     }
@@ -98,7 +97,7 @@ export function CrrfWorkspacePage() {
       setWorkspace(await deleteCrrfDocument(id, documentId));
       setMessage('CRRF document deleted.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to delete CRRF document.'));
+      setError(getApiErrorMessage(requestError, 'Unable to delete CRRF document.'));
     } finally {
       setBusyKey('');
     }
@@ -113,7 +112,7 @@ export function CrrfWorkspacePage() {
       await exportCrrf(id, type);
       setMessage(`CRRF ${type === 'excel' ? 'Excel' : 'PDF'} exported.`);
     } catch (requestError: any) {
-      setError(errorMessage(requestError, `Unable to export CRRF ${type}.`));
+      setError(getApiErrorMessage(requestError, `Unable to export CRRF ${type}.`));
     } finally {
       setBusyKey('');
     }

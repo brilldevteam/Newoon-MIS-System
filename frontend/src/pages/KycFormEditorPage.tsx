@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
+import { TypedDateInput } from '../components/TypedDateInput';
 import { useAuth } from '../hooks/useAuth';
 import {
   autoSaveKycForm,
@@ -2392,8 +2393,10 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
       {label}
       {textarea ? (
         <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+      ) : type === 'date' ? (
+        <TypedDateInput value={value} onChange={onChange} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : (
-        <input value={dateInputValue(value, type)} type={type} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        <input value={value || ''} type={type} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       )}
     </label>
   );
@@ -3047,11 +3050,6 @@ function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycFormData
     },
     sectionH: form.sectionH || {}
   };
-}
-
-function dateInputValue(value: any, type: string) {
-  if (type !== 'date' || !value) return value || '';
-  return String(value).slice(0, 10);
 }
 
 function displayDate(value: any) {

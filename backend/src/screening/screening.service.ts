@@ -295,31 +295,16 @@ export class ScreeningService {
       );
     }).map((check) => check.checkType);
 
-    if (!remarks) {
-      throw new BadRequestException('Observation and remarks are required before finalizing screening.');
-    }
-
-    if (!record.conclusionStatus) {
-      throw new BadRequestException('Select the individual screening result before finalizing.');
-    }
-
-    if (missingMergedEvidence.length) {
-      throw new BadRequestException(`Upload merged PDF evidence for: ${missingMergedEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingMergedResults.length) {
-      throw new BadRequestException(`Select merged screening result for: ${missingMergedResults.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingIndividualResults.length) {
-      throw new BadRequestException(`Select a result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingMatchComments.length) {
-      throw new BadRequestException(`Add comments for potential or confirmed matches in: ${missingMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-    if (missingMergedMatchComments.length) {
-      throw new BadRequestException(`Add comments for potential or confirmed common-list matches in: ${missingMergedMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    const requirements: string[] = [];
+    if (!remarks) requirements.push('Add observations or remarks for this person or entity.');
+    if (!record.conclusionStatus) requirements.push('Select the final screening result for this person or entity.');
+    if (missingMergedEvidence.length) requirements.push(`Upload evidence for: ${missingMergedEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMergedResults.length) requirements.push(`Select a common-list result for: ${missingMergedResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingIndividualResults.length) requirements.push(`Select an individual result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMatchComments.length) requirements.push(`Add a match comment for: ${missingMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMergedMatchComments.length) requirements.push(`Add a common-list match comment for: ${missingMergedMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (requirements.length) {
+      throw new BadRequestException(`Cannot finalize screening yet. ${requirements.join(' ')}`);
     }
 
     await this.prisma.screeningRecord.update({

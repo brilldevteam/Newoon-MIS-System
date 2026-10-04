@@ -29,6 +29,7 @@ import {
 import { hasAnyRole } from '../utils/access-control';
 import { countryDialOptions } from '../utils/country-phone';
 import { PDF_ONLY_ACCEPT, PDF_ONLY_HINT, STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT, validatePdfDocuments, validateStandardDocuments } from '../utils/upload-security';
+import { getApiErrorMessage } from '../services/api';
 
 const countryOptions = countryDialOptions.map((country) => country.name);
 
@@ -77,12 +78,6 @@ function emptyCheck(checkType: ScreeningCheckType): ScreeningCheck {
     notes: '',
     documents: []
   };
-}
-
-function errorMessage(error: any, fallback: string) {
-  const message = error?.response?.data?.message;
-  if (Array.isArray(message)) return message.join(' ');
-  return typeof message === 'string' ? message : fallback;
 }
 
 type MergedScreeningDraft = {
@@ -179,7 +174,7 @@ export function KycScreeningPage() {
           return new Set([screeningContext.records[0].id]);
         });
       })
-      .catch((requestError) => setError(errorMessage(requestError, 'Unable to load screening workspace.')));
+      .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load screening workspace.')));
   }, [id]);
 
   const entityOptions = useMemo(() => context?.entities.map(entityLabel) || [], [context]);
@@ -206,6 +201,37 @@ export function KycScreeningPage() {
   );
   const isManualEntity = selectedEntityLabel === 'Manual screening entry';
   const canEditScreening = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
+
+  function finalizationRequirements(record: ScreeningRecord) {
+    if (!context) return ['Wait for the Screening workspace to finish loading.'];
+    const requirements: string[] = [];
+    if (!record.remarks?.trim()) requirements.push('Add observations or remarks for this person or entity.');
+    if (!record.conclusionStatus) requirements.push('Select the final screening result for this person or entity.');
+
+    const missingEvidence = context.mergedEvidenceChecks.filter((checkType) => !(mergedDocumentsByCheck.get(checkType) || []).length);
+    if (missingEvidence.length) requirements.push(`Upload evidence for: ${missingEvidence.map((checkType) => checkLabels[checkType]).join(', ')}.`);
+
+    const missingResults = context.mergedResultChecks.filter((checkType) => {
+      const draft = mergedDrafts[checkType] || mergedChecksByType.get(checkType);
+      return !draft || draft.resultStatus === 'NOT_CHECKED';
+    });
+    if (missingResults.length) requirements.push(`Select a common-list result for: ${missingResults.map((checkType) => checkLabels[checkType]).join(', ')}.`);
+
+    const commonMissingComments = context.mergedResultChecks.filter((checkType) => {
+      const draft = mergedDrafts[checkType] || mergedChecksByType.get(checkType);
+      return draft && ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(draft.resultStatus) && !draft.notes?.trim();
+    });
+    if (commonMissingComments.length) requirements.push(`Add match comments for: ${commonMissingComments.map((checkType) => checkLabels[checkType]).join(', ')}.`);
+
+    const missingIndividualResults = record.checks.filter((check) => check.isSelected && context.individualFilterChecks.includes(check.checkType) && check.resultStatus === 'NOT_CHECKED');
+    if (missingIndividualResults.length) requirements.push(`Select an individual result for: ${missingIndividualResults.map((check) => checkLabels[check.checkType]).join(', ')}.`);
+
+    const individualMissingComments = record.checks.filter((check) => check.isSelected && ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) && !check.notes?.trim());
+    if (individualMissingComments.length) requirements.push(`Add match comments for this entity: ${individualMissingComments.map((check) => checkLabels[check.checkType]).join(', ')}.`);
+
+    if (dirtyMergedChecks.size && !requirements.length) requirements.push('Click Save common results before finalizing this screening record.');
+    return requirements;
+  }
 
   function updateRecordLocally(recordId: string, patch: Partial<ScreeningRecord>) {
     setContext((current) =>
@@ -262,7 +288,7 @@ export function KycScreeningPage() {
       setManualCountry('');
       setMessage('Screening record added.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to add screening record.'));
+      setError(getApiErrorMessage(requestError, 'Unable to add screening record.'));
     } finally {
       setBusyKey('');
     }
@@ -291,7 +317,7 @@ export function KycScreeningPage() {
       );
       setMessage('Screening draft saved.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to save screening record.'));
+      setError(getApiErrorMessage(requestError, 'Unable to save screening record.'));
     } finally {
       setBusyKey('');
     }
@@ -299,6 +325,11 @@ export function KycScreeningPage() {
 
   async function finalizeRecord(record: ScreeningRecord) {
     if (!id) return;
+    const requirements = finalizationRequirements(record);
+    if (requirements.length) {
+      setError(`Cannot finalize Screening yet.\n\nPlease complete the following:\n${requirements.map((item, index) => `${index + 1}. ${item}`).join('\n')}`);
+      return;
+    }
     setError('');
     setMessage('');
     setBusyKey(`finalize-${record.id}`);
@@ -319,7 +350,7 @@ export function KycScreeningPage() {
       setContext(await completeScreeningRecord(id, record.id));
       setMessage('Screening record finalized.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to finalize screening record.'));
+      setError(getApiErrorMessage(requestError, 'Unable to finalize screening record.'));
     } finally {
       setBusyKey('');
     }
@@ -368,7 +399,7 @@ export function KycScreeningPage() {
       setContext(currentRecord ? mergeCurrentDraft(nextContext, currentRecord) : nextContext);
       setMessage('Screening document uploaded.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to upload screening document.'));
+      setError(getApiErrorMessage(requestError, 'Unable to upload screening document.'));
     } finally {
       setBusyKey('');
     }
@@ -388,7 +419,7 @@ export function KycScreeningPage() {
       setContext(await uploadMergedScreeningDocuments(id, { checkType, files }));
       setMessage('Merged screening PDF uploaded.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to upload merged screening PDF.'));
+      setError(getApiErrorMessage(requestError, 'Unable to upload merged screening PDF.'));
     } finally {
       setBusyKey('');
     }
@@ -430,7 +461,7 @@ export function KycScreeningPage() {
       setDirtyMergedChecks(new Set());
       setMessage('Common screening results saved.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to save common screening results.'));
+      setError(getApiErrorMessage(requestError, 'Unable to save common screening results.'));
     } finally {
       setBusyKey('');
     }
@@ -462,7 +493,7 @@ export function KycScreeningPage() {
       setContext(await deleteScreeningDocument(id, documentId));
       setMessage('Screening document deleted.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to delete screening document.'));
+      setError(getApiErrorMessage(requestError, 'Unable to delete screening document.'));
     } finally {
       setBusyDocumentId('');
     }
@@ -477,7 +508,7 @@ export function KycScreeningPage() {
       setContext(await deleteMergedScreeningDocument(id, documentId));
       setMessage('Merged screening PDF deleted.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to delete merged screening PDF.'));
+      setError(getApiErrorMessage(requestError, 'Unable to delete merged screening PDF.'));
     } finally {
       setBusyDocumentId('');
     }
@@ -497,7 +528,7 @@ export function KycScreeningPage() {
       });
       setMessage('Screening entity deleted.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to delete screening entity.'));
+      setError(getApiErrorMessage(requestError, 'Unable to delete screening entity.'));
     } finally {
       setBusyKey('');
     }
@@ -519,7 +550,7 @@ export function KycScreeningPage() {
       </div>
 
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4">
