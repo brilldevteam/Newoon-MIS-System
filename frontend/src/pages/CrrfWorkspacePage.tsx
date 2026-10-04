@@ -16,6 +16,7 @@ import { CRRF_DOCUMENT_ACCEPT, CRRF_DOCUMENT_HINT, validateCrrfDocuments } from 
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole } from '../utils/access-control';
 import { getApiErrorMessage } from '../services/api';
+import { useToast } from '../components/ToastProvider';
 
 const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'LOW', label: 'Low' },
@@ -26,6 +27,7 @@ const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
 export function CrrfWorkspacePage() {
   const { id = '' } = useParams();
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [workspace, setWorkspace] = useState<CrrfWorkspace | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -45,6 +47,14 @@ export function CrrfWorkspacePage() {
     if (!error) return;
     requestAnimationFrame(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, [error]);
+
+  useEffect(() => {
+    if (message) showToast(message, 'success');
+  }, [message, showToast]);
+
+  useEffect(() => {
+    if (error) showToast(error, 'error');
+  }, [error, showToast]);
 
   async function save() {
     if (!id || !workspace) return;

@@ -2,6 +2,7 @@ import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import {
   completeScreeningRecord,
@@ -149,6 +150,7 @@ function DocumentList({
 export function KycScreeningPage() {
   const { id = '' } = useParams();
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [context, setContext] = useState<ScreeningContext | null>(null);
   const [selectedEntityLabel, setSelectedEntityLabel] = useState('');
   const [manualEntityName, setManualEntityName] = useState('');
@@ -182,6 +184,16 @@ export function KycScreeningPage() {
     if (!error) return;
     requestAnimationFrame(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, [error]);
+
+  useEffect(() => {
+    if (message) showToast(message, 'success');
+  }, [message, showToast]);
+
+  useEffect(() => {
+    if (!error) return;
+    const [summary] = error.split('\n');
+    showToast(`${summary}${error.includes('\n') ? ' See the guidance at the top.' : ''}`, 'error');
+  }, [error, showToast]);
 
   const entityOptions = useMemo(() => context?.entities.map(entityLabel) || [], [context]);
   const selectedEntity = useMemo(

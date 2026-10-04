@@ -654,9 +654,20 @@ export class ScreeningService {
 
   private pushEntity(entities: ScreeningEntityOption[], entity: ScreeningEntityOption) {
     if (!entity.name) return;
-    const fingerprint = `${entity.entityType}:${entity.name.toLowerCase()}:${(entity.identifier || '').toLowerCase()}`;
-    const exists = entities.some((item) => `${item.entityType}:${item.name.toLowerCase()}:${(item.identifier || '').toLowerCase()}` === fingerprint);
-    if (!exists) entities.push(entity);
+    const normalizedName = entity.name.trim().toLowerCase();
+    const normalizedIdentifier = (entity.identifier || '').trim().toLowerCase();
+    const existing = entities.find((item) => {
+      const itemIdentifier = (item.identifier || '').trim().toLowerCase();
+      return normalizedIdentifier ? itemIdentifier === normalizedIdentifier : !itemIdentifier && item.name.trim().toLowerCase() === normalizedName;
+    });
+    if (!existing) {
+      entities.push(entity);
+      return;
+    }
+
+    existing.role = Array.from(new Set([existing.role, entity.role].filter(Boolean))).join(' / ');
+    existing.country ||= entity.country;
+    existing.linkedClientId ||= entity.linkedClientId;
   }
 
   private async ensureMergedCaseChecks(tenantId: string, kycCaseId: string) {
