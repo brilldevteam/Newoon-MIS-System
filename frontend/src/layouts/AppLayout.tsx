@@ -22,6 +22,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { useAuth } from '../hooks/useAuth';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
 import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
+import { AiAssistant } from '../components/AiAssistant';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
@@ -267,6 +268,7 @@ export function AppLayout() {
         <main className="min-w-0 px-4 py-6 lg:px-8">
           <Outlet />
         </main>
+        <AiAssistant currentPath={location.pathname} />
       </div>
     </div>
   );

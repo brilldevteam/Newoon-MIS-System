@@ -1,5 +1,6 @@
 import { BadGatewayException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RequestUser } from '../common/types/request-user.type';
 
 export type AiKycReview = {
   summary: string;
@@ -8,6 +9,8 @@ export type AiKycReview = {
   reviewerQuestions: string[];
   recommendedActions: string[];
 };
+
+export type AiAssistantMessage = { role: 'user' | 'assistant'; content: string };
 
 @Injectable()
 export class AiReviewService {
@@ -94,6 +97,60 @@ export class AiReviewService {
         throw new BadGatewayException('The AI review took too long. Please try again.');
       }
       throw new BadGatewayException('Unable to contact the AI review service. Confirm the API key and server internet connection, then try again.');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async answerApplicationQuestion(user: RequestUser, messages: AiAssistantMessage[], currentPath: string) {
+    const apiKey = this.config.get<string>('OPENAI_API_KEY')?.trim();
+    if (!apiKey) {
+      throw new ServiceUnavailableException('AI Assistant is not configured. Add OPENAI_API_KEY to the backend environment, then restart the backend.');
+    }
+
+    const safeMessages = messages
+      .filter((message) => (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string')
+      .slice(-10)
+      .map((message) => ({ role: message.role, content: message.content.trim().slice(0, 2000) }))
+      .filter((message) => message.content);
+
+    if (!safeMessages.some((message) => message.role === 'user')) {
+      throw new BadGatewayException('Enter a question for the AI Assistant.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    try {
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: this.config.get<string>('OPENAI_MODEL')?.trim() || 'gpt-4o-mini',
+          store: false,
+          input: [
+            {
+              role: 'system',
+              content: [{ type: 'input_text', text: `You are the Newoon MIS in-application assistant. Help users understand only this KYC and Engagement application: enquiries, KYC workflow, Screening, CRRF, reviews, notifications, roles, and navigation. The signed-in user has roles: ${user.roles.join(', ') || 'none'}. They are currently viewing: ${currentPath.slice(0, 200)}. Explain workflow steps in concise, practical language. Do not claim you can see live case data, documents, audit logs, or other users' information. Do not invent application state. Do not give legal, compliance, approval, screening, or risk decisions. Do not request passwords, API keys, or other secrets. You cannot perform actions; direct the user to the relevant screen or authorized reviewer.` }]
+            },
+            {
+              role: 'user',
+              content: [{
+                type: 'input_text',
+                text: `Conversation so far:\n${safeMessages.map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`).join('\n\n')}`
+              }]
+            }
+          ]
+        })
+      });
+      const body = await response.json() as { output_text?: string; error?: { message?: string } };
+      if (!response.ok) throw new BadGatewayException(body.error?.message || 'The AI Assistant could not answer that question.');
+      if (!body.output_text) throw new BadGatewayException('The AI Assistant returned no answer. Please try again.');
+      return { message: body.output_text.trim() };
+    } catch (error) {
+      if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
+      if (error instanceof Error && error.name === 'AbortError') throw new BadGatewayException('The AI Assistant took too long to respond. Please try again.');
+      throw new BadGatewayException('Unable to contact the AI Assistant. Confirm the API key and server internet connection, then try again.');
     } finally {
       clearTimeout(timeout);
     }
