@@ -25,6 +25,7 @@ import PizZip from 'pizzip';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { pathToFileURL } from 'url';
 import { promisify } from 'util';
 import { deflateSync } from 'zlib';
 import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
@@ -3040,41 +3041,46 @@ export class KycService {
   }
 
   private async buildPdf(payload: SerializedKycForm) {
-    const docx = this.buildDocx(payload);
-    return this.convertDocxToPdf(docx);
+    return this.renderHtmlToPdf(this.buildPdfHtml(payload));
   }
 
-  private async convertDocxToPdf(docx: Buffer) {
+  private async renderHtmlToPdf(html: string) {
     const workDir = mkdtempSync(join(tmpdir(), 'newoon-kyc-pdf-'));
-    const docxPath = join(workDir, 'kyc-part-1.docx');
-    const pdfPath = join(workDir, 'kyc-part-1.pdf');
+    const htmlPath = join(workDir, 'kyc-form.html');
+    const pdfPath = join(workDir, 'kyc-form.pdf');
 
     try {
-      writeFileSync(docxPath, docx);
-      const command = await this.resolveLibreOfficeCommand();
-
-      await execFileAsync(command, ['--headless', '--convert-to', 'pdf', '--outdir', workDir, docxPath], {
-        timeout: 60000,
-        windowsHide: true
-      });
+      writeFileSync(htmlPath, html, 'utf8');
+      const command = await this.resolveChromiumCommand();
+      await execFileAsync(command, [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-pdf-header-footer',
+        '--print-to-pdf-no-header',
+        `--print-to-pdf=${pdfPath}`,
+        pathToFileURL(htmlPath).href
+      ], { timeout: 60000, windowsHide: true });
 
       if (!existsSync(pdfPath)) {
-        throw new BadRequestException('Unable to generate PDF from DOCX template.');
+        throw new BadRequestException('The PDF renderer did not create a file. Confirm Chromium is installed and try again.');
       }
-
       return readFileSync(pdfPath);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
   }
 
-  private async resolveLibreOfficeCommand() {
+  private async resolveChromiumCommand() {
     const candidates = [
-      process.env.LIBREOFFICE_PATH,
-      'soffice',
-      'libreoffice',
-      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+      process.env.CHROMIUM_PATH,
+      'google-chrome-stable',
+      'google-chrome',
+      'chromium',
+      'chromium-browser',
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
     ].filter(Boolean) as string[];
 
     for (const candidate of candidates) {
@@ -3082,11 +3088,104 @@ export class KycService {
         await execFileAsync(candidate, ['--version'], { timeout: 10000, windowsHide: true });
         return candidate;
       } catch {
-        // Try the next configured command.
+        // Try the next available Chromium-based browser.
       }
     }
 
-    throw new BadRequestException('PDF conversion requires LibreOffice. Install LibreOffice on the server or set LIBREOFFICE_PATH to the soffice executable.');
+    throw new BadRequestException('PDF generation requires Chromium. Install Google Chrome or Chromium on the server, or set CHROMIUM_PATH to its executable.');
+  }
+
+  private buildPdfHtml(payload: SerializedKycForm) {
+    const sectionA = payload.sectionA as Record<string, unknown>;
+    const sectionB = payload.sectionB as Record<string, unknown> & { shareholders?: RowPayload[]; ubos?: RowPayload[] };
+    const sectionC = payload.sectionC as Record<string, unknown> & { managers?: RowPayload[] };
+    const sectionD = payload.sectionD as Record<string, unknown>;
+    const sectionE = payload.sectionE as Record<string, unknown>;
+    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
+    const sectionG = payload.sectionG as Record<string, unknown>;
+    const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
+    const shareholders = this.asArray<RowPayload>(sectionB.shareholders);
+    const ubos = sectionB.ubos?.length ? sectionB.ubos : shareholders.filter((row) => Boolean(row.isUbo));
+    const managers = this.asArray<RowPayload>(sectionC.managers);
+    const value = (input: unknown) => this.pdfText(this.text(input));
+    const selection = (input: unknown, other?: unknown) => this.pdfText(this.optionText(input, other));
+    const table = (headers: string[], rows: string[][]) => this.pdfTable(headers, rows);
+    const documentRows = this.asArray<RowPayload>(sectionF.documents);
+
+    return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 12mm 11mm 14mm; }
+* { box-sizing: border-box; }
+body { color: #111827; font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; line-height: 1.35; margin: 0; }
+.header { border-bottom: 3px solid #8d2428; display: flex; justify-content: space-between; padding-bottom: 10px; }
+.brand { color: #8d2428; font-size: 20pt; font-weight: 700; letter-spacing: 0; }.sub { color: #475569; font-size: 8pt; font-weight: 700; }
+.contact { color: #64748b; font-size: 7.5pt; text-align: right; }.title { font-size: 15pt; font-weight: 700; margin: 15px 0 4px; text-align: center; }.intro { margin: 0 0 12px; }
+.section { break-inside: avoid; margin: 12px 0; }.section-title { background: #8d2428; color: white; font-size: 9pt; font-weight: 700; padding: 5px 7px; }
+table { border-collapse: collapse; table-layout: fixed; width: 100%; } th, td { border: 1px solid #94a3b8; overflow-wrap: anywhere; padding: 4px 5px; text-align: left; vertical-align: top; } th { background: #eaf0f7; font-size: 7.5pt; font-weight: 700; } td.label { background: #f8fafc; font-weight: 700; width: 24%; }
+.two-column { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }.note { font-size: 7.5pt; margin: 5px 0; }.total { font-weight: 700; margin: 5px 0; }.signature { display: block; height: 48px; max-width: 180px; object-fit: contain; }.empty { color: #64748b; }.footer { border-top: 1px solid #cbd5e1; color: #64748b; font-size: 7pt; margin-top: 18px; padding-top: 6px; text-align: center; }
+</style></head><body>
+<header class="header"><div><div class="brand">NEWOON</div><div class="sub">KYC &amp; ENGAGEMENT WORKFLOW</div></div><div class="contact">Newoon Corporate Services<br>Doha, Qatar<br>contact@newoon.com</div></header>
+<h1 class="title">KNOW YOUR CUSTOMER FORM</h1>
+<p class="intro">This form is completed before establishing a business relationship and before incorporation of the proposed entity.</p>
+${this.pdfSection('A. General Company Information', table(['Field', 'Details', 'Field', 'Details'], [
+  ['Date', value(sectionA.date), 'KYC Number', value(sectionA.reference)],
+  ['Legal Name of Company', value(sectionA.legalName), 'Commercial Registration No.', value(sectionA.commercialRegistrationNo)],
+  ['Tax Identification No.', value(sectionA.taxIdentificationNo), 'Date of Incorporation', value(sectionA.dateOfIncorporation)],
+  ['Country of Incorporation', selection(sectionA.countryOfIncorporation, sectionA.countryOfIncorporationOther), 'Legal Form', selection(sectionA.legalForm, sectionA.legalFormOther)],
+  ['Registered Office Address', value(sectionA.registeredOfficeAddress), 'Telephone', value(sectionA.telephone)],
+  ['Email', value(sectionA.email), 'Website', value(sectionA.website)],
+  ['Main purpose / nature of business', selection(sectionA.businessNature, sectionA.businessNatureOther), 'License activities', value(sectionA.licenseActivities)],
+  ['Related Industry', selection(sectionA.relatedIndustry, sectionA.relatedIndustryOther), 'Nature of prospective service from Newoon', this.pdfText(this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther))]
+]))}
+${this.pdfSection('B. Control / Interest Details', table(['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'Reliable ID', 'Shareholder %', 'Address', 'Beneficial person'], shareholders.map((row) => [
+  value(row.shareholderType || 'Individual'), value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.shareholderPercentage ?? row.ownershipPercentage), value(row.residenceAddress), row.isUbo ? 'Yes' : 'No'
+])) || '<p class="empty">No shareholders recorded.</p>')}
+<p class="total">Total shareholder %: ${value(sectionB.totalOwnershipPercentage)}% | Total UBO %: ${this.pdfText(String(ubos.reduce((sum, row) => sum + this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage), 0)))}%</p>
+${this.pdfSection('Ultimate Beneficial Owners', table(['Full name', 'Nationality', 'Date of birth', 'Reliable ID', 'UBO %', 'Address'], ubos.map((row) => [value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.uboInterestPercentage ?? row.ownershipPercentage), value(row.residenceAddress)])) || '<p class="empty">No beneficial owners recorded.</p>')}
+${this.pdfSection('C. Managers / Directors / Secretary / Signatories', table(['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'Date of birth', 'Reliable ID', 'Authorized signatory'], managers.map((row) => [value(row.fullName), selection(row.position, row.positionOther), value(row.entityName), selection(row.nationality, row.nationalityOther), value(row.address), value(row.dateOfBirth), value(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'])) || '<p class="empty">No managers recorded.</p>')}
+${this.pdfSection('D. Compliance and Risk Information', table(['Question', 'Response / details'], [
+  ['Politically exposed person exposure', `${value(sectionD.pepQuestion || 'No')}<br>${value(sectionD.pepDetails)}`],
+  ['Sanction exposure', `${value(sectionD.sanctionQuestion || 'No')}<br>${value(sectionD.sanctionDetails)}`],
+  ['Dual citizenship', `${value(sectionD.dualCitizenshipQuestion || 'No')}<br>${value(sectionD.dualCitizenshipDetails)}`]
+]))}
+${this.pdfSection('E. Key Communication Person', table(['Field', 'Details', 'Field', 'Details'], [
+  ['Full name', value(sectionE.fullName), 'Position / job title', selection(sectionE.position, sectionE.positionOther)],
+  ['Nationality', selection(sectionE.nationality, sectionE.nationalityOther), 'Reliable ID', value(sectionE.identityNumber)],
+  ['Mobile number', value(sectionE.mobileNumber), 'Email', value(sectionE.email)]
+]))}
+${this.pdfSection('F. Required Documents', table(['Document', 'Available', 'Uploaded file'], documentRows.map((row) => [value(row.documentType), row.isProvided ? 'Yes' : 'No', value(row.fileName)])) || '<p class="empty">No document checklist entries recorded.</p>')}
+${this.pdfSection('G. Client Declaration', table(['Field', 'Details'], [
+  ['Full name', value(sectionG.fullName)], ['Position', selection(sectionG.position, sectionG.positionOther)], ['Date', value(sectionG.date)],
+  ['Authorized signature', this.pdfImage(sectionG.signatureDataUrl, sectionG.signatureFileName)], ['Company stamp', this.pdfImage(sectionG.stampDataUrl, sectionG.stampFileName)]
+]))}
+${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date', 'Decision / comments', 'Signature'], [
+  ['AML Supervisor', value(sectionH.amlName), value(sectionH.amlDate), value(sectionH.amlComments), this.pdfImage(sectionH.amlSignatureDataUrl, sectionH.amlSignatureFileName)],
+  ['DMLRO', value(sectionH.dmlroName), value(sectionH.dmlroDate), value(sectionH.dmlroComments || sectionH.dmlroReason), this.pdfImage(sectionH.dmlroSignatureDataUrl, sectionH.dmlroSignatureFileName)],
+  ['MLRO', value(sectionH.mlroName), value(sectionH.mlroDate), value(sectionH.mlroComments), this.pdfImage(sectionH.mlroSignatureDataUrl, sectionH.mlroSignatureFileName)],
+  ['SEF', value(sectionH.sefName), value(sectionH.sefDate), value(sectionH.sefComments || sectionH.sefConditions), this.pdfImage(sectionH.sefSignatureDataUrl, sectionH.sefSignatureFileName)]
+]))}
+<footer class="footer">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</footer>
+</body></html>`;
+  }
+
+  private pdfSection(title: string, content: string) {
+    return `<section class="section"><div class="section-title">${this.pdfText(title)}</div>${content}</section>`;
+  }
+
+  private pdfTable(headers: string[], rows: string[][]) {
+    if (!rows.length) return '';
+    return `<table><thead><tr>${headers.map((header) => `<th>${this.pdfText(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell || '<span class="empty">-</span>'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+
+  private pdfText(value: string) {
+    const escaped = value.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return escaped ? escaped.replace(/\n/g, '<br>') : '<span class="empty">-</span>';
+  }
+
+  private pdfImage(dataUrl: unknown, fileName: unknown) {
+    const image = this.parseImageDataUrl(this.text(dataUrl));
+    if (!image) return this.pdfText(this.text(fileName));
+    return `<img class="signature" src="data:${image.mimeType};base64,${image.buffer.toString('base64')}" alt="Uploaded signature or stamp">`;
   }
 
   private templateData(payload: SerializedKycForm) {
