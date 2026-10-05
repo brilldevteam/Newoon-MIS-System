@@ -26,6 +26,29 @@ function parseDate(value: string) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+// Formats typing into DD/MM/YYYY: "20032026" -> "20/03/2026", "1/3/2026" -> "1/3/2026".
+// A separator is only added before the next digit, so backspace never gets stuck on a slash.
+export function maskDateInput(raw: string) {
+  // Leave ISO input (e.g. pasted "2026-03-20") untouched; it is parsed on commit.
+  if (/^\s*\d{4}[-/.]/.test(raw)) return raw.trim().slice(0, 10);
+  const parts = ['', '', ''];
+  const limits = [2, 2, 4];
+  let index = 0;
+  for (const character of raw) {
+    if (/\d/.test(character)) {
+      if (parts[index].length >= limits[index]) {
+        if (index === 2) break;
+        index++;
+      }
+      parts[index] += character;
+    } else if (parts[index] && index < 2) {
+      // A typed separator closes a short day or month ("1/" -> day 1).
+      index++;
+    }
+  }
+  return parts.slice(0, index + 1).join('/');
+}
+
 export function TypedDateInput({ value, onChange, disabled = false, className = '' }: TypedDateInputProps) {
   const [draft, setDraft] = useState(() => formatDate(value));
   const [invalid, setInvalid] = useState(false);
@@ -76,8 +99,14 @@ export function TypedDateInput({ value, onChange, disabled = false, className = 
           disabled={disabled}
           aria-invalid={invalid}
           onChange={(event) => {
-            setDraft(event.target.value);
+            const masked = maskDateInput(event.target.value);
+            setDraft(masked);
             setInvalid(false);
+            // Save as soon as a complete, valid date is typed so dependent views update immediately.
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(masked)) {
+              const parsed = parseDate(masked);
+              if (parsed && parsed !== value) onChange(parsed);
+            }
           }}
           onBlur={commit}
           className={`${className} pr-11 ${invalid ? 'border-red-400 focus:border-red-500 focus:ring-red-100' : ''}`.trim()}

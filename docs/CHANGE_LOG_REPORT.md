@@ -7,6 +7,7 @@ This report tracks the Newoon MIS application from the initial project commit on
 - Keep newest entries at the top.
 - Add a dated entry for every completed change set.
 - Include the affected module, summary, changed files, database migrations, verification, branch, commit, and deployment notes.
+- Update `CLIENT_DELIVERY_FEATURE_REGISTER.md` when a completed change adds or materially changes a client-facing feature.
 - If a change is not pushed yet, write `Commit: Not pushed yet`.
 - If testing could not be completed, state the reason clearly.
 
@@ -39,6 +40,87 @@ Git:
 Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
+
+## 2026-10-05 - KYC DOCX/PDF Export Rebuild
+
+Module:
+- KYC Form document generation (DOCX and PDF)
+
+Summary:
+- Replaced the three diverging export implementations with one shared KYC document model rendered to DOCX (`docx` library) and PDF (HTML through a shared headless Chromium via `puppeteer-core`).
+- Both downloads now mirror the in-app Know Your Customer Form preview on the Newoon letterhead: section bars and boxes, two-column field grids, shaded table headers, the Control Structure chart, and Section H grouped into AML Supervisor, DMLRO, MLRO and SEF. Uploaded file names and additional documents are no longer printed.
+- The live preview's Section H is grouped the same way (frontend/src/pages/KycFormEditorPage.tsx).
+- Bundled Carlito (Calibri-metric), Arimo, Noto Sans Arabic and Noto Sans Symbols 2 fonts for the PDF so it wraps like Word and no longer depends on server fonts; Arabic names render shaped and right-to-left.
+- Rebuilt the ownership diagram in the style of the preview's Control Structure chart (layer rail, layer colours, Beneficial tags): vector in the PDF, ~300 dpi in Word, left-to-right for wide structures, and parties with missing or cyclic parents are shown instead of dropped. The PDF now includes the diagram.
+- Fixed: the AML accuracy answer printed "No" on every DOCX (now ticked only when recorded); the PDF showed unanswered PEP/sanctions/dual-citizenship questions as "No" (now neither box is ticked); stretched signatures and stamps; invalid XML control characters corrupting DOCX files; download failures (`ERR_INVALID_CHAR`) for file names containing characters such as curly apostrophes or Arabic text; version conflicts when generating twice at once.
+- Added `KYC_DOCUMENT_GENERATED` and `KYC_DOCUMENT_DOWNLOADED` audit events. PDF failures now return 503 with a clear message.
+- Removed the per-request Chromium launch, the unused hand-written PNG encoder and the unused `docxtemplater` dependency.
+
+Changed Files:
+- backend/src/kyc/export/ (new: index.ts, kyc-document-model.ts, kyc-docx-renderer.ts, kyc-html-renderer.ts, kyc-pdf-renderer.ts, kyc-export-assets.ts, kyc-export-format.ts, ownership-diagram.ts)
+- backend/src/kyc/kyc.service.ts, kyc.controller.ts, kyc.module.ts
+- frontend/src/pages/KycFormEditorPage.tsx (Section H preview grouping)
+- backend/src/kyc/kyc-docx.ts, backend/src/kyc/ownership-diagram.ts (removed)
+- backend/package.json, package-lock.json
+- backend/.env.example
+- backend/scripts/preview-kyc-docx.cjs, render-kyc-word.ps1, render-kyc-pages.ps1
+- backend/templates/README.md
+- docs/kyc-export-preview/ (new standard/complex fixtures and gallery)
+- docs/DEVELOPER_HANDOVER.md, docs/CHANGE_LOG_REPORT.md
+
+Database Changes:
+- None
+
+Verification:
+- `npm run build` passed.
+- `node backend/scripts/preview-kyc-docx.cjs` generated standard and complex fixtures. The DOCX files were rendered in Microsoft Word and the PDFs through Chromium, and every page was inspected locally on Windows.
+- Nest dependency injection of `KycService` and `KycPdfRenderer` and the UTF-8 download header were checked with a testing module.
+- Not verified: Linux server PDF rendering, database-backed generation through the API, and frontend download flow end to end.
+
+Git:
+- Branch: bugfixes-2026-10-05
+- Commit: Not pushed yet
+
+Deployment Notes:
+- `npm ci` (new dependencies: docx, puppeteer-core, @fontsource/carlito, @fontsource/arimo, @fontsource/noto-sans-arabic, @fontsource/noto-sans-symbols-2), then `npm run build`.
+- The server needs Chrome/Chromium; set `CHROMIUM_PATH` if auto-detection fails. Optional `PDF_RENDER_CONCURRENCY` (default 2).
+- No migration required.
+
+## 2026-09-17 - Newoon AML Compass Knowledge Base
+
+Module:
+- Client documentation and support experience
+
+Summary:
+- Added a standalone knowledge base branded as Newoon AML Compass.
+- Matched the supplied Wazely knowledge-base information architecture, Mona Sans typography, search-led homepage, topic cards, guide cards, article layout, and responsive behavior while applying Newoon branding.
+- Added 14 practical guides across 10 topics covering the complete enquiry-to-client AML/KYC workflow.
+- Added live search, topic filtering, keyboard search focus, article contents, previous/next navigation, feedback controls, and support links.
+
+Changed Files:
+- knowledge-base/index.html
+- knowledge-base/article.html
+- knowledge-base/styles.css
+- knowledge-base/content.js
+- knowledge-base/app.js
+- knowledge-base/article.js
+- docs/CLIENT_DELIVERY_FEATURE_REGISTER.md
+- docs/CHANGE_LOG_REPORT.md
+
+Database Changes:
+- None
+
+Verification:
+- Desktop and mobile browser rendering verified.
+- Search filtering and article navigation verified.
+- No horizontal overflow detected at the tested mobile breakpoint.
+
+Git:
+- Branch: feat/kyc-workflow-finalization
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Publish the contents of `knowledge-base/` as a static site or subdirectory.
 
 ## 2026-09-17 - AML Team Final KYC and Amendment Decision
 

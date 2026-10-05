@@ -2260,8 +2260,6 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
       <>
         <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
         <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
-        <Field label="AML Supervisor Name" value={data.amlName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlName', value)} />
-        <UploadField label="AML Supervisor signature" fileName={data.amlSignatureFileName} imageDataUrl={data.amlSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, amlSignatureFileName: file.name, amlSignatureDataUrl: dataUrl })} />
         <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
       </>
     ) : null}
@@ -2372,7 +2370,19 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         <PreviewSection title="H. Internal Use Only">
-          <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType], ['AML Supervisor Name', form.sectionH?.amlName], ['AML Supervisor signature', previewImage(form.sectionH?.amlSignatureDataUrl, form.sectionH?.amlSignatureFileName)], ['AML Supervisor date', form.sectionH?.amlDate], ['DMLRO name', form.sectionH?.dmlroName], ['DMLRO signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['DMLRO date', form.sectionH?.dmlroDate], ['DMLRO risk classification', form.sectionH?.dmlroRiskClassification], ['DMLRO decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['DMLRO conditions', form.sectionH?.dmlroConditions], ['DMLRO reason', form.sectionH?.dmlroReason], ['DMLRO comments', form.sectionH?.dmlroComments], ['MLRO name', form.sectionH?.mlroName], ['MLRO signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['MLRO date', form.sectionH?.mlroDate], ['MLRO final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['MLRO conditions', form.sectionH?.mlroConditions], ['MLRO comments', form.sectionH?.mlroComments], ['SEF name', form.sectionH?.sefName], ['SEF signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['SEF date', form.sectionH?.sefDate], ['SEF management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['SEF conditions', form.sectionH?.sefConditions], ['SEF comments', form.sectionH?.sefComments]]} />
+          <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType]]} />
+          <PreviewGroup title="AML Supervisor">
+            <PreviewGrid rows={[['Date', form.sectionH?.amlDate]]} />
+          </PreviewGroup>
+          <PreviewGroup title="DMLRO">
+            <PreviewGrid rows={[['Name', form.sectionH?.dmlroName], ['Date', form.sectionH?.dmlroDate], ['Signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['Risk classification', form.sectionH?.dmlroRiskClassification], ['Decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['Conditions', form.sectionH?.dmlroConditions], ['Reason', form.sectionH?.dmlroReason], ['Comments', form.sectionH?.dmlroComments]]} />
+          </PreviewGroup>
+          <PreviewGroup title="MLRO">
+            <PreviewGrid rows={[['Name', form.sectionH?.mlroName], ['Date', form.sectionH?.mlroDate], ['Signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['Final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['Conditions', form.sectionH?.mlroConditions], ['Comments', form.sectionH?.mlroComments]]} />
+          </PreviewGroup>
+          <PreviewGroup title="SEF">
+            <PreviewGrid rows={[['Name', form.sectionH?.sefName], ['Date', form.sectionH?.sefDate], ['Signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['Management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['Conditions', form.sectionH?.sefConditions], ['Comments', form.sectionH?.sefComments]]} />
+          </PreviewGroup>
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -2837,6 +2847,11 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
 
 function PreviewSection({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="mt-4"><div className="bg-brand-900 px-2 py-1 text-[11px] font-bold uppercase text-white">{title}</div><div className="border border-t-0 border-slate-300 p-2">{children}</div></section>;
+}
+
+// Review-group heading inside Section H (AML Supervisor, DMLRO, MLRO, SEF); the KYC download uses the same grouping.
+function PreviewGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return <div className="mt-3"><div className="mb-1 border-l-4 border-brand-700 bg-brand-100 px-2 py-0.5 text-[10px] font-bold uppercase text-brand-900">{title}</div>{children}</div>;
 }
 
 function PreviewGrid({ rows }: { rows: Array<[string, any]> }) {

@@ -1,4 +1,4 @@
-param([string]$Directory = "$PSScriptRoot\..\..\docs\kyc-export-preview", [string]$Name = 'kyc-sample')
+param([string]$Directory = "$PSScriptRoot\..\..\docs\kyc-export-preview\standard", [string]$Name = 'kyc-sample', [string]$Prefix = 'word-page')
 $ErrorActionPreference = 'Stop'
 $Directory = (Resolve-Path -LiteralPath $Directory).Path
 $word = $null
@@ -18,7 +18,7 @@ try {
     $word.ScreenRefresh()
     Start-Sleep -Seconds 2
     $pages = $document.ComputeStatistics(2)
-    $document.ExportAsFixedFormat("$Directory\$Name.pdf", 17)
+    $document.ExportAsFixedFormat("$Directory\$Name-word.pdf", 17)
     Add-Type -AssemblyName System.Drawing
     $document.ActiveWindow.View.Type = 3
     for ($i = 1; $i -le $pages; $i++) {
@@ -33,10 +33,10 @@ try {
         try {
             $graphics.Clear([System.Drawing.Color]::White)
             $graphics.DrawImage($metafile, 0, 0, 1190, 1684)
-            $bitmap.Save("$Directory\page-$i.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $bitmap.Save("$Directory\$Prefix-$i.png", [System.Drawing.Imaging.ImageFormat]::Png)
         } finally { $graphics.Dispose(); $bitmap.Dispose(); $metafile.Dispose(); $stream.Dispose() }
     }
-    Write-Output "Word rendered $pages pages: $Directory\$Name.pdf"
+    Write-Output "Word rendered $pages pages: $Directory\$Name-word.pdf"
 } finally {
     if ($null -ne $document) { $document.Close(0) }
     if ($null -ne $word) { $word.Quit() }
