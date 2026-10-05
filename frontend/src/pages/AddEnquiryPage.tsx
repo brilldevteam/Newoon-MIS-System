@@ -1,7 +1,7 @@
 import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { resolveOtherValue, SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
+import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
 import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
@@ -86,7 +86,7 @@ type EnquiryValidationForm = {
   keyContactPhoneCountry: string;
   keyContactPosition: string;
   keyContactPositionOther: string;
-  keyContactNationality: string;
+  keyContactNationality: string[];
   keyContactNationalityOther: string;
   keyContactIdentityNumber: string;
   keyContactIdentityTypes: string[];
@@ -170,6 +170,19 @@ function getRequestErrorMessage(error: any, fallback: string) {
 function splitOtherValue(value: string | null | undefined, options: string[]) {
   if (!value) return { value: '', otherValue: '' };
   return options.includes(value) ? { value, otherValue: '' } : { value: 'Other', otherValue: value };
+}
+
+// Multi-select nationality: known options stay selected; anything else is shown under "Other".
+function splitNationalities(value: unknown, options: string[]) {
+  const values = splitList(value);
+  const known = values.filter((item) => options.includes(item) && item !== 'Other');
+  const other = values.filter((item) => !options.includes(item) || item === 'Other').filter((item) => item !== 'Other');
+  return { value: other.length ? [...known, 'Other'] : known, otherValue: other.join(', ') };
+}
+
+// Saved as one comma-separated string so existing records, KYC conversion and screening keep working.
+function nationalityText(values: string[], otherValue: string) {
+  return values.map((item) => (item === 'Other' ? otherValue.trim() : item)).filter(Boolean).join(', ');
 }
 
 function splitRequestedServices(services: string[]) {
@@ -270,7 +283,7 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
       return 'Key contact position is required.';
     }
-    if (!resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther)) {
+    if (!nationalityText(form.keyContactNationality, form.keyContactNationalityOther)) {
       return 'Key contact nationality is required.';
     }
     if (!form.keyContactPassportNumber.trim() && !form.keyContactQidNumber.trim()) {
@@ -335,7 +348,7 @@ export function AddEnquiryPage() {
     keyContactPhoneCountry: '',
     keyContactPosition: '',
     keyContactPositionOther: '',
-    keyContactNationality: '',
+    keyContactNationality: [],
     keyContactNationalityOther: '',
     keyContactIdentityNumber: '',
     keyContactIdentityTypes: [],
@@ -367,7 +380,7 @@ export function AddEnquiryPage() {
         if (!enquiry) return;
         const details = enquiry.details || {};
         const keyContactPosition = splitOtherValue(enquiry.keyContactPosition, positionOptions);
-        const keyContactNationality = splitOtherValue(String(details.keyContactNationality || ''), nationalityOptions);
+        const keyContactNationality = splitNationalities(details.keyContactNationality, nationalityOptions);
         const proposedLegalForm = splitOtherValue(String(details.proposedLegalForm || ''), legalForms);
         const requestedServices = splitRequestedServices(enquiry.requestedServices || []);
         const preliminary = details.preliminaryKyc && typeof details.preliminaryKyc === 'object' ? details.preliminaryKyc as Record<string, any> : {};
@@ -434,7 +447,7 @@ export function AddEnquiryPage() {
       form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
         ? {}
         : {
-            keyContactNationality: resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther),
+            keyContactNationality: nationalityText(form.keyContactNationality, form.keyContactNationalityOther),
             keyContactIdentityNumber: keyContactIdentityNumber(form),
             keyContactIdentityTypes: form.keyContactIdentityTypes,
             keyContactPassportNumber: form.keyContactPassportNumber,
@@ -465,7 +478,7 @@ export function AddEnquiryPage() {
               contact: {
                 fullName: form.keyContactName,
                 position: resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther),
-                nationality: resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther),
+                nationality: nationalityText(form.keyContactNationality, form.keyContactNationalityOther),
                 passportNumber: form.keyContactPassportNumber,
                 passportExpiryDate: form.keyContactPassportExpiryDate,
                 qidNumber: form.keyContactQidNumber,
@@ -806,14 +819,15 @@ export function AddEnquiryPage() {
                   <input required value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
               </div>
-              <SearchableSelect
+              <SearchableMultiSelect
                 label="Nationality *"
                 value={form.keyContactNationality}
                 otherValue={form.keyContactNationalityOther}
                 options={nationalityOptions}
-                onChange={(value) => setForm({ ...form, keyContactNationality: value, ...(value === 'Other' ? {} : { keyContactNationalityOther: '' }) })}
+                onChange={(value) => setForm({ ...form, keyContactNationality: value, ...(value.includes('Other') ? {} : { keyContactNationalityOther: '' }) })}
                 onOtherChange={(value) => setForm({ ...form, keyContactNationalityOther: value })}
                 allowOther
+                placeholder="Select nationalities"
               />
               <SearchableMultiSelect
                 label="Identity document type"
@@ -1064,7 +1078,7 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
         <PdfSection title="Section E: Key Contact person">
           <p className="mb-1 font-bold">Provide the contact information of the key contact person:</p>
           <PdfTable headers={['No.', 'Field', 'Details']} rows={[
-            ['1', 'Full Name', value(form.keyContactName)], ['2', 'Nationality', value(resolveOtherValue(form.keyContactNationality, form.keyContactNationalityOther))],
+            ['1', 'Full Name', value(form.keyContactName)], ['2', 'Nationality', value(nationalityText(form.keyContactNationality, form.keyContactNationalityOther))],
             ['3', 'Passport Number', value(form.keyContactPassportNumber)], ['4', 'Passport Expiry Date', value(form.keyContactPassportExpiryDate)],
             ['5', 'QID Number', value(form.keyContactQidNumber)], ['6', 'QID Expiry Date', value(form.keyContactQidExpiryDate)],
             ['7', 'Mobile Number', value(form.keyContactPhone)], ['8', 'Email', value(form.keyContactEmail)]
@@ -1126,7 +1140,8 @@ function PreliminaryOwnershipForm({ form, onChange }: { form: EnquiryValidationF
     onChange({ ...form, preliminaryUbos: rows.length ? rows : [blankPreliminaryOwner()] });
   };
   const renderField = (key: 'preliminaryShareholders' | 'preliminaryUbos', index: number, row: PreliminaryOwner, field: keyof PreliminaryOwner) => {
-    if (field === 'nationality' || field === 'address') return <select value={String(row[field])} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 bg-white px-2 py-1.5"><option value="">Select</option>{countryOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>;
+    if (field === 'nationality') return <div className="min-w-[220px]"><SearchableMultiSelect label="" value={splitList(row.nationality)} options={nationalityOptions.filter(Boolean)} onChange={(value) => update(key, index, 'nationality', value.join(', '))} placeholder="Select nationalities" /></div>;
+    if (field === 'address') return <select value={String(row[field])} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 bg-white px-2 py-1.5"><option value="">Select</option>{countryOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>;
     return <input value={String(row[field])} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" />;
   };
   const renderRows = (key: 'preliminaryShareholders' | 'preliminaryUbos', title: string, showUbo = false) => <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">{title}</h2><p className="mt-1 text-sm text-slate-500">Enter the proposed natural-person or corporate ownership details.</p></div><button type="button" onClick={() => onChange({ ...form, [key]: [...form[key], blankPreliminaryOwner()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add row</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[880px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID / CR', 'Nationality', 'Country of residence', 'Ownership %', ...(showUbo ? ['UBO'] : []), ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form[key].map((row, index) => <tr key={index} className="border-t border-slate-200">{(['fullName', 'identityNumber', 'nationality', 'address', 'ownershipPercentage'] as const).map((field) => <td key={field} className="p-2">{renderField(key, index, row, field)}</td>)}{showUbo ? <td className="p-2 text-center"><input type="checkbox" checked={row.isUbo} onChange={(event) => update(key, index, 'isUbo', event.target.checked)} aria-label={`Mark ${row.fullName || `shareholder ${index + 1}`} as UBO`} /></td> : null}<td className="p-2"><button type="button" onClick={() => remove(key, index)} disabled={form[key].length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div><p className="mt-3 text-sm font-semibold text-slate-700">Total {showUbo ? 'shareholder' : 'UBO'} %: {totalOwnership(form[key])}%</p></section>;
@@ -1135,7 +1150,7 @@ function PreliminaryOwnershipForm({ form, onChange }: { form: EnquiryValidationF
 
 function PreliminaryManagementForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
   const update = (index: number, field: keyof PreliminaryManagementPerson, value: string | string[]) => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, ...(field === 'positions' ? { position: (value as string[]).join(', ') } : {}) } : row) });
-  return <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">Proposed Management and Control Persons</h2><p className="mt-1 text-sm text-slate-500">Include directors, secretary, SEF, and authorised signatories.</p></div><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: [...form.preliminaryManagement, blankPreliminaryManagement()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add person</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[860px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID', 'Nationality', 'Positions', ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form.preliminaryManagement.map((row, index) => <tr key={index} className="border-t border-slate-200"><td className="p-2"><input value={row.fullName} onChange={(event) => update(index, 'fullName', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="p-2"><input value={row.identityNumber} onChange={(event) => update(index, 'identityNumber', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="p-2"><select value={row.nationality} onChange={(event) => update(index, 'nationality', event.target.value)} className="w-full rounded border border-slate-300 bg-white px-2 py-1.5"><option value="">Select</option>{nationalityOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></td><td className="min-w-[260px] p-2"><SearchableMultiSelect label="" value={row.positions?.length ? row.positions : row.position ? row.position.split(', ').filter(Boolean) : []} options={positionOptions.filter(Boolean)} onChange={(value) => update(index, 'positions', value)} placeholder="Select one or more positions" /></td><td className="p-2"><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.filter((_, rowIndex) => rowIndex !== index) })} disabled={form.preliminaryManagement.length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div></section>;
+  return <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">Proposed Management and Control Persons</h2><p className="mt-1 text-sm text-slate-500">Include directors, secretary, SEF, and authorised signatories.</p></div><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: [...form.preliminaryManagement, blankPreliminaryManagement()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add person</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[860px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID', 'Nationality', 'Positions', ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form.preliminaryManagement.map((row, index) => <tr key={index} className="border-t border-slate-200"><td className="p-2"><input value={row.fullName} onChange={(event) => update(index, 'fullName', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="p-2"><input value={row.identityNumber} onChange={(event) => update(index, 'identityNumber', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="min-w-[240px] p-2"><SearchableMultiSelect label="" value={splitList(row.nationality)} options={nationalityOptions.filter(Boolean)} onChange={(value) => update(index, 'nationality', value.join(', '))} placeholder="Select nationalities" /></td><td className="min-w-[260px] p-2"><SearchableMultiSelect label="" value={row.positions?.length ? row.positions : row.position ? row.position.split(', ').filter(Boolean) : []} options={positionOptions.filter(Boolean)} onChange={(value) => update(index, 'positions', value)} placeholder="Select one or more positions" /></td><td className="p-2"><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.filter((_, rowIndex) => rowIndex !== index) })} disabled={form.preliminaryManagement.length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div></section>;
 }
 
 function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label: string; description: string }> {

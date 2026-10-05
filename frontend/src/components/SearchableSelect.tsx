@@ -43,6 +43,12 @@ export function listValue(value: unknown) {
   return value ? [String(value)] : [];
 }
 
+// Multi-value text fields (nationality) may be stored as "Qatar, India"; returns them as a list.
+export function splitList(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+  return String(value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
 export function resolveOtherValue(value: unknown, otherValue?: string) {
   if (value === 'Other') return otherValue?.trim() || 'Other';
   return value ? String(value) : '';

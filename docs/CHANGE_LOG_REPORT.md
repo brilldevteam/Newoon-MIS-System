@@ -41,6 +41,35 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-10-05 - Multi-Select Nationality
+
+Module:
+- Enquiries, KYC form, Screening
+
+Summary:
+- Nationality is multi-select everywhere: enquiry proposed shareholders, UBOs, management and key contact, and KYC Section E (Section B and C were already multi-select).
+- Multiple nationalities are stored as comma-separated text (for example "Russia, Romania"), so existing records, enquiry-to-KYC conversion, previews and downloads keep working without a schema change.
+- Screening uses the first nationality as the entity country.
+
+Changed Files:
+- frontend/src/components/SearchableSelect.tsx
+- frontend/src/pages/AddEnquiryPage.tsx
+- frontend/src/pages/KycFormEditorPage.tsx
+- backend/src/screening/screening.service.ts
+- docs/CHANGE_LOG_REPORT.md
+
+Database Changes:
+- None
+
+Verification:
+- Frontend and backend builds passed locally. Not yet clicked through in a browser.
+
+Git:
+- Branch: bugfixes-2026-10-05
+
+Deployment Notes:
+- Pull, build and restart. No migration required.
+
 ## 2026-10-05 - KYC DOCX/PDF Export Rebuild
 
 Module:

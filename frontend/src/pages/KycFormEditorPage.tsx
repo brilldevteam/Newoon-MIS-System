@@ -2,7 +2,7 @@ import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Sav
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
-import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select } from '../components/SearchableSelect';
+import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
 import { useAuth } from '../hooks/useAuth';
@@ -2014,28 +2014,29 @@ function SectionDSupportingDocuments({
 }
 
 function SectionEContactForm({ data, onChange }: FormProps) {
-  function setNationality(nationality: string) {
+  // Nationality is multi-select; the mobile dial code follows the first selected nationality.
+  function setNationality(nationality: string[]) {
     onChange({
       ...data,
       nationality,
-      ...(nationality === 'Other' ? {} : { nationalityOther: '' }),
-      mobileNumber: applyCountryDialCode(data.mobileNumber || '', countryFromNationality(nationality))
+      ...(nationality.includes('Other') ? {} : { nationalityOther: '' }),
+      mobileNumber: applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(nationality)[0] || ''))
     });
   }
 
   function setMobileNumber(mobileNumber: string) {
     onChange({
       ...data,
-      mobileNumber: applyCountryDialCode(mobileNumber, countryFromNationality(data.nationality || ''))
+      mobileNumber: applyCountryDialCode(mobileNumber, countryFromNationality(splitList(data.nationality)[0] || ''))
     });
   }
 
   return <FormGrid>
     <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
-    <Select label="Nationality" value={data.nationality} otherValue={data.nationalityOther} options={nationalityOptions} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther />
+    <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
-    <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(data.nationality || ''))} onChange={setMobileNumber} />
+    <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
     <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
   </FormGrid>;
 }
@@ -2359,7 +2360,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
-          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', resolveOtherValue(form.sectionE.nationality, form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
+          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', displaySelectedList(splitList(form.sectionE.nationality), form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Received', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
@@ -3042,7 +3043,9 @@ function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycFormData
     ...(form.sectionE || {})
   };
   sectionE.position = listValue(sectionE.position);
-  sectionE.mobileNumber = applyCountryDialCode(sectionE.mobileNumber || '', countryFromNationality(sectionE.nationality || ''));
+  // Older records and enquiry conversions store a single or comma-separated nationality string.
+  sectionE.nationality = splitList(sectionE.nationality);
+  sectionE.mobileNumber = applyCountryDialCode(sectionE.mobileNumber || '', countryFromNationality(sectionE.nationality[0] || ''));
 
   return {
     ...emptyForm,
