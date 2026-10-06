@@ -1,5 +1,24 @@
 # Newoon MIS Developer Handover
 
+## Ownership and Review Corrections (2026-10-06)
+
+- The DMLRO submission page has a required rich-text AML Supervisor comments field, including preliminary cases without Section H. `submit-to-aml` accepts `formalComments`, sanitizes them and stores them via the existing locked review submission/snapshot and Section H synchronization where a form exists. Screening and CRRF checks remain enforced. Deploy both workspaces together.
+
+- CRRF file selection remains staged until Save Draft. After upload succeeds, the document list updates immediately, even if saving the record subsequently fails. Unsaved risk rating/comments are preserved instead of being replaced by persisted upload-response fields. Run `node frontend/scripts/check-crrf-save.cjs` for mocked success/failure regression checks.
+
+- The legacy DMLRO submission page uses `GET /api/kyc/:id/submission-readiness`, with the same server Screening/CRRF checks used for submission plus uploads and Supervisor comments. Missing requirements disable submission; failed requests display errors and clear the submitting state. Submission still revalidates on the server. Deploy frontend and backend together.
+
+- Proposed-company direct shareholder percentages must be between 0 and 100 and total 100% before advancing or submitting Preliminary KYC. The backend also checks completeness on submission. Incomplete drafts remain saveable; separately entered beneficial owners are not added to the direct shareholder total.
+
+- Preliminary shareholders now carry stable JSON IDs and an explicit Individual/Corporate Entity type. Natural-person UBOs can select a corporate parent. The IDs, type and parent links are transferred into KYC ownership section JSON; no schema migration is required.
+- Preliminary and KYC previews merge marked natural-person shareholders with separately entered UBOs and deduplicate them. Editing or removing one shareholder no longer deletes an unrelated UBO by array position. Linked UBOs are included in the KYC preview and export diagrams.
+- Both supervisor submission routes (including the legacy `submit-to-aml` endpoint used by the form) require completed screening for current parties, common-list results/evidence, and a CRRF risk rating with an uploaded CRRF document. Supervisor and DMLRO submissions require nonempty comments; empty rich-text markup does not qualify.
+- Review comment fields use Tiptap for bold, italic, underline, highlighting, lists and paragraphs. DOMPurify protects browser rendering; `common/review-comments.ts` sanitizes stored formal/section-H comments and parses formatting for DOCX/PDF. Do not render unsanitized comment HTML. Legacy plain text remains supported.
+- Comments, reasons, conditions and explanations use full-width preview/export rows. Long full-width DOCX rows can split across pages. The existing letterhead is preserved.
+- Existing corporate parties entered before type/link metadata was supported must be explicitly classified and linked by the reviewer. Existing identity values containing `+` are not silently rewritten: identity numbers remain text, preserving leading zeros and letters.
+- Run `npm run build`, then `node backend/scripts/check-ownership-review.cjs` for synthetic regression checks. Run the document preview/render commands below for layout verification. Production deployment needs `npm ci` for the editor/sanitizer dependencies; do not seed or reset the database.
+- Use Node.js 22.12 or newer for the current dependency set (the existing `puppeteer-core` package requires it). Recheck runtime compatibility when updating the lockfile.
+
 Reviewed against local source on 2026-10-05. This is a technical handover, not a live deployment audit or production-readiness certification. Read `../AGENTS.md` before making changes.
 
 ## Project and Architecture

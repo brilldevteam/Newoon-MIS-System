@@ -1,4 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { hasComment, safeComment } from '../common/review-comments';
+import { beneficialOwners } from '../common/ownership';
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
@@ -478,7 +480,29 @@ export class KycService {
     });
   }
 
-  async submitToAml(user: RequestUser, id: string) {
+  async submissionReadiness(user: RequestUser, id: string) {
+    const kycCase = await this.requireWritableCase(user, id);
+    return this.prisma.$transaction(async (tx) => {
+      const checks: Array<{ label: string; complete: boolean; message: string }> = [];
+      const addCheck = async (label: string, check: () => Promise<void>) => {
+        try { await check(); checks.push({ label, complete: true, message: '' }); }
+        catch (error) {
+          if (!(error instanceof BadRequestException)) throw error;
+          checks.push({ label, complete: false, message: error.message });
+        }
+      };
+      await addCheck('Screening', () => this.assertScreeningReady(tx, kycCase));
+      await addCheck('CRRF', () => this.assertCrrfReady(tx, kycCase));
+      const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
+      checks.push({ label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'Upload at least one document required for KYC preparation.' });
+      const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
+      const comments = hasComment(review?.amlClarificationFindings);
+      checks.push({ label: 'AML Supervisor comments', complete: comments, message: comments ? '' : 'Enter AML Supervisor comments below before submitting.' });
+      return { ready: checks.every((check) => check.complete), checks, supervisorComments: safeComment(review?.amlClarificationFindings) };
+    });
+  }
+
+  async submitToAml(user: RequestUser, id: string, dto: Record<string, unknown> = {}) {
     const kycCase = await this.requireWritableCase(user, id);
     const submittableStatuses: KycCaseStatus[] = [
         KycCaseStatus.INQUIRY_RECEIVED,
@@ -501,6 +525,13 @@ export class KycService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await this.assertReviewPackageReady(tx, kycCase);
+      const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
+      const formalComments = safeComment(dto.formalComments !== undefined ? dto.formalComments : review?.amlClarificationFindings);
+      if (!hasComment(formalComments)) throw new BadRequestException('Enter AML Supervisor comments on the submission page before submitting to DMLRO.');
+      const submitted = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.SUPERVISOR, { formalComments, data: { ...(review || {}), amlClarificationFindings: formalComments } });
+      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', submitted.id, { action: 'REVIEW_SUBMITTED', stage: ReviewStage.SUPERVISOR, routedTo: ReviewStage.DMLRO });
+      await tx.internalReviewTask.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } }, data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id } });
       await tx.kycCase.update({
         where: { id },
         data: {
@@ -695,7 +726,7 @@ export class KycService {
       where: { kycCaseId_stage: { kycCaseId: id, stage } },
       update: {
         data: this.jsonValue(dto.data || dto),
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         updatedBy: user.id
       },
@@ -704,7 +735,7 @@ export class KycService {
         kycCaseId: id,
         stage,
         data: this.jsonValue(dto.data || dto),
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         createdBy: user.id,
         updatedBy: user.id
@@ -715,12 +746,14 @@ export class KycService {
   async submitSupervisorReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.SUPERVISOR);
     await this.assertReviewStageActive(id, ReviewStage.SUPERVISOR);
+    if (!hasComment(dto.formalComments)) throw new BadRequestException('Add AML Supervisor comments before submitting the review.');
     return this.submitReviewAndRoute(user, id, ReviewStage.SUPERVISOR, dto, ReviewStage.DMLRO);
   }
 
   async submitDmlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.DMLRO);
     await this.assertReviewStageActive(id, ReviewStage.DMLRO);
+    if (!hasComment(dto.formalComments)) throw new BadRequestException('Add DMLRO comments before submitting the review.');
     const decision = this.enumValue(dto.decision || 'APPROVE', ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'], 'DMLRO decision') as ReviewDecision;
     const reason = this.optionalText(dto.reason);
     const conditions = this.optionalText(dto.conditions);
@@ -1298,6 +1331,11 @@ export class KycService {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
     const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row));
     const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row));
+    for (const ubo of ubos) {
+      if (ubo.parentRowId && !rows.some((party) => party.id === ubo.parentRowId && party.shareholderType === 'Corporate Entity')) {
+        throw new BadRequestException('Link each indirect beneficial owner to a corporate shareholder in this form.');
+      }
+    }
     const shareholderPercentage = (row: RowPayload) => this.numberValue(row.shareholderPercentage ?? row.ownershipPercentage);
     const uboInterestPercentage = (row: RowPayload) => this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage);
     const total = rows.filter((row) => !this.text(row.parentRowId)).reduce((sum, row) => sum + shareholderPercentage(row), 0);
@@ -1312,7 +1350,7 @@ export class KycService {
     }
     const sectionData = {
       totalOwnershipPercentage: total,
-      totalUboPercentage: (ubos.length ? ubos : rows.filter((row) => Boolean(row.isUbo))).reduce((sum, row) => sum + uboInterestPercentage(row), 0),
+      totalUboPercentage: beneficialOwners(rows, ubos).reduce((sum, row) => sum + uboInterestPercentage(row), 0),
       uboDifferentFromShareholders: dto.uboDifferentFromShareholders || 'No',
       uboGroupStructureNotes: dto.uboGroupStructureNotes || '',
       shareholders: rows,
@@ -1625,7 +1663,7 @@ export class KycService {
       where: { kycCaseId: id, tenantId: form.tenantId, stage: ReviewStage.SUPERVISOR },
       select: { formalComments: true }
     });
-    const payload = { ...this.serializeForm(form), amlComments: supervisorSubmission?.formalComments || '' };
+    const payload = { ...this.serializeForm(form), amlComments: supervisorSubmission?.formalComments || form.internalReview?.amlClarificationFindings || '' };
     const isDocx = type === KycGeneratedDocumentType.DOCX;
     const companyName = this.safeFileName(this.text((payload.sectionA as Record<string, unknown>).legalName) || `KYC Case ${payload.kycCaseId}`).slice(0, 120);
     const mimeType = isDocx ? KYC_DOCX_MIME : KYC_PDF_MIME;
@@ -2364,6 +2402,7 @@ export class KycService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (stage === ReviewStage.SUPERVISOR) await this.assertReviewPackageReady(tx, kycCase);
         const saved = await this.lockReviewSubmission(tx, user, kycCase, stage, dto);
         await this.clearReviewTaskStatus(tx, id, stage, ReviewTaskStatus.COMPLETED);
         await tx.internalReviewTask.updateMany({
@@ -2379,35 +2418,62 @@ export class KycService {
         await tx.internalReviewTask.upsert({
           where: { kycCaseId_stage_status: { kycCaseId: id, stage: nextStage, status: ReviewTaskStatus.PENDING } },
           update: { updatedBy: user.id },
-          create: {
-            tenantId: kycCase.tenantId,
-            kycCaseId: id,
-            stage: nextStage,
-            createdBy: user.id,
-            updatedBy: user.id
-          }
+          create: { tenantId: kycCase.tenantId, kycCaseId: id, stage: nextStage, createdBy: user.id, updatedBy: user.id }
         });
-
         await this.recordStatus(tx, kycCase, user, this.stageStatus(stage, 'completed'), `${this.stageLabel(stage)} review submitted`);
         await this.recordStatus(tx, { ...kycCase, status: this.stageStatus(stage, 'completed') }, user, this.stageStatus(nextStage, 'pending'), `${this.stageLabel(nextStage)} review task assigned`);
         await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'REVIEW_SUBMITTED', stage, routedTo: nextStage });
-        await this.createNotification(
-          tx,
-          kycCase,
-          nextStage === ReviewStage.DMLRO ? NotificationType.DMLRO_TASK_ASSIGNED : NotificationType.MLRO_TASK_ASSIGNED,
-          `${this.stageLabel(nextStage)} task assigned`,
-          `${kycCase.title} is ready for ${this.stageLabel(nextStage)} review.`
-        );
-
+        await this.createNotification(tx, kycCase, nextStage === ReviewStage.DMLRO ? NotificationType.DMLRO_TASK_ASSIGNED : NotificationType.MLRO_TASK_ASSIGNED, `${this.stageLabel(nextStage)} task assigned`, `${kycCase.title} is ready for ${this.stageLabel(nextStage)} review.`);
         return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      if (stage === ReviewStage.DMLRO && nextStage === ReviewStage.MLRO) {
-        throw new InternalServerErrorException('Unable to resubmit this KYC file to MLRO. The review queue was refreshed; please try again.');
-      }
+      if (stage === ReviewStage.DMLRO && nextStage === ReviewStage.MLRO) throw new InternalServerErrorException('Unable to resubmit this KYC file to MLRO. The review queue was refreshed; please try again.');
       throw error;
     }
+  }
+
+  private async assertReviewPackageReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
+    await this.assertScreeningReady(tx, kycCase);
+    await this.assertCrrfReady(tx, kycCase);
+  }
+
+  private async assertScreeningReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
+          const id = kycCase.id;
+          const client = kycCase.client || await tx.client.findFirstOrThrow({ where: { id: kycCase.clientId, tenantId: kycCase.tenantId } });
+          const where = { tenantId: kycCase.tenantId, kycCaseId: id };
+          const screening = await tx.screeningRecord.findMany({ where, include: { checks: true } });
+          const commonChecks = await tx.screeningCaseCheck.findMany({ where });
+          const evidence = await tx.screeningCaseDocument.findMany({ where });
+          const resultTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST', 'WORLD_CHECK', 'GOOGLE'];
+          const evidenceTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST'];
+          const missingCommonChecks = resultTypes.some((type) => !commonChecks.some((check) => check.checkType === type && check.resultStatus !== 'NOT_CHECKED' && (!['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) || hasComment(check.notes))));
+          const missingEvidence = evidenceTypes.some((type) => !evidence.some((document) => document.checkType === type && document.storagePath));
+          const form = await tx.kycForm.findFirst({ where, include: this.formInclude() });
+          const current = form ? this.serializeForm(form) : null;
+          const company: Record<string, unknown> = current?.sectionA || {};
+          const requiredParties = [
+            { fullName: this.text(company.legalName) || client.name, identityNumber: this.text(company.commercialRegistrationNo) || client.registrationNumber },
+            ...this.asArray<RowPayload>(current?.sectionB.shareholders),
+            ...this.asArray<RowPayload>(current?.sectionB.ubos),
+            ...this.asArray<RowPayload>(current?.sectionC.managers)
+          ].filter((row) => this.text(row.fullName).trim());
+          const missingParty = requiredParties.some((row) => !screening.some((record) =>
+            record.status === 'COMPLETED' && (this.text(row.identityNumber).trim()
+              ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
+              : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase())));
+          if (!screening.length || missingParty) throw new BadRequestException('Complete Screening for the client and every current shareholder, beneficial owner and manager before submitting to DMLRO.');
+          if (missingCommonChecks || missingEvidence) throw new BadRequestException('Complete Screening common-list results and upload the NCTC, UN, OFAC, EU and PPO evidence before submitting to DMLRO.');
+          if (screening.some((record) => record.status !== 'COMPLETED' || !record.conclusionStatus || !hasComment(record.remarks) || record.checks.some((check) => check.isSelected && (check.resultStatus === 'NOT_CHECKED' || ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) && !hasComment(check.notes))))) {
+            throw new BadRequestException('Complete Screening records with final results, remarks and comments for any matches before submitting to DMLRO.');
+          }
+  }
+
+  private async assertCrrfReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
+          const crrf = await tx.crrfRecord.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, include: { documents: true } });
+          if (!crrf?.riskRating || !crrf.documents.some((document) => document.storagePath)) {
+            throw new BadRequestException('Complete the CRRF risk rating and upload the CRRF document before submitting to DMLRO.');
+          }
   }
 
   private async returnDmlroReviewToSupervisor(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -2474,7 +2540,7 @@ export class KycService {
       update: {
         version,
         data,
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         status: ReviewSubmissionStatus.SUBMITTED,
         submittedById: user.id,
@@ -2487,7 +2553,7 @@ export class KycService {
         kycCaseId: kycCase.id,
         stage,
         data,
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         status: ReviewSubmissionStatus.SUBMITTED,
         submittedById: user.id,
@@ -2515,6 +2581,17 @@ export class KycService {
       data: { isLocked: true }
     });
 
+    const form = await tx.kycForm.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, select: { id: true } });
+    if (form && hasComment(dto.formalComments)) {
+      const comment = safeComment(dto.formalComments);
+      const patch = stage === ReviewStage.SUPERVISOR ? { amlClarificationFindings: comment }
+        : stage === ReviewStage.DMLRO ? { dmlroComments: comment }
+        : stage === ReviewStage.MLRO ? { mlroComments: comment } : { sefComments: comment };
+      await tx.kycInternalReview.upsert({
+        where: { kycFormId: form.id }, update: { ...patch, updatedBy: user.id },
+        create: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, kycFormId: form.id, ...patch, createdBy: user.id, updatedBy: user.id }
+      });
+    }
     return saved;
   }
 
@@ -2537,7 +2614,7 @@ export class KycService {
       where: { kycCaseId_stage: { kycCaseId: kycCase.id, stage: ReviewStage.DMLRO } },
       update: {
         data,
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         status: ReviewSubmissionStatus.RETURNED,
         submittedById: user.id,
@@ -2550,7 +2627,7 @@ export class KycService {
         kycCaseId: kycCase.id,
         stage: ReviewStage.DMLRO,
         data,
-        formalComments: this.optionalText(dto.formalComments),
+        formalComments: safeComment(dto.formalComments) || null,
         confidentialNotes: this.optionalText(dto.confidentialNotes),
         status: ReviewSubmissionStatus.RETURNED,
         submittedById: user.id,
@@ -2807,7 +2884,7 @@ export class KycService {
 
       return {
         amlAccuracyChecked: Boolean(dto.amlAccuracyChecked),
-        amlClarificationFindings: this.optionalText(dto.amlClarificationFindings),
+        amlClarificationFindings: safeComment(dto.amlClarificationFindings) || null,
         riskClassification: riskClassification as RiskClassification | null,
         dueDiligenceType: dueDiligenceType as DueDiligenceType | null,
         amlName: this.optionalText(dto.amlName),
@@ -2822,7 +2899,7 @@ export class KycService {
         dmlroDecision: dmlroDecision as ReviewDecision | null,
         dmlroConditions: this.optionalText(dto.dmlroConditions),
         dmlroReason: this.optionalText(dto.dmlroReason),
-        dmlroComments: this.optionalText(dto.dmlroComments),
+        dmlroComments: safeComment(dto.dmlroComments) || null,
         mlroName: this.optionalText(dto.mlroName),
         mlroSignatureFileName: this.optionalText(dto.mlroSignatureFileName),
         mlroSignatureDataUrl: this.optionalText(dto.mlroSignatureDataUrl),
@@ -2832,14 +2909,14 @@ export class KycService {
         mlroRiskReasonCategory: mlroRiskReasonCategory as RiskOverrideReason | null,
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
-        mlroComments: this.optionalText(dto.mlroComments),
+        mlroComments: safeComment(dto.mlroComments) || null,
         sefName: this.optionalText(dto.sefName),
         sefSignatureFileName: this.optionalText(dto.sefSignatureFileName),
         sefSignatureDataUrl: this.optionalText(dto.sefSignatureDataUrl),
         sefDate: this.dateValue(dto.sefDate),
         sefDecision: sefDecision as ReviewDecision | null,
         sefConditions: this.optionalText(dto.sefConditions),
-        sefComments: this.optionalText(dto.sefComments)
+        sefComments: safeComment(dto.sefComments) || null
       };
     }
 
@@ -2853,7 +2930,7 @@ export class KycService {
         dmlroDecision: dmlroDecision as ReviewDecision | null,
         dmlroConditions: this.optionalText(dto.dmlroConditions),
         dmlroReason: this.optionalText(dto.dmlroReason),
-        dmlroComments: this.optionalText(dto.dmlroComments)
+        dmlroComments: safeComment(dto.dmlroComments) || null
       };
     }
 
@@ -2868,7 +2945,7 @@ export class KycService {
         mlroRiskReasonCategory: mlroRiskReasonCategory as RiskOverrideReason | null,
         mlroRiskExplanation: this.optionalText(dto.mlroRiskExplanation),
         mlroConditions: this.optionalText(dto.mlroConditions),
-        mlroComments: this.optionalText(dto.mlroComments)
+        mlroComments: safeComment(dto.mlroComments) || null
       };
     }
 
@@ -2880,7 +2957,7 @@ export class KycService {
         sefDate: this.dateValue(dto.sefDate),
         sefDecision: sefDecision as ReviewDecision | null,
         sefConditions: this.optionalText(dto.sefConditions),
-        sefComments: this.optionalText(dto.sefComments)
+        sefComments: safeComment(dto.sefComments) || null
       };
     }
 

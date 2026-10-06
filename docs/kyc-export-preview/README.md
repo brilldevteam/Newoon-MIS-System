@@ -6,6 +6,7 @@ Fixtures:
 
 - `standard/`: holding company with a single shareholder and UBO, two officers, low risk and simplified due diligence (fictitious data).
 - `complex/`: three-layer structure, long, accented and Arabic names, an orphaned party, six managers, missing values, an unanswered sanctions question and an SEF review.
+- The complex MLRO comment includes bold text, highlighting, separate paragraphs and a list to check full-width rich-text export formatting.
 
 Regenerate on Windows with Microsoft Word and Chrome installed:
 

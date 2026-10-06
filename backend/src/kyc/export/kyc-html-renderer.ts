@@ -16,8 +16,12 @@ const UNCHECKED = '<span class="cb"></span>';
 function inline(part: Inline) {
   if ('box' in part) return part.box ? CHECKED : UNCHECKED;
   const value = escape(part.text).replace(/ {2,}/g, (spaces) => '&nbsp;'.repeat(spaces.length));
-  if (part.bold) return `<b>${value}</b>`;
-  return part.muted ? `<span class="muted">${value}</span>` : value;
+  let formatted = value;
+  if (part.bold) formatted = `<b>${formatted}</b>`;
+  if (part.italic) formatted = `<i>${formatted}</i>`;
+  if (part.underline) formatted = `<u>${formatted}</u>`;
+  if (part.highlight) formatted = `<mark>${formatted}</mark>`;
+  return part.muted ? `<span class="muted">${formatted}</span>` : formatted;
 }
 
 function lineHtml(line: Line, alignment?: 'left' | 'center') {
@@ -86,6 +90,7 @@ td { border: 0.5pt solid #${COLORS.border}; padding: 3pt 4pt; vertical-align: to
 tr { break-inside: avoid; }
 thead { display: table-header-group; }
 table.fields td { height: 22pt; }
+table.fields tr:has(td[colspan="2"]) { break-inside: auto; }
 table.data { font-size: 7.5pt; }
 tr.head td { background: #${COLORS.header}; font-weight: 700; }
 .sig { display: block; max-height: 36pt; max-width: 100%; margin-top: 1.5pt; object-fit: contain; }

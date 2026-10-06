@@ -1,6 +1,8 @@
 import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
+import { mergeBeneficialOwners } from '../utils/ownership';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
@@ -1173,7 +1175,7 @@ export function KycFormEditorPage() {
           reason,
           conditions
         },
-        formalComments: latestSectionH.dmlroComments || reason || conditions
+        formalComments: latestSectionH.dmlroComments || ''
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
       const normalized = normalizeForm(formData, caseData);
@@ -1576,9 +1578,7 @@ function ownershipLayerTotals(rows: Row[]) {
 }
 
 function effectiveUboRows(sectionB: Record<string, any>) {
-  const manualRows = sectionB.ubos || [];
-  if (manualRows.length) return manualRows;
-  return (sectionB.shareholders || []).filter((row: Row) => row.isUbo);
+  return mergeBeneficialOwners<Row>(sectionB.shareholders || [], sectionB.ubos || []);
 }
 
 function uboInterestTotal(sectionB: Record<string, any>) {
@@ -1605,6 +1605,7 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
         </div>
       ) : null}
       <OwnershipStructureDiagram rootName={rootName} rows={shareholders} ubos={data.ubos || []} />
+      {(data.ubos || []).map((ubo: Row, index: number) => <label key={ubo.id || index} className="block text-sm font-medium text-slate-700">Corporate shareholder for {ubo.fullName || `beneficial owner ${index + 1}`}<select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={ubo.parentRowId || ''} onChange={(event) => onChange({ ...data, ubos: data.ubos.map((row: Row, rowIndex: number) => rowIndex === index ? { ...row, parentRowId: event.target.value } : row) })}><option value="">Direct beneficial owner</option>{shareholders.filter((party: Row) => party.shareholderType === 'Corporate Entity').map((party: Row) => <option key={party.id} value={party.id}>{party.fullName || 'Unnamed corporate shareholder'}</option>)}</select></label>)}
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
@@ -1792,7 +1793,8 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
     ...rows.filter((row) => row.isUbo).map((row, index) => row.id || String(index)),
     ...ubos.map((row) => String(row.identityNumber || row.fullName || ''))
   ]);
-  const normalizedRows: Row[] = rows.map((row, index) => ({ ...row, id: row.id || `ownership-${index + 1}` }));
+  const linkedUbos = ubos.filter((row) => row.parentRowId && !rows.some((party) => party.id === row.id || party.fullName === row.fullName && party.identityNumber === row.identityNumber));
+  const normalizedRows: Row[] = [...rows, ...linkedUbos.map<Row>((row) => ({ ...row, isUbo: true, shareholderType: 'Individual' }))].map((row, index) => ({ ...row, id: row.id || `ownership-${index + 1}` }));
   const childrenByParent = new Map<string, Row[]>();
   normalizedRows.forEach((row) => {
     const parent = row.parentRowId || 'ROOT';
@@ -2262,6 +2264,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
         <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
         <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
+        <Field label="AML Supervisor comments" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
       </>
     ) : null}
     {showDmlro ? (
@@ -2373,7 +2376,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         <PreviewSection title="H. Internal Use Only">
           <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType]]} />
           <PreviewGroup title="AML Supervisor">
-            <PreviewGrid rows={[['Date', form.sectionH?.amlDate]]} />
+            <PreviewGrid rows={[['Date', form.sectionH?.amlDate], ['Comments', form.sectionH?.amlClarificationFindings]]} />
           </PreviewGroup>
           <PreviewGroup title="DMLRO">
             <PreviewGrid rows={[['Name', form.sectionH?.dmlroName], ['Date', form.sectionH?.dmlroDate], ['Signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['Risk classification', form.sectionH?.dmlroRiskClassification], ['Decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['Conditions', form.sectionH?.dmlroConditions], ['Reason', form.sectionH?.dmlroReason], ['Comments', form.sectionH?.dmlroComments]]} />
@@ -2402,7 +2405,7 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
   return (
     <label className={className}>
       {label}
-      {textarea ? (
+      {textarea && /comment/i.test(label) ? <RichTextEditor label={label} value={value || ''} onChange={onChange} /> : textarea ? (
         <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : type === 'date' ? (
         <TypedDateInput value={value} onChange={onChange} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -2856,7 +2859,7 @@ function PreviewGroup({ title, children }: { title: string; children: React.Reac
 }
 
 function PreviewGrid({ rows }: { rows: Array<[string, any]> }) {
-  return <div className="grid grid-cols-2 border-l border-t border-slate-300">{rows.map(([label, value]) => <div key={label} className="min-h-8 border-b border-r border-slate-300 p-1"><span className="font-semibold">{label}: </span>{renderPreviewValue(label, value)}</div>)}</div>;
+  return <div className="grid grid-cols-2 border-l border-t border-slate-300">{rows.map(([label, value]) => <div key={label} className={`min-h-8 min-w-0 break-words whitespace-pre-wrap border-b border-r border-slate-300 p-1 ${/comment|findings|explanation|conditions|reason/i.test(label) ? 'col-span-2' : ''}`}><span className="font-semibold">{label}: </span>{renderPreviewValue(label, value)}</div>)}</div>;
 }
 
 function previewImage(imageDataUrl?: string, fileName?: string) {
@@ -2864,6 +2867,7 @@ function previewImage(imageDataUrl?: string, fileName?: string) {
 }
 
 function renderPreviewValue(label: string, value: any) {
+  if (/comment/i.test(label) && typeof value === 'string') return <div className="review-rich-text" dangerouslySetInnerHTML={{ __html: safeCommentHtml(value || '-') }} />;
   if (value?.imageDataUrl) {
     return <img src={value.imageDataUrl} alt={`${label} preview`} className="mt-1 max-h-12 max-w-full object-contain" />;
   }
