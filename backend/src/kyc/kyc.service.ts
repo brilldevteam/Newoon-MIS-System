@@ -1,8 +1,9 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { hasComment, safeComment } from '../common/review-comments';
 import { beneficialOwners } from '../common/ownership';
-import { declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
+import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
 import { sharedReviewFeedback } from '../common/shared-review-feedback';
+import { preliminaryPdfHtml } from '../enquiries/preliminary-pdf';
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
@@ -1202,6 +1203,119 @@ export class KycService {
     });
   }
 
+  private async beginFormAmendment(
+    tx: Prisma.TransactionClient, user: RequestUser,
+    kycCase: { id: string; tenantId: string; status: KycCaseStatus }, reason: string, fullKyc = false
+  ) {
+    // Serialize concurrent returns before capturing and advancing the active revision.
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "KycForm" WHERE "kycCaseId" = ${kycCase.id} AND "tenantId" = ${kycCase.tenantId} FOR UPDATE`);
+    const currentCase = await tx.kycCase.findFirst({ where: { id: kycCase.id, tenantId: kycCase.tenantId }, select: { status: true } });
+    if (currentCase?.status !== kycCase.status) throw new BadRequestException('The case changed during this action. Refresh before trying again.');
+    const form = await tx.kycForm.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId }, include: this.formInclude() });
+    if (!form) throw new BadRequestException('Create the KYC form before opening an amendment.');
+    const snapshot = this.serializeForm(form);
+    const revision = await tx.kycFormRevision.create({ data: {
+      tenantId: form.tenantId, kycFormId: form.id, version: form.version,
+      snapshot: this.jsonValue(snapshot), reason, createdBy: user.id
+    } });
+    for (const document of form.kycCase.legalDocuments) {
+      if (!document.storagePath) continue;
+      const path = this.resolveLegalDocumentPath(document.storagePath);
+      if (!path || !existsSync(path)) continue;
+      await tx.kycRevisionFile.create({ data: {
+        revisionId: revision.id, sourceDocumentId: document.id, fileName: document.fileName,
+        mimeType: document.mimeType || 'application/octet-stream', content: new Uint8Array(readFileSync(path))
+      } });
+    }
+    const signedDocuments = await tx.signedKycDocument.findMany({ where: { tenantId: form.tenantId, kycCaseId: kycCase.id, activeVersion: true } });
+    for (const document of signedDocuments) {
+      if (!document.storageKey) continue;
+      const root = normalize(this.signedKycDocumentUploadRoot());
+      const path = normalize(isAbsolute(document.storageKey) ? document.storageKey : join(root, document.storageKey));
+      if (!isPathInsideRoot(path, root) || !existsSync(path)) continue;
+      await tx.kycRevisionFile.create({ data: {
+        revisionId: revision.id, sourceDocumentId: document.id, fileName: document.fileName,
+        mimeType: document.fileType || 'application/octet-stream', content: new Uint8Array(readFileSync(path))
+      } });
+    }
+    if (snapshot.preliminaryDocument && form.version === 1) {
+      for (const [sectionKey, data] of [
+        [KycFormSectionKey.CLIENT_DECLARATION, snapshot.sectionG],
+        [KycFormSectionKey.GENERAL_COMPANY, { ...snapshot.sectionA, preliminaryKyc: snapshot.preliminaryDocument }]
+      ] as const) {
+        await tx.kycSectionData.upsert({
+          where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey } },
+          update: { data: this.jsonValue(data), updatedBy: user.id },
+          create: { tenantId: form.tenantId, kycCaseId: kycCase.id, kycFormId: form.id, sectionKey, data: this.jsonValue(data), createdBy: user.id, updatedBy: user.id }
+        });
+      }
+    }
+    await tx.kycForm.update({ where: { id: form.id }, data: {
+      isLocked: false, status: 'AMENDMENT_DRAFT', version: { increment: 1 },
+      fullKycStarted: fullKyc || form.fullKycStarted, updatedBy: user.id
+    } });
+    await tx.kycInternalReview.updateMany({ where: { kycFormId: form.id, tenantId: form.tenantId }, data: {
+      amlAccuracyChecked: false, amlSignatureDataUrl: null, amlSignatureFileName: null, amlDate: null,
+      amlClarificationFindings: null,
+      dmlroSignatureDataUrl: null, dmlroSignatureFileName: null, dmlroDate: null, dmlroDecision: null,
+      dmlroComments: null, dmlroReason: null, dmlroConditions: null, dmlroRiskClassification: null,
+      mlroSignatureDataUrl: null, mlroSignatureFileName: null, mlroDate: null, mlroDecision: null,
+      mlroComments: null, mlroConditions: null, mlroRiskExplanation: null, mlroFinalRiskClassification: null,
+      sefSignatureDataUrl: null, sefSignatureFileName: null, sefDate: null, sefDecision: null,
+      sefComments: null, sefConditions: null,
+      updatedBy: user.id
+    } });
+    await tx.internalReviewSubmission.updateMany({
+      where: { tenantId: form.tenantId, kycCaseId: kycCase.id },
+      data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, data: {}, formalComments: null, submittedAt: null, submittedById: null, updatedBy: user.id }
+    });
+    await tx.signedKycDocument.updateMany({ where: { tenantId: form.tenantId, kycCaseId: kycCase.id }, data: { activeVersion: false } });
+    await this.audit(tx, user, form.tenantId, 'KycFormRevision', revision.id, {
+      action: 'KYC_FORM_AMENDMENT_CREATED', originalVersion: form.version, amendmentVersion: form.version + 1, reason
+    });
+  }
+
+  async getFormRevisions(user: RequestUser, id: string) {
+    const form = await this.getFormRecord(user, id);
+    return this.prisma.kycFormRevision.findMany({
+      where: { tenantId: form.tenantId, kycFormId: form.id }, orderBy: { version: 'desc' },
+      select: { id: true, version: true, reason: true, createdAt: true, createdBy: true }
+    });
+  }
+
+  async getFormRevision(user: RequestUser, id: string, revisionId: string) {
+    const form = await this.getFormRecord(user, id);
+    const revision = await this.prisma.kycFormRevision.findFirst({
+      where: { id: revisionId, tenantId: form.tenantId, kycFormId: form.id },
+      include: { files: { select: { id: true, fileName: true, mimeType: true } } }
+    });
+    if (!revision) throw new NotFoundException('KYC form revision not found');
+    return revision;
+  }
+
+  async downloadRevisionFile(user: RequestUser, id: string, revisionId: string, fileId: string) {
+    await this.getFormRevision(user, id, revisionId);
+    const file = await this.prisma.kycRevisionFile.findFirst({ where: { id: fileId, revisionId } });
+    if (!file) throw new NotFoundException('Archived attachment not found');
+    return file;
+  }
+
+  async downloadFormRevision(user: RequestUser, id: string, revisionId: string, type: KycGeneratedDocumentType) {
+    const revision = await this.getFormRevision(user, id, revisionId);
+    const payload = preliminaryObject(revision.snapshot);
+    const exportPayload = {
+      kycCaseId: id, sectionA: payload.sectionA, sectionB: payload.sectionB, sectionC: payload.sectionC,
+      sectionD: payload.sectionD, sectionE: payload.sectionE, sectionF: payload.sectionF, sectionG: payload.sectionG, sectionH: payload.sectionH
+    };
+    const isDocx = type === KycGeneratedDocumentType.DOCX;
+    if (isDocx && payload.preliminaryDocument) throw new BadRequestException('Download preliminary revisions as PDF to preserve their original layout.');
+    const content = payload.preliminaryDocument
+      ? await this.pdfRenderer.render(preliminaryPdfHtml(preliminaryObject(payload.preliminaryDocument)), { headerTemplate: '<span></span>', footerTemplate: '<span></span>', marginTopMm: 12, marginBottomMm: 12, marginLeftMm: 12, marginRightMm: 12 })
+      : isDocx ? await exportKycDocx(exportPayload, revision.version) : await exportKycPdf(exportPayload, revision.version, this.pdfRenderer);
+    await this.prisma.$transaction((tx) => this.audit(tx, user, revision.tenantId, 'KycFormRevision', revision.id, { action: 'KYC_REVISION_DOWNLOADED', version: revision.version, type }));
+    return { content, fileName: `KYC-Revision-${revision.version}.${isDocx ? 'docx' : 'pdf'}`, mimeType: isDocx ? KYC_DOCX_MIME : KYC_PDF_MIME };
+  }
+
   async startAmendment(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const kycCase = await this.findOne(user, id);
     this.assertFinalApprovalReceived(kycCase.status);
@@ -1215,10 +1329,7 @@ export class KycService {
     if (!reason) throw new BadRequestException('Provide the amendment reason.');
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({
-        where: { tenantId: kycCase.tenantId, kycCaseId: id },
-        data: { isLocked: false, status: 'AMENDMENT_DRAFT', version: { increment: 1 }, updatedBy: user.id }
-      });
+      await this.beginFormAmendment(tx, user, kycCase, reason);
       await tx.internalReviewSubmission.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id },
         data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id }
@@ -1230,7 +1341,7 @@ export class KycService {
       await this.recordStatus(tx, kycCase, user, KycCaseStatus.AML_REVIEW_STARTED, `KYC amendment started for: ${sections.join(', ')}`);
       await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'KYC_AMENDMENT_STARTED', sections, reason });
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    }, { timeout: 60000 });
   }
 
   private async routePreliminaryFinalKycForApproval(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>) {
@@ -1249,13 +1360,13 @@ export class KycService {
   private async startPreliminaryFullKyc(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>, dto: Record<string, unknown>) {
     const reason = this.optionalText(dto.reason) || 'AML Supervisor requested completion of the full KYC form after Preliminary KYC approval.';
     return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: 'AMENDMENT_DRAFT', isLocked: false, version: { increment: 1 }, updatedBy: user.id } });
+      await this.beginFormAmendment(tx, user, kycCase, reason, true);
       await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
       await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id } });
       await tx.workflowComment.create({ data: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, authorId: user.id, body: reason } });
       await this.recordStatus(tx, kycCase, user, KycCaseStatus.AML_REVIEW_STARTED, 'AML Supervisor opened the populated full KYC form for completion.');
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
-    });
+    }, { timeout: 60000 });
   }
 
   private async isPreliminaryProposedCompanyCase(sourceEnquiryId?: string | null) {
@@ -1323,14 +1434,15 @@ export class KycService {
   async autoSaveForm(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const payload = dto as KycFormDraftPayload;
 
-    if (payload.sectionA) await this.saveSectionData(user, id, KycFormSectionKey.GENERAL_COMPANY, payload.sectionA);
-    if (payload.sectionD) await this.saveSectionData(user, id, KycFormSectionKey.COMPLIANCE_RISK, payload.sectionD);
-    if (payload.sectionE) await this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, payload.sectionE);
-    if (payload.sectionG) await this.saveSectionData(user, id, KycFormSectionKey.CLIENT_DECLARATION, payload.sectionG);
-    if (payload.sectionB) await this.saveOwnership(user, id, payload.sectionB);
-    if (payload.sectionC) await this.saveManagers(user, id, payload.sectionC);
-    if (payload.sectionF) await this.saveRequiredDocuments(user, id, payload.sectionF);
-    if (payload.sectionH) await this.saveInternalReview(user, id, payload.sectionH);
+    const guarded = (section: Record<string, unknown>) => ({ ...section, expectedVersion: payload.version });
+    if (payload.sectionA) await this.saveSectionData(user, id, KycFormSectionKey.GENERAL_COMPANY, guarded(payload.sectionA));
+    if (payload.sectionD) await this.saveSectionData(user, id, KycFormSectionKey.COMPLIANCE_RISK, guarded(payload.sectionD));
+    if (payload.sectionE) await this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, guarded(payload.sectionE));
+    if (payload.sectionG) await this.saveSectionData(user, id, KycFormSectionKey.CLIENT_DECLARATION, guarded(payload.sectionG));
+    if (payload.sectionB) await this.saveOwnership(user, id, guarded(payload.sectionB));
+    if (payload.sectionC) await this.saveManagers(user, id, guarded(payload.sectionC));
+    if (payload.sectionF) await this.saveRequiredDocuments(user, id, guarded(payload.sectionF));
+    if (payload.sectionH) await this.saveInternalReview(user, id, guarded(payload.sectionH));
 
     return this.getForm(user, id);
   }
@@ -1354,7 +1466,7 @@ export class KycService {
   }
 
   async saveOwnership(user: RequestUser, id: string, dto: Record<string, unknown>) {
-    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
+    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], dto.expectedVersion);
     const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row));
     const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row));
     for (const ubo of ubos) {
@@ -1442,14 +1554,14 @@ export class KycService {
         });
       }
 
-      await tx.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
+      await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
 
     return this.getForm(user, id);
   }
 
   async saveManagers(user: RequestUser, id: string, dto: Record<string, unknown>) {
-    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
+    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], dto.expectedVersion);
     const rows = this.asArray<RowPayload>(dto.managers).filter((row) => this.hasRowValue(row));
 
     await this.prisma.$transaction(async (tx) => {
@@ -1490,14 +1602,14 @@ export class KycService {
         });
       }
 
-      await tx.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
+      await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
 
     return this.getForm(user, id);
   }
 
   async saveRequiredDocuments(user: RequestUser, id: string, dto: Record<string, unknown>) {
-    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
+    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], dto.expectedVersion);
     const rows = this.dedupeRequiredDocumentRows(this.asArray<RowPayload>(dto.documents).filter((row) => this.hasRowValue(row)));
     const additionalRows = this.dedupeAdditionalDocumentRows(this.asArray<RowPayload>(dto.additionalDocuments).filter((row) => this.hasRowValue(row)));
     const sectionData = {
@@ -1550,7 +1662,7 @@ export class KycService {
         }
       });
       await this.markDocumentsUploadedFromSectionF(tx, form, user, rows, additionalRows);
-      await tx.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
+      await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
 
     return this.getForm(user, id);
@@ -1662,23 +1774,25 @@ export class KycService {
 
   async saveInternalReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const roles = this.internalReviewAllowedRoles(dto);
-    const form = await this.requireWritableForm(user, id, roles);
+    const form = await this.requireWritableForm(user, id, roles, dto.expectedVersion);
     const data = this.internalReviewData(dto);
 
-    await this.prisma.kycInternalReview.upsert({
-      where: { kycFormId: form.id },
-      update: { ...data, updatedBy: user.id },
-      create: {
-        tenantId: form.tenantId,
-        kycCaseId: id,
-        kycFormId: form.id,
-        ...data,
-        createdBy: user.id,
-        updatedBy: user.id
-      }
-    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycInternalReview.upsert({
+        where: { kycFormId: form.id },
+        update: { ...data, updatedBy: user.id },
+        create: {
+          tenantId: form.tenantId,
+          kycCaseId: id,
+          kycFormId: form.id,
+          ...data,
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
 
-    await this.prisma.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
+      await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
+    });
     return this.getForm(user, id);
   }
 
@@ -1708,7 +1822,8 @@ export class KycService {
               kycFormId: form.id,
               documentType: type,
               version,
-              fileName: `${companyName} - KYC Document - v${version}.${isDocx ? 'docx' : 'pdf'}`,
+              formRevision: form.version,
+              fileName: `${companyName} - KYC Revision ${form.version} - Export ${version}.${isDocx ? 'docx' : 'pdf'}`,
               mimeType,
               content: new Uint8Array(content),
               createdBy: user.id,
@@ -1837,27 +1952,30 @@ export class KycService {
     sectionKey: KycFormSectionKey,
     data: Record<string, unknown>
   ) {
-    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN']);
+    const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], data.expectedVersion);
+    const { expectedVersion: _expectedVersion, ...sectionData } = data;
 
-    await this.prisma.kycSectionData.upsert({
-      where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey } },
-      update: { data: this.jsonValue(data), updatedBy: user.id },
-      create: {
-        tenantId: form.tenantId,
-        kycCaseId: id,
-        kycFormId: form.id,
-        sectionKey,
-        data: this.jsonValue(data),
-        createdBy: user.id,
-        updatedBy: user.id
-      }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.kycSectionData.upsert({
+        where: { kycFormId_sectionKey: { kycFormId: form.id, sectionKey } },
+        update: { data: this.jsonValue(sectionData), updatedBy: user.id },
+        create: {
+          tenantId: form.tenantId,
+          kycCaseId: id,
+          kycFormId: form.id,
+          sectionKey,
+          data: this.jsonValue(sectionData),
+          createdBy: user.id,
+          updatedBy: user.id
+        }
+      });
+
+      await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
-
-    await this.prisma.kycForm.update({ where: { id: form.id }, data: { updatedBy: user.id } });
     return this.getForm(user, id);
   }
 
-  private async requireWritableForm(user: RequestUser, id: string, allowedRoles: string[]) {
+  private async requireWritableForm(user: RequestUser, id: string, allowedRoles: string[], expectedVersion?: unknown) {
     if (!this.hasAnyRole(user, [...allowedRoles, 'SUPER_ADMIN'])) {
       throw new ForbiddenException('You do not have permission to edit this KYC form section');
     }
@@ -1889,6 +2007,9 @@ export class KycService {
       return created;
     }
 
+    if ((expectedVersion !== undefined || form.version > 1) && expectedVersion !== form.version) {
+      throw new BadRequestException('This form revision has changed. Refresh the page before saving your amendment.');
+    }
     if (form.isLocked) {
       throw new BadRequestException('KYC form is locked. Create a new version before editing.');
     }
@@ -1917,8 +2038,14 @@ export class KycService {
     const sectionA = section(KycFormSectionKey.GENERAL_COMPANY);
     const sourceDetails = preliminaryObject(form.kycCase.sourceEnquiry?.details);
     const preliminary = preliminaryObject(sectionA.preliminaryKyc || sourceDetails.preliminaryKyc);
-    const preliminaryDocument = sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && form.version === 1 && Object.keys(preliminary).length
-      ? preliminary : null;
+    const currentDeclaration = sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && form.version === 1
+      ? declarationWithPreliminaryFallback(section(KycFormSectionKey.CLIENT_DECLARATION), preliminary)
+      : section(KycFormSectionKey.CLIENT_DECLARATION);
+    const preliminaryDocument = sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted && Object.keys(preliminary).length
+      ? form.version === 1 ? preliminary : amendedPreliminaryDocument(preliminary, sectionA,
+        this.sectionRows(ownershipSection.shareholders, form.shareholders).map(preliminaryObject), this.sectionRows(ownershipSection.ubos, form.ubos).map(preliminaryObject), form.managers,
+        section(KycFormSectionKey.COMMUNICATION_PERSON), currentDeclaration)
+      : null;
 
     return {
       id: form.id,
@@ -1928,6 +2055,7 @@ export class KycService {
       isLocked: form.isLocked,
       version: form.version,
       preliminaryDocument,
+      fullKycStarted: form.fullKycStarted,
       sectionA: {
         ...sectionA,
         reference: this.text(sectionA.reference)
@@ -1948,9 +2076,7 @@ export class KycService {
       sectionD: section(KycFormSectionKey.COMPLIANCE_RISK),
       sectionE: section(KycFormSectionKey.COMMUNICATION_PERSON),
       sectionF: this.sectionFWithCaseDocuments(section(KycFormSectionKey.REQUIRED_DOCUMENTS), form.requiredDocuments, form.kycCase.legalDocuments),
-      sectionG: sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY'
-        ? declarationWithPreliminaryFallback(section(KycFormSectionKey.CLIENT_DECLARATION), preliminary)
-        : section(KycFormSectionKey.CLIENT_DECLARATION),
+      sectionG: currentDeclaration,
       sectionH: form.internalReview,
       generatedDocuments: form.generatedDocuments.map((document) => ({
         id: document.id,
@@ -2525,6 +2651,7 @@ export class KycService {
 
     return this.prisma.$transaction(async (tx) => {
       const saved = await this.saveReturnedReviewSubmission(tx, user, kycCase, dto);
+      await this.beginFormAmendment(tx, user, kycCase, this.optionalText(dto.reason) || safeComment(dto.formalComments) || note);
       await this.clearReviewTaskStatus(tx, id, ReviewStage.DMLRO, ReviewTaskStatus.RETURNED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.DMLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
@@ -2553,7 +2680,7 @@ export class KycService {
       );
 
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    }, { timeout: 60000 });
   }
 
   private async lockReviewSubmission(
@@ -3248,6 +3375,7 @@ export class KycService {
 type RowPayload = Record<string, unknown>;
 
 type KycFormDraftPayload = {
+  version?: number;
   sectionA?: Record<string, unknown>;
   sectionB?: Record<string, unknown>;
   sectionC?: Record<string, unknown>;

@@ -1002,7 +1002,7 @@ export function KycFormEditorPage() {
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';
   const canEditVisibleForm = canEditAllSections || canPrepareKyc || sectionHMode !== 'AML';
-  const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY';
+  const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted;
   const visibleSections = useMemo(
     () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
     [canEditAllSections, canPrepareKyc]
@@ -1044,7 +1044,7 @@ export function KycFormEditorPage() {
           ? { ...(currentForm.sectionH || {}), reviewPart: sectionHMode }
           : (currentForm[section] as Record<string, any>);
     try {
-      const updated = await saveKycFormSection(id, endpoint, payload);
+      const updated = await saveKycFormSection(id, endpoint, { ...payload, expectedVersion: currentForm.version });
       const normalized = normalizeForm(updated);
       formRef.current = normalized;
       setForm(normalized);
@@ -1061,6 +1061,7 @@ export function KycFormEditorPage() {
   function fullDraftPayload(currentForm: KycFormData): Partial<KycFormData> {
     if (canEditAllSections || canPrepareKyc) {
       return {
+        version: currentForm.version,
         sectionA: currentForm.sectionA,
         sectionB: { ...currentForm.sectionB, totalOwnershipPercentage: totalOwnership },
         sectionC: currentForm.sectionC,
@@ -1073,6 +1074,7 @@ export function KycFormEditorPage() {
     }
 
     return {
+      version: currentForm.version,
       sectionH: { ...(currentForm.sectionH || {}), reviewPart: sectionHMode }
     };
   }
@@ -2318,7 +2320,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   </FormGrid>;
 }
 
-function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
+export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
   return (
     <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
       {form.preliminaryDocument ? <PreliminaryKycDocument data={form.preliminaryDocument} embedded /> : null}
@@ -3037,7 +3039,7 @@ function normalizeAdditionalDocumentRows(rows: Row[] | undefined): Row[] {
     });
 }
 
-function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycFormData {
+export function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycFormData {
   const sectionA = {
     ...emptyForm.sectionA,
     ...(form.sectionA || {})

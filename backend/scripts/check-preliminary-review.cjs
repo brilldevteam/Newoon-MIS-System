@@ -34,7 +34,7 @@ const snapshot = service.serializeForm(snapshotForm);
 assert.deepEqual(snapshot.preliminaryDocument, preliminary);
 assert.equal(snapshot.sectionG.fullName, 'Updated Signatory');
 assert.equal(snapshot.sectionG.signatureDataUrl, 'updated-image');
-assert.equal(service.serializeForm({ ...snapshotForm, version: 2 }).preliminaryDocument, null);
+assert.equal(service.serializeForm({ ...snapshotForm, version: 2, fullKycStarted: true }).preliminaryDocument, null);
 const standard = service.serializeForm({ ...form, sections: [{ sectionKey: 'GENERAL_COMPANY', data: { formVariant: 'STANDARD' } }] });
 assert.equal(standard.preliminaryDocument, null);
 assert.deepEqual(standard.sectionG, {});

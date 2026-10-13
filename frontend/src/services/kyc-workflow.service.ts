@@ -414,6 +414,7 @@ export type KycGeneratedDocument = {
 };
 
 export type KycFormData = {
+  fullKycStarted?: boolean;
   preliminaryDocument?: Record<string, unknown> | null;
   id: string;
   tenantId: string;
@@ -954,6 +955,29 @@ export function uploadSignedKycDocumentFile(caseId: string, payload: { reviewSta
 
 export function getKycForm(caseId: string) {
   return api.get<KycFormData>(`/kyc/${caseId}/form`).then((response) => response.data);
+}
+
+export type KycFormRevision = { id: string; version: number; reason: string; createdAt: string; createdBy: string };
+export type KycFormRevisionDetail = KycFormRevision & { snapshot: KycFormData; files: Array<{ id: string; fileName: string; mimeType: string }> };
+
+export function getKycFormRevisions(caseId: string) {
+  return api.get<KycFormRevision[]>(`/kyc/${caseId}/form/revisions`).then((response) => response.data);
+}
+
+export function getKycFormRevision(caseId: string, revisionId: string) {
+  return api.get<KycFormRevisionDetail>(`/kyc/${caseId}/form/revisions/${revisionId}`).then((response) => response.data);
+}
+
+export async function downloadKycFormRevision(caseId: string, revisionId: string, type: 'PDF' | 'DOCX') {
+  const response = await api.get(`/kyc/${caseId}/form/revisions/${revisionId}/download`, { params: { type }, responseType: 'blob', timeout: 60000 });
+  const url = window.URL.createObjectURL(response.data);
+  try { downloadBlob(url, `KYC-${revisionId}.${type.toLowerCase()}`); } finally { window.URL.revokeObjectURL(url); }
+}
+
+export async function downloadKycRevisionFile(caseId: string, revisionId: string, fileId: string, fileName: string) {
+  const response = await api.get(`/kyc/${caseId}/form/revisions/${revisionId}/files/${fileId}`, { responseType: 'blob' });
+  const url = window.URL.createObjectURL(response.data);
+  try { downloadBlob(url, fileName); } finally { window.URL.revokeObjectURL(url); }
 }
 
 export function createKycForm(caseId: string) {

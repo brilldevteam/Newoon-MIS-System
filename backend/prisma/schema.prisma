@@ -604,11 +604,41 @@ model KycForm {
   requiredDocuments  KycRequiredDocument[]
   internalReview     KycInternalReview?
   generatedDocuments KycGeneratedDocument[]
+  revisions          KycFormRevision[]
+  fullKycStarted     Boolean                @default(false)
   createdAt          DateTime               @default(now())
   updatedAt          DateTime               @updatedAt
 
   @@index([tenantId])
   @@index([kycCaseId])
+}
+
+model KycFormRevision {
+  id           String   @id @default(uuid())
+  tenantId     String
+  kycFormId    String
+  kycForm      KycForm  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
+  version      Int
+  snapshot     Json
+  reason       String
+  createdBy    String
+  createdAt    DateTime @default(now())
+  files        KycRevisionFile[]
+
+  @@unique([kycFormId, version])
+  @@index([tenantId, kycFormId])
+}
+
+model KycRevisionFile {
+  id               String          @id @default(uuid())
+  revisionId       String
+  revision         KycFormRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  sourceDocumentId String
+  fileName         String
+  mimeType         String
+  content          Bytes
+
+  @@index([revisionId])
 }
 
 model KycSectionData {
@@ -956,6 +986,7 @@ model KycGeneratedDocument {
   kycForm      KycForm                  @relation(fields: [kycFormId], references: [id], onDelete: Cascade)
   documentType KycGeneratedDocumentType
   version      Int
+  formRevision Int?
   fileName     String
   mimeType     String
   content      Bytes
