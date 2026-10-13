@@ -30,6 +30,16 @@ function paragraph(text, options = {}) {
   return `<w:p>${pPr}${runText(text, options)}</w:p>`;
 }
 
+function paragraphWithText(paragraphXml, text) {
+  const pPr = paragraphXml.match(/<w:pPr(?:\s[^>]*)?>[\s\S]*?<\/w:pPr>/)?.[0] || '';
+  const rPr = paragraphXml.match(/<w:r(?:\s[^>]*)?>\s*(<w:rPr(?:\s[^>]*)?>[\s\S]*?<\/w:rPr>)/)?.[1] || '';
+  const textParts = String(text ?? '').split('\n');
+  const body = textParts
+    .map((part, index) => `${index > 0 ? '<w:br/>' : ''}<w:t xml:space="preserve">${escapeXml(part)}</w:t>`)
+    .join('');
+  return `<w:p>${pPr}<w:r>${rPr}${body}</w:r></w:p>`;
+}
+
 function replaceRange(value, start, end, replacement) {
   return `${value.slice(0, start)}${replacement}${value.slice(end)}`;
 }
@@ -45,8 +55,10 @@ function paragraphPlainText(paragraphXml) {
 }
 
 function cellText(cellXml, text) {
-  const props = cellXml.match(/<w:tcPr[\s\S]*?<\/w:tcPr>/)?.[0] || '';
-  return `<w:tc>${props}${paragraph(text)}</w:tc>`;
+  const openingTag = cellXml.match(/^<w:tc(?:\s[^>]*)?>/)?.[0] || '<w:tc>';
+  const props = cellXml.match(/<w:tcPr(?:\s[^>]*)?(?:\/[ ]*>|>[\s\S]*?<\/w:tcPr>)/)?.[0] || '';
+  const firstParagraph = matches(cellXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)[0]?.[0];
+  return `${openingTag}${props}${firstParagraph ? paragraphWithText(firstParagraph, text) : paragraph(text)}</w:tc>`;
 }
 
 function replaceCell(rowXml, columnIndex, text) {
@@ -86,14 +98,28 @@ function replaceParagraphContaining(documentXml, searchText, text) {
   const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
   const match = paragraphs.find((item) => paragraphPlainText(item[0]).includes(searchText));
   if (!match) return documentXml;
-  return replaceRange(documentXml, match.index, match.index + match[0].length, paragraph(text));
+  return replaceRange(documentXml, match.index, match.index + match[0].length, paragraphWithText(match[0], text));
+}
+
+function replaceParagraphMatching(documentXml, predicate, text) {
+  const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
+  const match = paragraphs.find((item) => predicate(paragraphPlainText(item[0])));
+  if (!match) return documentXml;
+  return replaceRange(documentXml, match.index, match.index + match[0].length, paragraphWithText(match[0], text));
+}
+
+function removeParagraphMatching(documentXml, predicate) {
+  const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
+  const match = paragraphs.find((item) => predicate(paragraphPlainText(item[0])));
+  if (!match) return documentXml;
+  return replaceRange(documentXml, match.index, match.index + match[0].length, '');
 }
 
 function insertParagraphAfterContaining(documentXml, searchText, text) {
   const paragraphs = matches(documentXml, /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g);
   const match = paragraphs.find((item) => paragraphPlainText(item[0]).includes(searchText));
   if (!match) return documentXml;
-  return replaceRange(documentXml, match.index + match[0].length, match.index + match[0].length, paragraph(text));
+  return replaceRange(documentXml, match.index + match[0].length, match.index + match[0].length, paragraphWithText(match[0], text));
 }
 
 function replaceFirstParagraphText(documentXml, searchText, replacement) {
@@ -141,7 +167,7 @@ function buildTemplate() {
     placeholders.forEach((value, index) => {
       next = replaceTableCell(next, 1, index, value);
     });
-    next = replaceTableCell(next, 2, 6, '{totalOwnershipPercentage}');
+    next = replaceTableCell(next, 2, 5, '{totalOwnershipPercentage}');
     return next;
   });
 
@@ -163,7 +189,7 @@ function buildTemplate() {
     placeholders.forEach((value, index) => {
       next = replaceTableCell(next, 1, index, value);
     });
-    next = replaceTableCell(next, 2, 6, '{totalUboPercentage}');
+    next = replaceTableCell(next, 2, 5, '{totalUboPercentage}');
     return next;
   });
 
@@ -187,14 +213,17 @@ function buildTemplate() {
   });
 
   xml = replaceParagraphContaining(xml, 'Are any of the following people considered as Politically Exposed Persons (PEPs):', '1. Are any of the following people considered as Politically Exposed Persons (PEPs):');
-  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details:', 'Yes, if yes, please provide full details: {pepQuestion}');
-  xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide full details: {pepQuestion}', '{pepDetails}');
+  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details:', 'Yes {pepQuestion}    No {pepNo}');
+  xml = insertParagraphAfterContaining(xml, 'Yes {pepQuestion}    No {pepNo}', '{pepDetails}');
   xml = replaceParagraphContaining(xml, 'Has any of the individuals or entities referred above have ever been sanctioned', '2. Has any of the individuals or entities referred above have ever been sanctioned by any government or regulatory body including but not limited to the NCTC, United Nations, U.S.A., E.U, U.K, Qatar and FATF member countries?');
-  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions:', 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions: {sanctionQuestion}');
-  xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions: {sanctionQuestion}', '{sanctionDetails}');
+  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide full details of any sanctions applied and the current state of such sanctions:', 'Yes {sanctionQuestion}    No {sanctionNo}');
+  xml = insertParagraphAfterContaining(xml, 'Yes {sanctionQuestion}    No {sanctionNo}', '{sanctionDetails}');
   xml = replaceParagraphContaining(xml, 'Whether the beneficial owners or key management having dual citizenship?', '3. Whether the beneficial owners or key management having dual citizenship?');
-  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide details and passport copy:', 'Yes, if yes, please provide details and passport copy: {dualCitizenshipQuestion}');
-  xml = insertParagraphAfterContaining(xml, 'Yes, if yes, please provide details and passport copy: {dualCitizenshipQuestion}', '{dualCitizenshipDetails}\nPassport copy: {dualCitizenshipPassportFileName}');
+  xml = replaceParagraphContaining(xml, 'Yes, if yes, please provide details and passport copy:', 'Yes {dualCitizenshipQuestion}    No {dualCitizenshipNo}');
+  xml = insertParagraphAfterContaining(xml, 'Yes {dualCitizenshipQuestion}    No {dualCitizenshipNo}', '{dualCitizenshipDetails}\nPassport copy: {dualCitizenshipPassportFileName}');
+  for (let index = 0; index < 3; index += 1) {
+    xml = removeParagraphMatching(xml, (text) => text.trim() === 'No');
+  }
 
   xml = updateTable(xml, 4, (table) => {
     let next = table;
@@ -239,8 +268,8 @@ function buildTemplate() {
 
   xml = replaceParagraphContaining(xml, 'Yes ☐No ☐', 'Yes {amlAccuracyYes}    No {amlAccuracyNo}');
   xml = replaceParagraphContaining(xml, 'If No, please provide clarification and findings.', 'If No, please provide clarification and findings: {amlClarificationFindings}');
-  xml = replaceParagraphContaining(xml, 'High Risk ☐ Medium Risk ☐ Low Risk ☐', 'High Risk {riskHigh}    Medium Risk {riskMedium}    Low Risk {riskLow}');
-  xml = replaceParagraphContaining(xml, 'Simplified Due Diligence ☐ Regular Due Diligence ☐ Enhanced Due Diligence ☐', 'Simplified Due Diligence {dueSimplified}    Regular Due Diligence {dueRegular}    Enhanced Due Diligence {dueEnhanced}');
+  xml = replaceParagraphMatching(xml, (text) => text.includes('High Risk') && text.includes('Medium Risk') && text.includes('Low Risk'), 'High Risk {riskHigh}    Medium Risk {riskMedium}    Low Risk {riskLow}');
+  xml = replaceParagraphMatching(xml, (text) => text.includes('Simplified Due Diligence') && text.includes('Regular Due Diligence') && text.includes('Enhanced Due Diligence'), 'Simplified Due Diligence {dueSimplified}    Regular Due Diligence {dueRegular}    Enhanced Due Diligence {dueEnhanced}');
 
   xml = updateTable(xml, 6, (table) => {
     let next = table;
