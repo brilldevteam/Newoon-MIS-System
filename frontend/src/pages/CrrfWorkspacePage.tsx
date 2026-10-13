@@ -57,7 +57,7 @@ export function CrrfWorkspacePage() {
   }, [error, showToast]);
 
   async function save() {
-    if (!id || !workspace) return;
+    if (!id || !workspace || busyKey) return;
     if (!workspace.record.riskRating) {
       setError('Cannot save CRRF yet. Select a risk rating, then click Save Draft.');
       return;
@@ -69,20 +69,20 @@ export function CrrfWorkspacePage() {
     setError('');
     setMessage('');
     setBusyKey('save');
+    const draft = {
+      riskRating: workspace.record.riskRating,
+      internalComment: workspace.record.internalComment || '',
+      dmlroComment: workspace.record.dmlroComment || '',
+      mlroComment: workspace.record.mlroComment || ''
+    };
     try {
-      let currentWorkspace = workspace;
       if (pendingFiles.length) {
-        currentWorkspace = await uploadCrrfDocuments(id, pendingFiles);
+        const uploadedWorkspace = await uploadCrrfDocuments(id, pendingFiles);
+        // Upload responses contain persisted fields, not the user's unsaved edits.
+        setWorkspace({ ...uploadedWorkspace, record: { ...uploadedWorkspace.record, ...draft } });
         setPendingFiles([]);
       }
-      setWorkspace(
-        await saveCrrfWorkspace(id, {
-          riskRating: currentWorkspace.record.riskRating || '',
-          internalComment: currentWorkspace.record.internalComment || '',
-          dmlroComment: currentWorkspace.record.dmlroComment || '',
-          mlroComment: currentWorkspace.record.mlroComment || ''
-        })
-      );
+      setWorkspace(await saveCrrfWorkspace(id, draft));
       setMessage('CRRF draft saved.');
     } catch (requestError: any) {
       setError(getApiErrorMessage(requestError, 'Unable to save CRRF record.'));
@@ -92,7 +92,7 @@ export function CrrfWorkspacePage() {
   }
 
   async function upload(files: File[]) {
-    if (!id || !files.length) return;
+    if (!id || !files.length || busyKey) return;
     const validationError = validateCrrfDocuments(files);
     if (validationError) {
       setError(validationError);
@@ -105,7 +105,7 @@ export function CrrfWorkspacePage() {
   }
 
   async function removeDocument(documentId: string) {
-    if (!id || !window.confirm('Delete this CRRF document?')) return;
+    if (!id || busyKey || !window.confirm('Delete this CRRF document?')) return;
     setError('');
     setMessage('');
     setBusyKey(`delete-${documentId}`);
@@ -120,7 +120,7 @@ export function CrrfWorkspacePage() {
   }
 
   async function download(type: 'excel' | 'pdf') {
-    if (!id) return;
+    if (!id || busyKey) return;
     setError('');
     setMessage('');
     setBusyKey(`export-${type}`);
@@ -161,7 +161,7 @@ export function CrrfWorkspacePage() {
           <button
             type="button"
             onClick={() => download('excel')}
-            disabled={busyKey === 'export-excel'}
+            disabled={Boolean(busyKey)}
             className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
           >
             <FileSpreadsheet className="h-4 w-4" />
@@ -170,7 +170,7 @@ export function CrrfWorkspacePage() {
           <button
             type="button"
             onClick={() => download('pdf')}
-            disabled={busyKey === 'export-pdf'}
+            disabled={Boolean(busyKey)}
             className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
@@ -200,7 +200,7 @@ export function CrrfWorkspacePage() {
             <select
               value={workspace.record.riskRating || ''}
               onChange={(event) => patchRecord({ riskRating: event.target.value as CrrfRiskRating })}
-              disabled={!canEdit}
+              disabled={!canEdit || Boolean(busyKey)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 md:max-w-sm"
             >
               <option value="">Select risk rating</option>
@@ -216,10 +216,10 @@ export function CrrfWorkspacePage() {
             value={workspace.record.internalComment || ''}
             onChange={(value) => patchRecord({ internalComment: value })}
             helpText="Internal reference only. These comments are not included in CRRF Excel/PDF exports."
-            disabled={!canEdit}
+            disabled={!canEdit || Boolean(busyKey)}
           />
-          {hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="DMLRO comments" value={workspace.record.dmlroComment || ''} onChange={(value) => patchRecord({ dmlroComment: value })} disabled={!canEdit} /> : null}
-          {hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="MLRO comments" value={workspace.record.mlroComment || ''} onChange={(value) => patchRecord({ mlroComment: value })} disabled={!canEdit} /> : null}
+          {hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="DMLRO comments" value={workspace.record.dmlroComment || ''} onChange={(value) => patchRecord({ dmlroComment: value })} disabled={!canEdit || Boolean(busyKey)} /> : null}
+          {hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']) ? <CommentField label="MLRO comments" value={workspace.record.mlroComment || ''} onChange={(value) => patchRecord({ mlroComment: value })} disabled={!canEdit || Boolean(busyKey)} /> : null}
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
               <div>
@@ -234,6 +234,7 @@ export function CrrfWorkspacePage() {
                   multiple
                   accept={CRRF_DOCUMENT_ACCEPT}
                   className="hidden"
+                  disabled={Boolean(busyKey)}
                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
                     upload(Array.from(event.target.files || []));
                     event.currentTarget.value = '';
@@ -248,7 +249,7 @@ export function CrrfWorkspacePage() {
                     <p className="truncate font-semibold text-slate-950">{file.name}</p>
                     <p className="mt-1 text-xs text-amber-800">Selected locally. It will upload when the draft is saved.</p>
                   </div>
-                  <button type="button" onClick={() => removePendingFile(file)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50" title="Remove selected document" aria-label={`Remove ${file.name}`}>
+                  <button type="button" disabled={Boolean(busyKey)} onClick={() => removePendingFile(file)} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60" title="Remove selected document" aria-label={`Remove ${file.name}`}>
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -259,7 +260,7 @@ export function CrrfWorkspacePage() {
                     key={document.id}
                     document={document}
                     caseId={id}
-                    busy={busyKey === `delete-${document.id}`}
+                    busy={Boolean(busyKey)}
                     onDelete={removeDocument}
                     canDelete={canEdit}
                   />
@@ -273,11 +274,11 @@ export function CrrfWorkspacePage() {
             <button
               type="button"
               onClick={save}
-              disabled={busyKey === 'save'}
+              disabled={Boolean(busyKey)}
               className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              Save Draft
+              {busyKey === 'save' ? 'Saving...' : 'Save Draft'}
             </button>
           </div> : null}
         </div>

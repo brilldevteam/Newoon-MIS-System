@@ -1,4 +1,6 @@
 import { KycImage, normalizeImage } from './kyc-export-assets';
+import { beneficialOwners } from '../../common/ownership';
+import { commentLines } from '../../common/review-comments';
 import { decisionText, enumText, optionText, text } from './kyc-export-format';
 import { OwnershipDiagram, OwnershipParty, renderOwnershipDiagram } from './ownership-diagram';
 
@@ -6,7 +8,7 @@ import { OwnershipDiagram, OwnershipParty, renderOwnershipDiagram } from './owne
 // (KycFormEditorPage LiveDocumentPreviewPanel) placed on the Newoon letterhead. DOCX and PDF renderers only
 // translate these blocks; change labels and section content here, never in a renderer.
 
-export type Inline = { text: string; bold?: boolean; muted?: boolean } | { box: boolean };
+export type Inline = { text: string; bold?: boolean; italic?: boolean; underline?: boolean; highlight?: boolean; muted?: boolean } | { box: boolean };
 export type Line = {
   parts: Inline[];
   align?: 'left' | 'center' | 'justify';
@@ -73,18 +75,27 @@ function dmy(value: unknown) {
 function fields(items: Array<[string, FieldValue]>): Block {
   const cells = items.map(([label, value]): Cell => {
     if (typeof value === 'string') {
+      if (/comment/i.test(label)) return { span: 2, lines: [line([t(`${label}:`, true)], { keepNext: true }), ...commentLines(value || '-').map((parts) => line(parts, { spaceAfter: 4 }))] };
       const [first, ...rest] = dash(value).split('\n');
-      return { lines: [line([t(`${label}: `, true), t(first)]), ...rest.map((part) => line(part))] };
+      return { span: /findings|explanation|conditions|reason/i.test(label) ? 2 : undefined, lines: [line([t(`${label}: `, true), t(first)]), ...rest.map((part) => line(part))] };
     }
     return value.image
       ? { lines: [line([t(`${label}:`, true)])], image: value.image }
       : { lines: [line([t(`${label}: `, true), t('-')])] };
   });
   const tableRows: Row[] = [];
-  for (let index = 0; index < cells.length; index += 2) {
-    const pair = cells.slice(index, index + 2);
-    tableRows.push({ cells: pair.length === 2 ? pair : [{ ...pair[0], span: 2 }] });
+  let pending: Cell | undefined;
+  for (const cell of cells) {
+    if (cell.span === 2) {
+      if (pending) tableRows.push({ cells: [{ ...pending, span: 2 }] });
+      tableRows.push({ cells: [cell] });
+      pending = undefined;
+    } else if (pending) {
+      tableRows.push({ cells: [pending, cell] });
+      pending = undefined;
+    } else pending = cell;
   }
+  if (pending) tableRows.push({ cells: [{ ...pending, span: 2 }] });
   return { kind: 'table', weights: [1, 1], rows: tableRows, style: 'fields' };
 }
 
@@ -119,7 +130,8 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
 
   const companyName = text(a.legalName);
   const parties = rows(b.shareholders).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `party-${index + 1}` }));
-  const beneficial = rows(b.ubos).length ? rows(b.ubos) : parties.filter((row) => Boolean(row.isUbo));
+  const beneficial = beneficialOwners(parties, rows(b.ubos));
+  const diagramParties: Rec[] = [...parties, ...beneficial.filter((row) => row.parentRowId && !parties.some((party) => party.id === row.id || party.fullName === row.fullName && party.identityNumber === row.identityNumber)).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `ubo-${index + 1}`, shareholderType: 'Individual', isUbo: true }))];
   const managers = rows(c.managers);
 
   const [declarationSignature, companyStamp, dmlroSignature, mlroSignature, sefSignature] = await Promise.all(
@@ -130,7 +142,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
 
   const diagram = renderOwnershipDiagram(
     companyName || 'Client company',
-    parties.map<OwnershipParty>((row) => ({
+    diagramParties.map<OwnershipParty>((row) => ({
       id: text(row.id),
       parentId: text(row.parentRowId),
       name: text(row.fullName),
@@ -236,7 +248,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       // The AML Supervisor name and signature are no longer captured in the KYC form.
       fields([
         ['Date', date(h.amlDate)],
-        ['Comments', text(payload.amlComments)]
+      ['Comments', text(payload.amlComments || h.amlClarificationFindings)]
       ]),
       subheading('DMLRO'),
       fields([

@@ -12,6 +12,8 @@ import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, Notificat
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import PizZip from 'pizzip';
+import { randomUUID } from 'crypto';
+import { beneficialOwners } from '../common/ownership';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -480,20 +482,33 @@ export class EnquiriesService {
       });
 
       const preliminaryKyc = this.objectValue(details.preliminaryKyc);
-      const preliminaryShareholders = this.asArray<Record<string, unknown>>(preliminaryKyc.shareholders);
+      const preliminaryShareholders = this.asArray<Record<string, unknown>>(preliminaryKyc.shareholders).map<Record<string, unknown>>((row) => ({ ...row, id: row.id || randomUUID() }));
       const preliminaryUbos = this.asArray<Record<string, unknown>>(preliminaryKyc.ubos);
       const preliminaryManagement = this.asArray<Record<string, unknown>>(preliminaryKyc.management);
+      const ownershipIds = new Map(preliminaryShareholders.map((row) => [String(row.id || ''), randomUUID()]));
+      const ownershipRows = preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map<Record<string, unknown> & { id: string }>((row) => ({
+        ...row, id: ownershipIds.get(String(row.id || '')) || randomUUID(),
+        parentRowId: ownershipIds.get(String(row.parentRowId || '')) || '',
+        residenceAddress: row.address, shareholderPercentage: row.ownershipPercentage
+      }));
+      const beneficialRows = beneficialOwners(preliminaryShareholders, preliminaryUbos).map<Record<string, unknown> & { id: string }>((row) => ({
+        ...row, id: randomUUID(), parentRowId: row.parentRowId ? ownershipIds.get(String(row.parentRowId)) || '' : '',
+        sourceShareholderId: ownershipIds.get(String(row.sourceShareholderId || row.id || '')) || '',
+        residenceAddress: row.address, uboInterestPercentage: row.ownershipPercentage, shareholderType: 'Individual'
+      }));
       if (preliminaryShareholders.length) {
         await prisma.kycShareholder.createMany({
-          data: preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
+          data: ownershipRows.map((row, index) => ({
+            id: row.id,
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
             identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
           }))
         });
-        const ubos = (preliminaryUbos.length ? preliminaryUbos : preliminaryShareholders.filter((row) => Boolean(row.isUbo))).filter((row) => this.optionalText(row.fullName));
+        const ubos = beneficialRows;
         if (ubos.length) {
           await prisma.kycUbo.createMany({ data: ubos.map((row, index) => ({
+            id: row.id,
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
             identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
@@ -513,6 +528,10 @@ export class EnquiriesService {
 
       await prisma.kycSectionData.createMany({
         data: [
+          {
+            tenantId, kycCaseId: createdCase.id, kycFormId: form.id, sectionKey: KycFormSectionKey.OWNERSHIP,
+            data: this.requiredJsonValue({ shareholders: ownershipRows, ubos: beneficialRows }), createdBy: user.id, updatedBy: user.id
+          },
           {
             tenantId,
             kycCaseId: createdCase.id,
@@ -870,10 +889,12 @@ export class EnquiriesService {
       sourceOfFunds: this.optionalText(dto.sourceOfFunds),
       expectedBusiness,
       shareholders: this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
+        id: this.optionalText(row.id) || randomUUID(), shareholderType: row.shareholderType === 'Corporate Entity' ? 'Corporate Entity' : 'Individual', parentRowId: this.optionalText(row.parentRowId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)
       })),
       ubos: this.asArray<Record<string, unknown>>(dto.ubos).map((row) => ({
+        id: this.optionalText(row.id) || randomUUID(), shareholderType: 'Individual', parentRowId: this.optionalText(row.parentRowId), sourceShareholderId: this.optionalText(row.sourceShareholderId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: true
       })),
@@ -897,6 +918,10 @@ export class EnquiriesService {
     const shareholders = this.asArray<Record<string, unknown>>(data.shareholders);
     if (!shareholders.length || shareholders.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.ownershipPercentage))) {
       throw new BadRequestException('Add at least one proposed shareholder with name and ownership percentage.');
+    }
+    const total = shareholders.reduce((sum, row) => sum + Number(this.ownershipPercentageValue(row.ownershipPercentage)), 0);
+    if (Math.abs(total - 100) > 0.005) {
+      throw new BadRequestException(`Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`);
     }
     const management = this.asArray<Record<string, unknown>>(data.management);
     if (!management.length || management.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.position))) {

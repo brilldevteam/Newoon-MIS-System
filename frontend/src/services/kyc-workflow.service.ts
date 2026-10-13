@@ -853,8 +853,13 @@ export async function exportCrrf(caseId: string, type: 'excel' | 'pdf') {
   window.URL.revokeObjectURL(url);
 }
 
-export function submitToAml(id: string) {
-  return api.post<KycCase>(`/kyc/${id}/submit-to-aml`).then((response) => response.data);
+export function submitToAml(id: string, formalComments?: string) {
+  return api.post<KycCase>(`/kyc/${id}/submit-to-aml`, formalComments === undefined ? undefined : { formalComments }, { timeout: 30000 }).then((response) => response.data);
+}
+
+export type SubmissionReadiness = { ready: boolean; supervisorComments?: string; checks: Array<{ label: string; complete: boolean; message: string }> };
+export function getSubmissionReadiness(id: string) {
+  return api.get<SubmissionReadiness>(`/kyc/${id}/submission-readiness`, { timeout: 30000 }).then((response) => response.data);
 }
 
 export function addWorkflowComment(id: string, body: string) {

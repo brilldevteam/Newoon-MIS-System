@@ -1,4 +1,7 @@
 import { ArrowLeft, Save, Trash2 } from 'lucide-react';
+import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
+import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
+import { mergeBeneficialOwners } from '../utils/ownership';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
@@ -61,8 +64,8 @@ type StoredAttachmentFile = NonNullable<AttachmentDraft['storedFiles']>[number];
 
 type EnquiryStep = 'type' | 'details' | 'ownership' | 'management' | 'contact' | 'declaration' | 'exposure' | 'attachments' | 'notes';
 
-type PreliminaryOwner = { fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
-type PreliminaryManagementPerson = { fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
+type PreliminaryOwner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
+type PreliminaryManagementPerson = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
 type PreliminaryDeclaration = {
   fullName: string;
   position: string;
@@ -110,8 +113,8 @@ type EnquiryValidationForm = {
   notes: string;
 };
 
-const blankPreliminaryOwner = (): PreliminaryOwner => ({ fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
-const blankPreliminaryManagement = (): PreliminaryManagementPerson => ({ fullName: '', identityNumber: '', nationality: '', position: '', positions: [] });
+const blankPreliminaryOwner = (): PreliminaryOwner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId: '', fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
+const blankPreliminaryManagement = (): PreliminaryManagementPerson => ({ id: crypto.randomUUID(), fullName: '', identityNumber: '', nationality: '', position: '', positions: [] });
 
 const existingLegalEntityAttachments = [
   'Key Contact QID / Passport attachment',
@@ -295,6 +298,14 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (!form.preliminaryShareholders.length || form.preliminaryShareholders.some((row) => !row.fullName.trim() || !row.ownershipPercentage.trim())) {
       return 'Add at least one proposed shareholder with name and ownership percentage.';
     }
+    const percentages = form.preliminaryShareholders.map((row) => Number(row.ownershipPercentage));
+    if (percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
+      return 'Each shareholder ownership percentage must be a number between 0 and 100.';
+    }
+    const total = percentages.reduce((sum, value) => sum + value, 0);
+    if (Math.abs(total - 100) > 0.005) {
+      return `Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`;
+    }
   }
 
   if (step === 'management' && form.enquiryType === 'PROPOSED_COMPANY') {
@@ -414,9 +425,9 @@ export function AddEnquiryPage() {
           proposedBusinessActivity: String(details.proposedBusinessActivity || ''),
           sourceOfInitialCapital: String(details.sourceOfInitialCapital || ''),
           proposedRegisteredOfficeAddress: String(details.proposedRegisteredOfficeAddress || ''),
-          preliminaryShareholders: Array.isArray(preliminary.shareholders) && preliminary.shareholders.length ? preliminary.shareholders as PreliminaryOwner[] : [blankPreliminaryOwner()],
-          preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? preliminary.ubos as PreliminaryOwner[] : [blankPreliminaryOwner()],
-          preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? preliminary.management as PreliminaryManagementPerson[] : [blankPreliminaryManagement()],
+          preliminaryShareholders: Array.isArray(preliminary.shareholders) && preliminary.shareholders.length ? (preliminary.shareholders as PreliminaryOwner[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
+          preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? (preliminary.ubos as PreliminaryOwner[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
+          preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? (preliminary.management as PreliminaryManagementPerson[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryManagement()],
           preliminaryDeclaration: preliminary.declaration && typeof preliminary.declaration === 'object'
             ? {
                 fullName: String(preliminary.declaration.fullName || ''),
@@ -473,7 +484,7 @@ export function AddEnquiryPage() {
               sourceOfFunds: form.sourceOfInitialCapital,
               expectedBusiness: resolvedRequestedServices(form),
               shareholders: form.preliminaryShareholders,
-              ubos: form.preliminaryUbos,
+              ubos: mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos),
               management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.join(', ') || row.position })),
               contact: {
                 fullName: form.keyContactName,
@@ -1041,7 +1052,7 @@ function ProposedCompanyDetails({
 function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidationForm; attachments: AttachmentDraft[] }) {
   const legalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
   const value = (item?: string) => item || '-';
-  return <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto bg-slate-200 p-4">
+  return <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto bg-slate-200 p-4 min-[1500px]:sticky min-[1500px]:top-4 min-[1500px]:self-start">
     <article className="mx-auto min-h-[1120px] w-full max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
       <p>Date: <span className="inline-block min-w-24 border-b border-black">{new Date().toLocaleDateString('en-GB')}</span></p>
       <h2 className="mt-3 text-center text-[9px] font-bold underline">Prospective Customer Information &amp; Preliminary Due Diligence form</h2>
@@ -1062,8 +1073,8 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
         <p className="font-bold">Proposed Shareholders</p>
         <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryShareholders.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
         <p className="mt-2 font-bold">Ultimate Beneficial owners (Natural Person Only)</p>
-        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryUbos.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
-        <p className="mt-1 font-bold">Total UBO %: {totalOwnership(form.preliminaryUbos)}%</p>
+        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'Ownership %']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos))}%</p>
         <p className="mt-2">If a shareholder is a corporate entity, please provide its Commercial Registration (or equivalent incorporation document) and ownership structure until the ultimate beneficial owner(s) (natural person(s)) are identified.</p>
       </PdfSection>
       <PdfSection title="Section C: Proposed Management & Control Persons (Directors, Secretary, SEF, Authorized Signatory)">
@@ -1122,37 +1133,11 @@ function totalOwnership(rows: PreliminaryOwner[]) {
 }
 
 function PreliminaryOwnershipForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
-  const update = (key: 'preliminaryShareholders' | 'preliminaryUbos', index: number, field: keyof PreliminaryOwner, value: string | boolean) => {
-    const rows = form[key].map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row);
-    if (key !== 'preliminaryShareholders') return onChange({ ...form, [key]: rows });
-
-    const shareholder = rows[index];
-    const ubos = shareholder.isUbo
-      ? [...form.preliminaryUbos.filter((_, uboIndex) => uboIndex !== index), ...Array.from({ length: Math.max(0, index + 1 - form.preliminaryUbos.length) }, blankPreliminaryOwner)].map((row, uboIndex) => uboIndex === index ? { ...shareholder, isUbo: true } : row)
-      : form.preliminaryUbos.filter((_, uboIndex) => uboIndex !== index);
-    onChange({ ...form, preliminaryShareholders: rows, preliminaryUbos: ubos.length ? ubos : [blankPreliminaryOwner()] });
-  };
-  const remove = (key: 'preliminaryShareholders' | 'preliminaryUbos', index: number) => {
-    const rows = form[key].filter((_, rowIndex) => rowIndex !== index);
-    if (key === 'preliminaryShareholders') {
-      const ubos = form.preliminaryUbos.filter((_, uboIndex) => uboIndex !== index);
-      onChange({ ...form, preliminaryShareholders: rows.length ? rows : [blankPreliminaryOwner()], preliminaryUbos: ubos.length ? ubos : [blankPreliminaryOwner()] });
-      return;
-    }
-    onChange({ ...form, preliminaryUbos: rows.length ? rows : [blankPreliminaryOwner()] });
-  };
-  const renderField = (key: 'preliminaryShareholders' | 'preliminaryUbos', index: number, row: PreliminaryOwner, field: keyof PreliminaryOwner) => {
-    if (field === 'nationality') return <div className="min-w-[220px]"><SearchableMultiSelect label="" value={splitList(row.nationality)} options={nationalityOptions.filter(Boolean)} onChange={(value) => update(key, index, 'nationality', value.join(', '))} placeholder="Select nationalities" /></div>;
-    if (field === 'address') return <select value={String(row[field])} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 bg-white px-2 py-1.5"><option value="">Select</option>{countryOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>;
-    return <input value={String(row[field])} onChange={(event) => update(key, index, field, event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" />;
-  };
-  const renderRows = (key: 'preliminaryShareholders' | 'preliminaryUbos', title: string, showUbo = false) => <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">{title}</h2><p className="mt-1 text-sm text-slate-500">Enter the proposed natural-person or corporate ownership details.</p></div><button type="button" onClick={() => onChange({ ...form, [key]: [...form[key], blankPreliminaryOwner()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add row</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[880px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID / CR', 'Nationality', 'Country of residence', 'Ownership %', ...(showUbo ? ['UBO'] : []), ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form[key].map((row, index) => <tr key={index} className="border-t border-slate-200">{(['fullName', 'identityNumber', 'nationality', 'address', 'ownershipPercentage'] as const).map((field) => <td key={field} className="p-2">{renderField(key, index, row, field)}</td>)}{showUbo ? <td className="p-2 text-center"><input type="checkbox" checked={row.isUbo} onChange={(event) => update(key, index, 'isUbo', event.target.checked)} aria-label={`Mark ${row.fullName || `shareholder ${index + 1}`} as UBO`} /></td> : null}<td className="p-2"><button type="button" onClick={() => remove(key, index)} disabled={form[key].length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div><p className="mt-3 text-sm font-semibold text-slate-700">Total {showUbo ? 'shareholder' : 'UBO'} %: {totalOwnership(form[key])}%</p></section>;
-  return <div className="space-y-5">{renderRows('preliminaryShareholders', 'Proposed Shareholders', true)}{renderRows('preliminaryUbos', 'Ultimate Beneficial Owners')}</div>;
+  return <PreliminaryOwnershipEditor shareholders={form.preliminaryShareholders} ubos={form.preliminaryUbos} countries={countryOptions} nationalities={nationalityOptions} onChange={(shareholders, ubos) => onChange({ ...form, preliminaryShareholders: shareholders, preliminaryUbos: ubos })} />;
 }
 
 function PreliminaryManagementForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
-  const update = (index: number, field: keyof PreliminaryManagementPerson, value: string | string[]) => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value, ...(field === 'positions' ? { position: (value as string[]).join(', ') } : {}) } : row) });
-  return <section className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-950">Proposed Management and Control Persons</h2><p className="mt-1 text-sm text-slate-500">Include directors, secretary, SEF, and authorised signatories.</p></div><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: [...form.preliminaryManagement, blankPreliminaryManagement()] })} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Add person</button></div><div className="mt-4 overflow-x-auto"><table className="min-w-[860px] w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{['Full name', 'Passport / QID', 'Nationality', 'Positions', ''].map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead><tbody>{form.preliminaryManagement.map((row, index) => <tr key={index} className="border-t border-slate-200"><td className="p-2"><input value={row.fullName} onChange={(event) => update(index, 'fullName', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="p-2"><input value={row.identityNumber} onChange={(event) => update(index, 'identityNumber', event.target.value)} className="w-full rounded border border-slate-300 px-2 py-1.5" /></td><td className="min-w-[240px] p-2"><SearchableMultiSelect label="" value={splitList(row.nationality)} options={nationalityOptions.filter(Boolean)} onChange={(value) => update(index, 'nationality', value.join(', '))} placeholder="Select nationalities" /></td><td className="min-w-[260px] p-2"><SearchableMultiSelect label="" value={row.positions?.length ? row.positions : row.position ? row.position.split(', ').filter(Boolean) : []} options={positionOptions.filter(Boolean)} onChange={(value) => update(index, 'positions', value)} placeholder="Select one or more positions" /></td><td className="p-2"><button type="button" onClick={() => onChange({ ...form, preliminaryManagement: form.preliminaryManagement.filter((_, rowIndex) => rowIndex !== index) })} disabled={form.preliminaryManagement.length === 1} className="text-sm font-semibold text-red-600 disabled:opacity-40">Remove</button></td></tr>)}</tbody></table></div></section>;
+  return <PreliminaryManagementEditor people={form.preliminaryManagement} nationalities={nationalityOptions} positions={positionOptions} onChange={(people) => onChange({ ...form, preliminaryManagement: people })} />;
 }
 
 function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label: string; description: string }> {

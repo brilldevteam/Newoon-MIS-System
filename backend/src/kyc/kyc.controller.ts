@@ -246,8 +246,14 @@ export class KycController {
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/submit-to-aml')
-  submitToAml(@CurrentUser() user: RequestUser, @Param('id') id: string) {
-    return this.kycService.submitToAml(user, id);
+  submitToAml(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
+    return this.kycService.submitToAml(user, id, dto);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/submission-readiness')
+  submissionReadiness(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.kycService.submissionReadiness(user, id);
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')

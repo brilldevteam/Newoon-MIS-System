@@ -1,6 +1,7 @@
 import { Download, FileSpreadsheet, FileText, FileUp, MessageSquare, Save, SearchCheck, Send } from 'lucide-react';
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { RichTextEditor } from '../components/RichTextEditor';
 import { useAuth } from '../hooks/useAuth';
 import { getApiErrorMessage } from '../services/api';
 import {
@@ -113,7 +114,7 @@ export function InternalReviewWorkspacePage() {
     setForms((current) => {
       const merged = { ...current };
       for (const review of next.reviews) {
-        merged[review.stage as ReviewStage] = { ...emptyForm, ...(review.data || {}), formalComments: review.formalComments || '' };
+        merged[review.stage as ReviewStage] = { ...emptyForm, ...(review.data || {}), comments: review.formalComments || review.data?.comments || '', formalComments: review.formalComments || '' };
       }
       return merged;
     });
@@ -496,7 +497,7 @@ function Field({ label, value, onChange, type = 'text', textarea = false, disabl
   return (
     <label className={`text-sm font-medium text-slate-700 ${wide ? 'md:col-span-2' : ''}`}>
       {label}
-      {textarea ? (
+      {textarea && /comment/i.test(label) ? <RichTextEditor label={label} value={value || ''} onChange={onChange} disabled={disabled} /> : textarea ? (
         <textarea disabled={disabled} rows={3} value={value || ''} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
       ) : type === 'date' ? (
         <TypedDateInput value={value} onChange={onChange} disabled={disabled} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />

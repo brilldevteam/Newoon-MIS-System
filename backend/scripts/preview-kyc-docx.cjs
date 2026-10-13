@@ -92,6 +92,7 @@ const complex = {
 };
 
 async function main() {
+  complex.sectionH.mlroComments = '<p><strong>Enhanced due diligence completed.</strong> <mark>Annual review required.</mark></p><p>Source of wealth and ownership documentation were reviewed. This paragraph must use the full available width.</p><ul><li>Monitor changes in ownership.</li><li><em>Escalate material risk changes.</em></li></ul>';
   const withPdf = !process.argv.includes('--no-pdf');
   const renderer = withPdf ? new KycPdfRenderer() : null;
   try {

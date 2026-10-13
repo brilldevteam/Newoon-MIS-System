@@ -1,0 +1,6 @@
+.review-rich-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+.review-rich-text p { margin: 0 0 0.65em; }
+.review-rich-text p:last-child { margin-bottom: 0; }
+.review-rich-text ul { list-style: disc; padding-left: 1.5em; }
+.review-rich-text ol { list-style: decimal; padding-left: 1.5em; }
+.review-rich-text mark { background: #fff59d; color: inherit; }

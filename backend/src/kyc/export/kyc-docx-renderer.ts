@@ -47,7 +47,7 @@ const cellMargins = { top: 50, bottom: 40, left: 80, right: 80 };
 function runs(line: Line, size: number) {
   return line.parts.map((part) => 'box' in part
     ? new TextRun({ text: part.box ? '☒' : '☐', font: { ascii: SYMBOL_FONT, hAnsi: SYMBOL_FONT, cs: SYMBOL_FONT, eastAsia: 'MS Gothic' }, size })
-    : new TextRun({ text: cleanText(part.text), bold: part.bold, color: part.muted ? COLORS.muted : COLORS.ink, font: fontOf(/[☑☐]/.test(part.text) ? SYMBOL_FONT : FONT), size }));
+    : new TextRun({ text: cleanText(part.text), bold: part.bold, italics: part.italic, underline: part.underline ? {} : undefined, highlight: part.highlight ? 'yellow' : undefined, color: part.muted ? COLORS.muted : COLORS.ink, font: fontOf(/[☑☐]/.test(part.text) ? SYMBOL_FONT : FONT), size }));
 }
 
 function paragraph(line: Line, size: number, alignment?: 'left' | 'center') {
@@ -89,7 +89,7 @@ function table(weights: number[], rows: Row[], style: TableStyle, width: number)
     rows: rows.map((row) => {
       let column = 0;
       return new TableRow({
-        cantSplit: true,
+        cantSplit: !(style === 'fields' && row.cells.length === 1 && row.cells[0].span === 2),
         tableHeader: row.header,
         // The preview's grid cells are at least 32 px tall.
         height: style === 'fields' ? { value: 20 * PT, rule: HeightRule.ATLEAST } : undefined,
