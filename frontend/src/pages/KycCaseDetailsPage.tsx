@@ -332,6 +332,7 @@ export function KycCaseDetailsPage() {
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
+        {hasAnyRole(user, workflowRoles.kycFormBuilder) ? <Link to={`/kyc/${kycCase.id}/revisions`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"><FileText className="h-4 w-4" />Form history &amp; compare</Link> : null}
         {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (
           <Link
             to={`/enquiries/${kycCase.sourceEnquiry.id}`}
@@ -356,7 +357,7 @@ export function KycCaseDetailsPage() {
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
           >
             <FileText className="h-4 w-4" />
-            Open KYC Form
+            {kycCase.kycForm?.status === 'AMENDMENT_DRAFT' ? 'Open amendment' : 'Open KYC Form'}
           </Link>
         ) : null}
         {canOpenInternalReview ? (

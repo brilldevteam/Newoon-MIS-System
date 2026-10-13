@@ -14,6 +14,7 @@ import { EnquiryDetailsPage } from '../pages/EnquiryDetailsPage';
 import { EnquiryListPage } from '../pages/EnquiryListPage';
 import { KycCaseDetailsPage } from '../pages/KycCaseDetailsPage';
 import { KycFormEditorPage } from '../pages/KycFormEditorPage';
+import { KycFormRevisionsPage } from '../pages/KycFormRevisionsPage';
 import { KycScreeningPage } from '../pages/KycScreeningPage';
 import { InternalReviewWorkspacePage } from '../pages/InternalReviewWorkspacePage';
 import { KycWorkflowPage } from '../pages/KycWorkflowPage';
@@ -109,6 +110,10 @@ export const router = createBrowserRouter([
               { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
               { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
             ]
+          },
+          {
+            element: <RequireAccess area="kyc" fallbackRoles={workflowRoles.kycFormBuilder} />,
+            children: [{ path: '/kyc/:id/revisions', element: <KycFormRevisionsPage /> }]
           },
           {
             element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.documentUpload} />,

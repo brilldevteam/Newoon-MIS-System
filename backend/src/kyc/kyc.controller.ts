@@ -79,6 +79,38 @@ export class KycController {
     return this.kycService.autoSaveForm(user, id, dto);
   }
 
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/form/revisions')
+  getFormRevisions(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.kycService.getFormRevisions(user, id);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/form/revisions/:revisionId')
+  getFormRevision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('revisionId') revisionId: string) {
+    return this.kycService.getFormRevision(user, id, revisionId);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/form/revisions/:revisionId/download')
+  async downloadFormRevision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('revisionId') revisionId: string, @Query('type') type: string, @Res() res: Response) {
+    const result = await this.kycService.downloadFormRevision(user, id, revisionId, type === 'DOCX' ? KycGeneratedDocumentType.DOCX : KycGeneratedDocumentType.PDF);
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeResponseFileName(result.fileName)}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(result.content);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get(':id/form/revisions/:revisionId/files/:fileId')
+  async downloadRevisionFile(@CurrentUser() user: RequestUser, @Param('id') id: string, @Param('revisionId') revisionId: string, @Param('fileId') fileId: string, @Res() res: Response) {
+    const result = await this.kycService.downloadRevisionFile(user, id, revisionId, fileId);
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeResponseFileName(result.fileName)}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(Buffer.from(result.content));
+  }
+
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/form/section-a')
   saveSectionA(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
