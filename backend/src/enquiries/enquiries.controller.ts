@@ -75,6 +75,15 @@ export class EnquiriesController {
     return this.enquiriesService.getPreliminaryKyc(user, id);
   }
 
+  @Get(':id/preliminary-kyc/pdf')
+  async downloadPreliminaryPdf(@CurrentUser() user: RequestUser, @Param('id') id: string, @Res() response: Response) {
+    const pdf = await this.enquiriesService.downloadPreliminaryPdf(user, id);
+    response.setHeader('Content-Type', 'application/pdf');
+    response.setHeader('Content-Disposition', `attachment; filename="${safeResponseFileName(`preliminary-kyc-${id}.pdf`)}"`);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.send(pdf);
+  }
+
   @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Patch(':id/preliminary-kyc')
   savePreliminaryKyc(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {

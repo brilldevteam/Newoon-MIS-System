@@ -1,5 +1,25 @@
 # Newoon MIS Developer Handover
 
+## Shared Return Feedback (2026-10-13)
+
+- The case Comments panel displays submitted review feedback (formal comments, return reasons and conditions) and formal reviewer comments to users already authorized to view that case. Submitted version history keeps earlier return feedback visible after resubmission. Legacy snapshot fields are supported; draft review submissions and confidential notes/comments are not included in this shared projection.
+- New submitted snapshots explicitly retain formal comments/reason/conditions/decision even when a separate `data` payload is supplied. No migration is required. Deploy frontend and backend together. Run `node backend/scripts/check-shared-review-feedback.cjs` after building, and verify return/resubmit and confidential visibility with staging accounts.
+
+## Preliminary Review Handoff (2026-10-13)
+
+- Proposed-company conversion preserves the completed Preliminary KYC JSON in Section A and transfers its declaration/signature/stamp into Section G. Review uses the same preliminary document component as enquiry details, with internal reviews kept separately below it, rather than replacing it with the standard KYC layout.
+- Existing first-version preliminary cases fall back to their saved source-enquiry document and declaration where KYC fields are missing. Existing populated KYC declaration fields are not overwritten. Full-KYC amendments (version 2 onward) and standard cases retain their existing previews. No migration or database reset is required. Deploy both workspaces together.
+- Run `node backend/scripts/check-preliminary-review.cjs` after building for synthetic snapshot/recovery/isolation assertions. Confirm the signed preliminary document across AML Supervisor and DMLRO with authorized staging accounts; local assertions do not establish live behavior.
+
+## Preliminary PDF Download (2026-10-13)
+
+- Enquiry details downloads Preliminary KYC directly from `GET /api/enquiries/:id/preliminary-kyc/pdf` rather than calling browser print. It uses authorized saved enquiry data and the existing Chromium renderer with empty headers/footers. Regular KYC exports are unchanged. The frontend and backend must be deployed together; existing PDF Chromium runtime requirements apply. User-entered form dates are retained, but browser timestamps/titles are not added.
+
+## Indirect UBO Percentage (2026-10-13)
+
+- Corporate-linked preliminary UBOs have a separate `uboPercentage` JSON field for their effective indirect interest in the client company. `ownershipPercentage` remains their stake in the corporate shareholder. UBO previews/totals and preliminary-to-KYC transfer use `uboPercentage`; direct-shareholder percentages are unchanged. No schema migration is required.
+- The effective percentage is explicitly entered, not automatically calculated. Older linked entries must have this value completed before submission; saving an incomplete draft remains allowed. Unlinked/direct UBO behavior is unchanged.
+
 ## Ownership and Review Corrections (2026-10-06)
 
 - The DMLRO submission page has a required rich-text AML Supervisor comments field, including preliminary cases without Section H. `submit-to-aml` accepts `formalComments`, sanitizes them and stores them via the existing locked review submission/snapshot and Section H synchronization where a form exists. Screening and CRRF checks remain enforced. Deploy both workspaces together.

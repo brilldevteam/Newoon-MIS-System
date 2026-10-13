@@ -1,6 +1,7 @@
 export type OwnershipRow = {
   id?: string; fullName?: string; identityNumber?: string; isUbo?: boolean;
   shareholderType?: string; parentRowId?: string; sourceShareholderId?: string;
+  ownershipPercentage?: string; uboPercentage?: string;
 };
 
 export function mergeBeneficialOwners<T extends OwnershipRow>(shareholders: T[], manual: T[]): T[] {
@@ -12,7 +13,7 @@ export function mergeBeneficialOwners<T extends OwnershipRow>(shareholders: T[],
       row.sourceShareholderId && other.id === row.sourceShareholderId ||
       (other.fullName?.trim().toLowerCase() === row.fullName?.trim().toLowerCase() &&
        String(other.identityNumber || '').trim() === String(row.identityNumber || '').trim()))) continue;
-    result.push(row);
+    result.push(row.parentRowId ? { ...row, ownershipPercentage: row.uboPercentage ?? '' } : row);
   }
   return result;
 }

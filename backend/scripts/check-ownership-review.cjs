@@ -18,11 +18,17 @@ async function main() {
   assert.doesNotThrow(() => validate(['33.33', '33.33', '33.34']));
   const owner = { id: 'person', fullName: 'Example Owner', identityNumber: '001234ABC', ownershipPercentage: '50', isUbo: true };
   const corporate = { id: 'company', fullName: 'Example Holding Ltd', shareholderType: 'Corporate Entity', ownershipPercentage: '50' };
-  const indirect = { id: 'indirect', fullName: 'Another Owner', identityNumber: '0000987', parentRowId: 'company', ownershipPercentage: '100' };
+  const indirect = { id: 'indirect', fullName: 'Another Owner', identityNumber: '0000987', parentRowId: 'company', ownershipPercentage: '100', uboPercentage: '100' };
   assert.deepEqual(beneficialOwners([owner, corporate], [{ fullName: '' }, indirect]), [owner, indirect]);
   assert.equal(beneficialOwners([owner], [{ ...owner }]).length, 1);
   assert.equal(beneficialOwners([{ ...owner, isUbo: false }], [{ ...owner }]).length, 0);
   assert.equal(beneficialOwners([{ ...corporate, isUbo: true }], []).length, 0);
+  const linked = { ...indirect, uboPercentage: '50' };
+  const combined = beneficialOwners([owner, corporate], [linked]);
+  assert.equal(combined[1].ownershipPercentage, '50');
+  assert.equal(linked.ownershipPercentage, '100', 'Do not mutate the stake in the corporate shareholder');
+  assert.equal(combined.reduce((sum, row) => sum + Number(row.ownershipPercentage), 0), 100);
+  assert.throws(() => enquiry.assertCompletePreliminaryKyc({ ...preliminary, shareholders: [{ fullName: 'Holding', ownershipPercentage: '100' }], ubos: [{ parentRowId: 'company', fullName: 'Indirect Owner' }] }), /UBO percentage/);
   for (const empty of ['', '<p><br></p>', '<p>&nbsp;</p>', '<ul><li></li></ul>', '<script>alert(1)</script>']) assert.equal(hasComment(empty), false, empty);
   assert.equal(hasComment('<p><strong>Reviewed</strong></p>'), true);
   assert(!safeComment('<p onclick="x()">Safe</p><img src=x onerror=x()><script>x()</script>').includes('script'));

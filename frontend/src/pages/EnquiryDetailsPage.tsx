@@ -1,12 +1,13 @@
-import { ArrowLeft, ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Printer, Send } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
-import { mergeBeneficialOwners } from '../utils/ownership';
+import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   addEnquiryComment,
   convertEnquiryToKyc,
   downloadEnquiryAttachment,
   downloadEnquiryAttachmentGroup,
+  downloadPreliminaryKycPdf,
   Enquiry,
   EnquiryAttachment,
   EnquiryStatus,
@@ -99,37 +100,13 @@ export function EnquiryDetailsPage() {
     }
   }
 
-  function printPreliminaryKyc() {
-    const preview = document.querySelector('#preliminary-kyc-form article');
-    if (!preview) {
-      setError('The Preliminary KYC form is not available to print.');
-      return;
-    }
-
-    const printWindow = window.open('', '_blank', 'width=900,height=1000');
-    if (!printWindow) {
-      setError('Unable to open the print preview. Allow pop-ups and try again.');
-      return;
-    }
-
-    const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-      .map((node) => node.outerHTML)
-      .join('');
-
-    printWindow.document.write(`<!doctype html>
-      <html><head><title>Preliminary KYC</title>${styles}
-      <style>
-        @page { size: A4; margin: 12mm; }
-        body { background: #ffffff !important; padding: 0 !important; }
-        #preliminary-kyc-form { max-height: none !important; overflow: visible !important; background: #ffffff !important; border: 0 !important; padding: 0 !important; }
-      </style>
-      </head><body><section id="preliminary-kyc-form">${preview.outerHTML}</section></body></html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.onload = () => {
-      printWindow.print();
-      printWindow.onafterprint = () => printWindow.close();
-    };
+  async function downloadPreliminaryKyc() {
+    if (!id || saving) return;
+    setSaving(true);
+    setError('');
+    try { await downloadPreliminaryKycPdf(id); }
+    catch (failure) { setError(getApiErrorMessage(failure, 'Unable to download Preliminary KYC PDF.')); }
+    finally { setSaving(false); }
   }
 
   async function submitComment(event: FormEvent<HTMLFormElement>) {
@@ -360,9 +337,9 @@ export function EnquiryDetailsPage() {
               <button type="button" onClick={() => document.getElementById('preliminary-kyc-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
                 View Preliminary KYC
               </button>
-              <button type="button" onClick={printPreliminaryKyc} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                <Printer className="h-4 w-4" />
-                Print Preliminary KYC
+              <button type="button" disabled={saving} onClick={downloadPreliminaryKyc} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                <Download className="h-4 w-4" />
+                Download Preliminary KYC PDF
               </button>
             </>
           ) : null}
@@ -449,55 +426,4 @@ function Info({ label, value, wide = false }: { label: string; value?: string | 
       <dd className="mt-1 whitespace-pre-wrap text-sm text-slate-950">{value}</dd>
     </div>
   );
-}
-
-function PreliminaryKycDocument({ data }: { data: Record<string, any> }) {
-  const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
-  const value = (item: unknown) => String(item || '-');
-  const totalOwnership = (items: Array<Record<string, any>>) => items.reduce((total, item) => total + (Number.parseFloat(String(item.ownershipPercentage || '')) || 0), 0).toFixed(2);
-  const expectedBusiness = Array.isArray(data.expectedBusiness) ? data.expectedBusiness.filter(Boolean).join(', ') : data.expectedBusiness;
-  const contact = data.contact && typeof data.contact === 'object' ? data.contact as Record<string, any> : {};
-  const declaration = data.declaration && typeof data.declaration === 'object' ? data.declaration as Record<string, any> : {};
-  return <section id="preliminary-kyc-form" className="scroll-mt-6 max-h-[calc(100vh-150px)] min-w-0 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
-    <article className="mx-auto max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
-      <p>Date: {data.completedAt ? new Date(data.completedAt).toLocaleDateString('en-GB') : '-'}</p>
-      <h2 className="mt-3 text-center text-[11px] font-bold underline">Prospective Customer Information &amp; Preliminary Due Diligence form</h2>
-      <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity.</p>
-      <PreliminaryTable title="Section A: Basic Client Details" headers={['No.', 'Details']} rows={[
-        ['1', `Proposed Company Name: ${value(data.companyName)}`], ['2', `Proposed Legal Form: ${value(data.proposedLegalForm)}`],
-        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', 'Country of incorporation: -'],
-        ['5', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`], ['6', `Proposed Business Activity: ${value(data.businessActivity)}`],
-        ['7', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`], ['8', `Expected Business from Newoon: ${value(expectedBusiness)}`]
-      ]} />
-      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
-      <p className="mt-1 font-bold">Total ownership %: {totalOwnership(rows(data.shareholders))}%</p>
-      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'Ownership %']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
-      <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)))}%</p>
-      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />
-      <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
-      <PreliminaryTable title="Section E: Key Contact Person" headers={['No.', 'Field', 'Details']} rows={[
-        ['1', 'Full Name', value(contact.fullName)], ['2', 'Position', value(contact.position)], ['3', 'Nationality', value(contact.nationality)],
-        ['4', 'Passport Number', value(contact.passportNumber)], ['5', 'Passport Expiry Date', value(contact.passportExpiryDate)],
-        ['6', 'QID Number', value(contact.qidNumber)], ['7', 'QID Expiry Date', value(contact.qidExpiryDate)],
-        ['8', 'Mobile Number', value(contact.mobileNumber)], ['9', 'Email', value(contact.email)]
-      ]} />
-      <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">Section F: Client Declaration</h3><p className="mt-1">By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorised to represent and sign this document on behalf of the proposed entity.</p></section>
-      <table className="mt-1 w-full border-collapse text-left"><tbody>
-        <tr><th className="w-1/3 border border-black px-1 py-0.5">Full Name</th><td className="border border-black px-1 py-0.5">{value(declaration.fullName)}</td></tr>
-        <tr><th className="border border-black px-1 py-0.5">Position</th><td className="border border-black px-1 py-0.5">{value(declaration.position)}</td></tr>
-        <tr><th className="border border-black px-1 py-0.5">Date</th><td className="border border-black px-1 py-0.5">{value(declaration.date)}</td></tr>
-        <tr><th className="border border-black px-1 py-0.5">Authorised signature</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={declaration.authorizedSignature} dataUrl={declaration.authorizedSignatureDataUrl} /></td></tr>
-        <tr><th className="border border-black px-1 py-0.5">Company Stamp</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={declaration.companyStamp} dataUrl={declaration.companyStampDataUrl} /></td></tr>
-      </tbody></table>
-    </article>
-  </section>;
-}
-
-function PreliminaryTable({ title, headers, rows }: { title: string; headers: string[]; rows: string[][] }) {
-  return <section className="mt-4"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><table className="mt-1 w-full border-collapse text-left"><thead><tr>{headers.map((header) => <th key={header} className="border border-black px-1 py-0.5">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-black px-1 py-1">-</td></tr>}</tbody></table></section>;
-}
-
-function PreliminaryUploadPreview({ fileName, dataUrl }: { fileName?: string; dataUrl?: string }) {
-  if (!fileName) return <>-</>;
-  return <div className="min-h-6"><span>{fileName}</span>{dataUrl?.startsWith('data:image/') ? <img src={dataUrl} alt={fileName} className="mt-1 max-h-20 max-w-40 object-contain" /> : null}</div>;
 }
