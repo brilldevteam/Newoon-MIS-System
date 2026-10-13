@@ -1,5 +1,5 @@
 import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, Save, Trash2, Upload } from 'lucide-react';
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   CrrfDocument,
@@ -15,6 +15,8 @@ import {
 import { CRRF_DOCUMENT_ACCEPT, CRRF_DOCUMENT_HINT, validateCrrfDocuments } from '../utils/upload-security';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole } from '../utils/access-control';
+import { getApiErrorMessage } from '../services/api';
+import { useToast } from '../components/ToastProvider';
 
 const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'LOW', label: 'Low' },
@@ -22,33 +24,46 @@ const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
   { value: 'HIGH', label: 'High' }
 ];
 
-function errorMessage(error: any, fallback: string) {
-  const message = error?.response?.data?.message;
-  if (Array.isArray(message)) return message.join(' ');
-  return typeof message === 'string' ? message : fallback;
-}
-
 export function CrrfWorkspacePage() {
   const { id = '' } = useParams();
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [workspace, setWorkspace] = useState<CrrfWorkspace | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const errorRef = useRef<HTMLDivElement>(null);
   const canEdit = hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
 
   useEffect(() => {
     if (!id) return;
     getCrrfWorkspace(id)
       .then(setWorkspace)
-      .catch((requestError) => setError(errorMessage(requestError, 'Unable to load CRRF workspace.')));
+      .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load CRRF workspace.')));
   }, [id]);
+
+  useEffect(() => {
+    if (!error) return;
+    requestAnimationFrame(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [error]);
+
+  useEffect(() => {
+    if (message) showToast(message, 'success');
+  }, [message, showToast]);
+
+  useEffect(() => {
+    if (error) showToast(error, 'error');
+  }, [error, showToast]);
 
   async function save() {
     if (!id || !workspace) return;
     if (!workspace.record.riskRating) {
-      setError('Select a risk rating before saving the CRRF draft.');
+      setError('Cannot save CRRF yet. Select a risk rating, then click Save Draft.');
+      return;
+    }
+    if (!workspace.record.documents.length && !pendingFiles.length) {
+      setError('Cannot save CRRF yet. Upload at least one supporting CRRF document, then click Save Draft.');
       return;
     }
     setError('');
@@ -70,7 +85,7 @@ export function CrrfWorkspacePage() {
       );
       setMessage('CRRF draft saved.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to save CRRF record.'));
+      setError(getApiErrorMessage(requestError, 'Unable to save CRRF record.'));
     } finally {
       setBusyKey('');
     }
@@ -98,7 +113,7 @@ export function CrrfWorkspacePage() {
       setWorkspace(await deleteCrrfDocument(id, documentId));
       setMessage('CRRF document deleted.');
     } catch (requestError: any) {
-      setError(errorMessage(requestError, 'Unable to delete CRRF document.'));
+      setError(getApiErrorMessage(requestError, 'Unable to delete CRRF document.'));
     } finally {
       setBusyKey('');
     }
@@ -113,7 +128,7 @@ export function CrrfWorkspacePage() {
       await exportCrrf(id, type);
       setMessage(`CRRF ${type === 'excel' ? 'Excel' : 'PDF'} exported.`);
     } catch (requestError: any) {
-      setError(errorMessage(requestError, `Unable to export CRRF ${type}.`));
+      setError(getApiErrorMessage(requestError, `Unable to export CRRF ${type}.`));
     } finally {
       setBusyKey('');
     }
@@ -165,7 +180,7 @@ export function CrrfWorkspacePage() {
       </div>
 
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-      {error ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <div ref={errorRef} tabIndex={-1} className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <InfoCard label="KYC number" value={workspace.clientInfo.kycNumber || '-'} />

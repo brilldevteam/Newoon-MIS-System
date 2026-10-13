@@ -21,6 +21,7 @@ import {
 import { allowedReviewStages, hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 import { SIGNED_KYC_ACCEPT, SIGNED_KYC_HINT, validateSignedKycDocuments } from '../utils/upload-security';
+import { TypedDateInput } from '../components/TypedDateInput';
 
 const stages: Array<{ id: ReviewStage; title: string; submitLabel: string }> = [
   { id: 'SUPERVISOR', title: 'AML Supervisor Review', submitLabel: 'Submit to DMLRO' },
@@ -497,6 +498,8 @@ function Field({ label, value, onChange, type = 'text', textarea = false, disabl
       {label}
       {textarea ? (
         <textarea disabled={disabled} rows={3} value={value || ''} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
+      ) : type === 'date' ? (
+        <TypedDateInput value={value} onChange={onChange} disabled={disabled} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
       ) : (
         <input disabled={disabled} type={type} value={value || ''} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" />
       )}

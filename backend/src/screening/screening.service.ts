@@ -98,6 +98,10 @@ export class ScreeningService {
     const sectionData = await this.prisma.kycSectionData.findMany({
       where: { kycCaseId, ...this.sectionTenantWhere(user) }
     });
+    const managers = await this.prisma.kycManager.findMany({
+      where: { kycCaseId },
+      orderBy: { sortOrder: 'asc' }
+    });
     const sections = this.sectionMap(sectionData);
     const records = await this.prisma.screeningRecord.findMany({
       where: { kycCaseId, ...this.recordTenantWhere(user) },
@@ -112,7 +116,7 @@ export class ScreeningService {
 
     return {
       clientInfo: this.clientInfo(kycCase, sections.sectionA),
-      entities: this.extractEntities(kycCase, sections),
+      entities: this.extractEntities(kycCase, sections, managers),
       mandatoryChecks: MANDATORY_CHECKS,
       resultRequiredChecks: RESULT_REQUIRED_CHECKS,
       individualFilterChecks: INDIVIDUAL_FILTER_CHECKS,
@@ -295,31 +299,16 @@ export class ScreeningService {
       );
     }).map((check) => check.checkType);
 
-    if (!remarks) {
-      throw new BadRequestException('Observation and remarks are required before finalizing screening.');
-    }
-
-    if (!record.conclusionStatus) {
-      throw new BadRequestException('Select the individual screening result before finalizing.');
-    }
-
-    if (missingMergedEvidence.length) {
-      throw new BadRequestException(`Upload merged PDF evidence for: ${missingMergedEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingMergedResults.length) {
-      throw new BadRequestException(`Select merged screening result for: ${missingMergedResults.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingIndividualResults.length) {
-      throw new BadRequestException(`Select a result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-
-    if (missingMatchComments.length) {
-      throw new BadRequestException(`Add comments for potential or confirmed matches in: ${missingMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
-    }
-    if (missingMergedMatchComments.length) {
-      throw new BadRequestException(`Add comments for potential or confirmed common-list matches in: ${missingMergedMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    const requirements: string[] = [];
+    if (!remarks) requirements.push('Add observations or remarks for this person or entity.');
+    if (!record.conclusionStatus) requirements.push('Select the final screening result for this person or entity.');
+    if (missingMergedEvidence.length) requirements.push(`Upload evidence for: ${missingMergedEvidence.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMergedResults.length) requirements.push(`Select a common-list result for: ${missingMergedResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingIndividualResults.length) requirements.push(`Select an individual result for: ${missingIndividualResults.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMatchComments.length) requirements.push(`Add a match comment for: ${missingMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (missingMergedMatchComments.length) requirements.push(`Add a common-list match comment for: ${missingMergedMatchComments.map((item) => this.checkLabel(item)).join(', ')}.`);
+    if (requirements.length) {
+      throw new BadRequestException(`Cannot finalize screening yet. ${requirements.join(' ')}`);
     }
 
     await this.prisma.screeningRecord.update({
@@ -574,12 +563,14 @@ export class ScreeningService {
     return record;
   }
 
-  private extractEntities(kycCase: Awaited<ReturnType<ScreeningService['findCase']>>, sections: Record<string, JsonRecord>) {
+  private extractEntities(
+    kycCase: Awaited<ReturnType<ScreeningService['findCase']>>,
+    sections: Record<string, JsonRecord>,
+    managers: Array<{ id: string; fullName: string; identityNumber: string | null; nationality: string | null; position: string | null }>
+  ) {
     const entities: ScreeningEntityOption[] = [];
     const sectionA = sections.sectionA || {};
     const sectionB = sections.sectionB || {};
-    const sectionC = sections.sectionC || {};
-    const sectionE = sections.sectionE || {};
 
     this.pushEntity(entities, {
       sourceId: `client:${kycCase.clientId}`,
@@ -617,25 +608,15 @@ export class ScreeningService {
       });
     });
 
-    this.listValue(sectionC.managers).forEach((row, index) => {
-      if (!this.isRecord(row)) return;
+    managers.forEach((manager) => {
       this.pushEntity(entities, {
-        sourceId: `manager:${this.stringValue(row.id) || index}`,
+        sourceId: `manager:${manager.id}`,
         entityType: ScreeningEntityType.MANAGER,
-        name: this.stringValue(row.fullName),
-        identifier: this.stringValue(row.identityNumber),
-        country: this.firstText(row.nationality),
-        role: this.firstText(row.position) || 'Manager / authorized signatory'
+        name: manager.fullName,
+        identifier: manager.identityNumber,
+        country: manager.nationality,
+        role: manager.position || 'Manager / authorized signatory'
       });
-    });
-
-    this.pushEntity(entities, {
-      sourceId: 'communication-person',
-      entityType: ScreeningEntityType.MANAGER,
-      name: this.stringValue(sectionE.fullName),
-      identifier: this.stringValue(sectionE.identityNumber),
-      country: this.firstText(sectionE.nationality),
-      role: this.firstText(sectionE.position) || 'Key communication person'
     });
 
     return entities;
@@ -673,9 +654,20 @@ export class ScreeningService {
 
   private pushEntity(entities: ScreeningEntityOption[], entity: ScreeningEntityOption) {
     if (!entity.name) return;
-    const fingerprint = `${entity.entityType}:${entity.name.toLowerCase()}:${(entity.identifier || '').toLowerCase()}`;
-    const exists = entities.some((item) => `${item.entityType}:${item.name.toLowerCase()}:${(item.identifier || '').toLowerCase()}` === fingerprint);
-    if (!exists) entities.push(entity);
+    const normalizedName = entity.name.trim().toLowerCase();
+    const normalizedIdentifier = (entity.identifier || '').trim().toLowerCase();
+    const existing = entities.find((item) => {
+      const itemIdentifier = (item.identifier || '').trim().toLowerCase();
+      return normalizedIdentifier ? itemIdentifier === normalizedIdentifier : !itemIdentifier && item.name.trim().toLowerCase() === normalizedName;
+    });
+    if (!existing) {
+      entities.push(entity);
+      return;
+    }
+
+    existing.role = Array.from(new Set([existing.role, entity.role].filter(Boolean))).join(' / ');
+    existing.country ||= entity.country;
+    existing.linkedClientId ||= entity.linkedClientId;
   }
 
   private async ensureMergedCaseChecks(tenantId: string, kycCaseId: string) {

@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
+import { TypedDateInput } from '../components/TypedDateInput';
 import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
@@ -830,7 +831,7 @@ export function AddEnquiryPage() {
                   </label>
                   <label className="text-sm font-medium text-slate-700">
                     Passport expiry date
-                    <input type="date" value={form.keyContactPassportExpiryDate} onChange={(event) => setForm({ ...form, keyContactPassportExpiryDate: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                    <TypedDateInput value={form.keyContactPassportExpiryDate} onChange={(value) => setForm({ ...form, keyContactPassportExpiryDate: value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                 </>
               ) : null}
@@ -842,7 +843,7 @@ export function AddEnquiryPage() {
                   </label>
                   <label className="text-sm font-medium text-slate-700">
                     QID expiry date
-                    <input type="date" value={form.keyContactQidExpiryDate} onChange={(event) => setForm({ ...form, keyContactQidExpiryDate: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                    <TypedDateInput value={form.keyContactQidExpiryDate} onChange={(value) => setForm({ ...form, keyContactQidExpiryDate: value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                   </label>
                 </>
               ) : null}
@@ -856,7 +857,7 @@ export function AddEnquiryPage() {
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <label className="text-sm font-medium text-slate-700">Full name<input value={form.preliminaryDeclaration.fullName} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, fullName: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <label className="text-sm font-medium text-slate-700">Position<input value={form.preliminaryDeclaration.position} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, position: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-                <label className="text-sm font-medium text-slate-700">Date<input type="date" value={form.preliminaryDeclaration.date} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, date: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
+                <label className="text-sm font-medium text-slate-700">Date<TypedDateInput value={form.preliminaryDeclaration.date} onChange={(value) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, date: value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <div className="text-sm font-medium text-slate-700">
                   <span>Authorised signature</span>
                   <div className="mt-1">

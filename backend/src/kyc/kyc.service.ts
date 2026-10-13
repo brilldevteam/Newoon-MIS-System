@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
@@ -25,6 +25,7 @@ import PizZip from 'pizzip';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { pathToFileURL } from 'url';
 import { promisify } from 'util';
 import { deflateSync } from 'zlib';
 import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
@@ -36,6 +37,8 @@ import { CreateKycCaseDto } from './dto/create-kyc-case.dto';
 import { UpdateKycCaseDto } from './dto/update-kyc-case.dto';
 import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
+import { buildKycDocx } from './kyc-docx';
+import { renderOwnershipDiagram } from './ownership-diagram';
 
 const execFileAsync = promisify(execFile);
 
@@ -105,6 +108,7 @@ const REQUIRED_DOCUMENT_TYPES = [
 
 @Injectable()
 export class KycService {
+  private readonly logger = new Logger(KycService.name);
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(user: RequestUser) {
@@ -3008,16 +3012,8 @@ export class KycService {
   }
 
   private buildDocx(payload: SerializedKycForm) {
-    const template = this.loadDocxTemplate();
     const templateData = this.templateData(payload);
-    const doc = new Docxtemplater(new PizZip(template), {
-      paragraphLoop: true,
-      linebreaks: true,
-      nullGetter: () => ''
-    });
-
-    doc.render(templateData);
-    const zip = doc.getZip();
+    const zip = buildKycDocx(templateData, payload, this.loadDocxTemplate());
     this.applyDocxImages(zip, this.docxImageReplacements(templateData));
     return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
@@ -3040,41 +3036,65 @@ export class KycService {
   }
 
   private async buildPdf(payload: SerializedKycForm) {
-    const docx = this.buildDocx(payload);
-    return this.convertDocxToPdf(docx);
+    return this.renderHtmlToPdf(this.buildPdfHtml(payload));
   }
 
-  private async convertDocxToPdf(docx: Buffer) {
+  private async renderHtmlToPdf(html: string) {
     const workDir = mkdtempSync(join(tmpdir(), 'newoon-kyc-pdf-'));
-    const docxPath = join(workDir, 'kyc-part-1.docx');
-    const pdfPath = join(workDir, 'kyc-part-1.pdf');
+    const htmlPath = join(workDir, 'kyc-form.html');
+    const pdfPath = join(workDir, 'kyc-form.pdf');
+    const profilePath = join(workDir, 'chromium-profile');
 
     try {
-      writeFileSync(docxPath, docx);
-      const command = await this.resolveLibreOfficeCommand();
+      writeFileSync(htmlPath, html, 'utf8');
+      const command = await this.resolveChromiumCommand();
+      const sharedArgs = [
+        '--disable-gpu',
+        '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-first-run',
+        '--no-default-browser-check',
+        `--user-data-dir=${profilePath}`,
+        '--no-pdf-header-footer',
+        '--print-to-pdf-no-header',
+        `--print-to-pdf=${pdfPath}`,
+        pathToFileURL(htmlPath).href
+      ];
+      let rendererError: unknown;
 
-      await execFileAsync(command, ['--headless', '--convert-to', 'pdf', '--outdir', workDir, docxPath], {
-        timeout: 60000,
-        windowsHide: true
-      });
-
-      if (!existsSync(pdfPath)) {
-        throw new BadRequestException('Unable to generate PDF from DOCX template.');
+      for (const headlessMode of ['--headless=new', '--headless']) {
+        try {
+          const result = await execFileAsync(command, [headlessMode, ...sharedArgs], {
+            timeout: 60000,
+            windowsHide: true,
+            cwd: workDir
+          });
+          if (existsSync(pdfPath)) return readFileSync(pdfPath);
+          this.logger.warn(`PDF renderer ${command} (${headlessMode}) returned without a PDF: ${result.stderr.slice(-2000)}`);
+        } catch (error) {
+          rendererError = error;
+          this.logger.warn(`PDF renderer ${command} (${headlessMode}) failed: ${String((error as { stderr?: string }).stderr || (error as Error).message).slice(-2000)}`);
+        }
       }
 
-      return readFileSync(pdfPath);
+      if (rendererError) {
+        throw new BadRequestException('The PDF renderer could not start Chromium. Confirm Chromium is installed and CHROMIUM_PATH points to its executable.');
+      }
+      throw new BadRequestException('The PDF renderer started but did not create a file. Confirm Chromium can run headless on the server and try again.');
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
   }
 
-  private async resolveLibreOfficeCommand() {
+  private async resolveChromiumCommand() {
     const candidates = [
-      process.env.LIBREOFFICE_PATH,
-      'soffice',
-      'libreoffice',
-      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe'
+      process.env.CHROMIUM_PATH,
+      'google-chrome-stable',
+      'google-chrome',
+      'chromium',
+      'chromium-browser',
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
     ].filter(Boolean) as string[];
 
     for (const candidate of candidates) {
@@ -3082,11 +3102,104 @@ export class KycService {
         await execFileAsync(candidate, ['--version'], { timeout: 10000, windowsHide: true });
         return candidate;
       } catch {
-        // Try the next configured command.
+        // Try the next available Chromium-based browser.
       }
     }
 
-    throw new BadRequestException('PDF conversion requires LibreOffice. Install LibreOffice on the server or set LIBREOFFICE_PATH to the soffice executable.');
+    throw new BadRequestException('PDF generation requires Chromium. Install Google Chrome or Chromium on the server, or set CHROMIUM_PATH to its executable.');
+  }
+
+  private buildPdfHtml(payload: SerializedKycForm) {
+    const sectionA = payload.sectionA as Record<string, unknown>;
+    const sectionB = payload.sectionB as Record<string, unknown> & { shareholders?: RowPayload[]; ubos?: RowPayload[] };
+    const sectionC = payload.sectionC as Record<string, unknown> & { managers?: RowPayload[] };
+    const sectionD = payload.sectionD as Record<string, unknown>;
+    const sectionE = payload.sectionE as Record<string, unknown>;
+    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
+    const sectionG = payload.sectionG as Record<string, unknown>;
+    const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
+    const shareholders = this.asArray<RowPayload>(sectionB.shareholders);
+    const ubos = sectionB.ubos?.length ? sectionB.ubos : shareholders.filter((row) => Boolean(row.isUbo));
+    const managers = this.asArray<RowPayload>(sectionC.managers);
+    const value = (input: unknown) => this.pdfText(this.text(input));
+    const selection = (input: unknown, other?: unknown) => this.pdfText(this.optionText(input, other));
+    const table = (headers: string[], rows: string[][]) => this.pdfTable(headers, rows);
+    const documentRows = this.asArray<RowPayload>(sectionF.documents);
+
+    return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: A4; margin: 12mm 11mm 14mm; }
+* { box-sizing: border-box; }
+body { color: #111827; font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; line-height: 1.35; margin: 0; }
+.header { border-bottom: 3px solid #8d2428; display: flex; justify-content: space-between; padding-bottom: 10px; }
+.brand { color: #8d2428; font-size: 20pt; font-weight: 700; letter-spacing: 0; }.sub { color: #475569; font-size: 8pt; font-weight: 700; }
+.contact { color: #64748b; font-size: 7.5pt; text-align: right; }.title { font-size: 15pt; font-weight: 700; margin: 15px 0 4px; text-align: center; }.intro { margin: 0 0 12px; }
+.section { break-inside: avoid; margin: 12px 0; }.section-title { background: #8d2428; color: white; font-size: 9pt; font-weight: 700; padding: 5px 7px; }
+table { border-collapse: collapse; table-layout: fixed; width: 100%; } th, td { border: 1px solid #94a3b8; overflow-wrap: anywhere; padding: 4px 5px; text-align: left; vertical-align: top; } th { background: #eaf0f7; font-size: 7.5pt; font-weight: 700; } td.label { background: #f8fafc; font-weight: 700; width: 24%; }
+.two-column { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }.note { font-size: 7.5pt; margin: 5px 0; }.total { font-weight: 700; margin: 5px 0; }.signature { display: block; height: 48px; max-width: 180px; object-fit: contain; }.empty { color: #64748b; }.footer { border-top: 1px solid #cbd5e1; color: #64748b; font-size: 7pt; margin-top: 18px; padding-top: 6px; text-align: center; }
+</style></head><body>
+<header class="header"><div><div class="brand">NEWOON</div><div class="sub">KYC &amp; ENGAGEMENT WORKFLOW</div></div><div class="contact">Newoon Corporate Services<br>Doha, Qatar<br>contact@newoon.com</div></header>
+<h1 class="title">KNOW YOUR CUSTOMER FORM</h1>
+<p class="intro">This form is completed before establishing a business relationship and before incorporation of the proposed entity.</p>
+${this.pdfSection('A. General Company Information', table(['Field', 'Details', 'Field', 'Details'], [
+  ['Date', value(sectionA.date), 'KYC Number', value(sectionA.reference)],
+  ['Legal Name of Company', value(sectionA.legalName), 'Commercial Registration No.', value(sectionA.commercialRegistrationNo)],
+  ['Tax Identification No.', value(sectionA.taxIdentificationNo), 'Date of Incorporation', value(sectionA.dateOfIncorporation)],
+  ['Country of Incorporation', selection(sectionA.countryOfIncorporation, sectionA.countryOfIncorporationOther), 'Legal Form', selection(sectionA.legalForm, sectionA.legalFormOther)],
+  ['Registered Office Address', value(sectionA.registeredOfficeAddress), 'Telephone', value(sectionA.telephone)],
+  ['Email', value(sectionA.email), 'Website', value(sectionA.website)],
+  ['Main purpose / nature of business', selection(sectionA.businessNature, sectionA.businessNatureOther), 'License activities', value(sectionA.licenseActivities)],
+  ['Related Industry', selection(sectionA.relatedIndustry, sectionA.relatedIndustryOther), 'Nature of prospective service from Newoon', this.pdfText(this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther))]
+]))}
+${this.pdfSection('B. Control / Interest Details', table(['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'Reliable ID', 'Shareholder %', 'Address', 'Beneficial person'], shareholders.map((row) => [
+  value(row.shareholderType || 'Individual'), value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.shareholderPercentage ?? row.ownershipPercentage), value(row.residenceAddress), row.isUbo ? 'Yes' : 'No'
+])) || '<p class="empty">No shareholders recorded.</p>')}
+<p class="total">Total shareholder %: ${value(sectionB.totalOwnershipPercentage)}% | Total UBO %: ${this.pdfText(String(ubos.reduce((sum, row) => sum + this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage), 0)))}%</p>
+${this.pdfSection('Ultimate Beneficial Owners', table(['Full name', 'Nationality', 'Date of birth', 'Reliable ID', 'UBO %', 'Address'], ubos.map((row) => [value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.uboInterestPercentage ?? row.ownershipPercentage), value(row.residenceAddress)])) || '<p class="empty">No beneficial owners recorded.</p>')}
+${this.pdfSection('C. Managers / Directors / Secretary / Signatories', table(['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'Date of birth', 'Reliable ID', 'Authorized signatory'], managers.map((row) => [value(row.fullName), selection(row.position, row.positionOther), value(row.entityName), selection(row.nationality, row.nationalityOther), value(row.address), value(row.dateOfBirth), value(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'])) || '<p class="empty">No managers recorded.</p>')}
+${this.pdfSection('D. Compliance and Risk Information', table(['Question', 'Response / details'], [
+  ['Politically exposed person exposure', `${value(sectionD.pepQuestion || 'No')}<br>${value(sectionD.pepDetails)}`],
+  ['Sanction exposure', `${value(sectionD.sanctionQuestion || 'No')}<br>${value(sectionD.sanctionDetails)}`],
+  ['Dual citizenship', `${value(sectionD.dualCitizenshipQuestion || 'No')}<br>${value(sectionD.dualCitizenshipDetails)}`]
+]))}
+${this.pdfSection('E. Key Communication Person', table(['Field', 'Details', 'Field', 'Details'], [
+  ['Full name', value(sectionE.fullName), 'Position / job title', selection(sectionE.position, sectionE.positionOther)],
+  ['Nationality', selection(sectionE.nationality, sectionE.nationalityOther), 'Reliable ID', value(sectionE.identityNumber)],
+  ['Mobile number', value(sectionE.mobileNumber), 'Email', value(sectionE.email)]
+]))}
+${this.pdfSection('F. Required Documents', table(['Document', 'Available', 'Uploaded file'], documentRows.map((row) => [value(row.documentType), row.isProvided ? 'Yes' : 'No', value(row.fileName)])) || '<p class="empty">No document checklist entries recorded.</p>')}
+${this.pdfSection('G. Client Declaration', table(['Field', 'Details'], [
+  ['Full name', value(sectionG.fullName)], ['Position', selection(sectionG.position, sectionG.positionOther)], ['Date', value(sectionG.date)],
+  ['Authorized signature', this.pdfImage(sectionG.signatureDataUrl, sectionG.signatureFileName)], ['Company stamp', this.pdfImage(sectionG.stampDataUrl, sectionG.stampFileName)]
+]))}
+${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date', 'Decision / comments', 'Signature'], [
+  ['AML Supervisor', value(sectionH.amlName), value(sectionH.amlDate), value(sectionH.amlComments), this.pdfImage(sectionH.amlSignatureDataUrl, sectionH.amlSignatureFileName)],
+  ['DMLRO', value(sectionH.dmlroName), value(sectionH.dmlroDate), value(sectionH.dmlroComments || sectionH.dmlroReason), this.pdfImage(sectionH.dmlroSignatureDataUrl, sectionH.dmlroSignatureFileName)],
+  ['MLRO', value(sectionH.mlroName), value(sectionH.mlroDate), value(sectionH.mlroComments), this.pdfImage(sectionH.mlroSignatureDataUrl, sectionH.mlroSignatureFileName)],
+  ['SEF', value(sectionH.sefName), value(sectionH.sefDate), value(sectionH.sefComments || sectionH.sefConditions), this.pdfImage(sectionH.sefSignatureDataUrl, sectionH.sefSignatureFileName)]
+]))}
+<footer class="footer">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</footer>
+</body></html>`;
+  }
+
+  private pdfSection(title: string, content: string) {
+    return `<section class="section"><div class="section-title">${this.pdfText(title)}</div>${content}</section>`;
+  }
+
+  private pdfTable(headers: string[], rows: string[][]) {
+    if (!rows.length) return '';
+    return `<table><thead><tr>${headers.map((header) => `<th>${this.pdfText(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell || '<span class="empty">-</span>'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+
+  private pdfText(value: string) {
+    const escaped = value.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return escaped ? escaped.replace(/\n/g, '<br>') : '<span class="empty">-</span>';
+  }
+
+  private pdfImage(dataUrl: unknown, fileName: unknown) {
+    const image = this.parseImageDataUrl(this.text(dataUrl));
+    if (!image) return this.pdfText(this.text(fileName));
+    return `<img class="signature" src="data:${image.mimeType};base64,${image.buffer.toString('base64')}" alt="Uploaded signature or stamp">`;
   }
 
   private templateData(payload: SerializedKycForm) {
@@ -3297,7 +3410,16 @@ export class KycService {
     for (const [key, value] of Object.entries(images)) {
       const image = this.parseImageDataUrl(this.text(value));
       if (image) {
-        replacements.push({ key, token: this.imageToken(key), image, size: this.docxImageSize(key) });
+        let size = this.docxImageSize(key);
+        if (key === 'ownershipStructure' && image.extension === 'png' && image.buffer.length >= 24) {
+          const width = image.buffer.readUInt32BE(16);
+          const height = image.buffer.readUInt32BE(20);
+          if (width && height) {
+            const scale = Math.min(6480000 / width, 4500000 / height);
+            size = { cx: Math.round(width * scale), cy: Math.round(height * scale) };
+          }
+        }
+        replacements.push({ key, token: this.imageToken(key), image, size });
       }
     }
 
@@ -3332,7 +3454,7 @@ export class KycService {
       contentTypesXml = this.ensureContentType(contentTypesXml, replacement.image.extension, replacement.image.mimeType);
       documentXml = documentXml.replace(
         new RegExp(`<w:t[^>]*>${this.escapeRegExp(replacement.token)}</w:t>`, 'g'),
-        this.docxImageDrawing(relId, replacement.size)
+        this.docxImageDrawing(relId, replacement.size).replace('<wp:docPr id="1"', `<wp:docPr id="${10000 + index}"`)
       );
     });
 
@@ -3437,74 +3559,9 @@ export class KycService {
 
   private ownershipStructureImageDataUrl(rootName: string, rows: RowPayload[]) {
     const nodes = this.ownershipDiagramNodes(rootName || 'Client company', rows);
-    const palette = ['#dbeafe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
-    const labelPalette = ['#0f172a', '#bfdbfe', '#dcfce7', '#fef3c7', '#f3e8ff', '#fee2e2', '#cffafe'];
-    const framePadding = 18;
-    const labelWidth = 110;
-    const diagramLeft = framePadding + labelWidth + 50;
-    const diagramRight = 38;
-    const paddingTop = 74;
-    const paddingBottom = 36;
-    const levelGap = 116;
-    const nodeWidth = 220;
-    const nodeHeight = 64;
-    const width = Math.max(1120, diagramLeft + diagramRight + nodes.leafCount * 245);
-    const height = Math.max(360, paddingTop + paddingBottom + (nodes.maxDepth + 1) * levelGap + nodeHeight);
-    const contentWidth = width - diagramLeft - diagramRight;
-    const centerY = (depth: number) => paddingTop + depth * levelGap;
-    const centerX = (x: number) => diagramLeft + x * contentWidth;
-
-    const image = this.createPngCanvas(width, height, '#ffffff');
-    this.drawRect(image, 8, 8, width - 16, height - 16, '#ffffff', '#111827');
-    this.drawRect(image, 14, 14, width - 28, 1, '#111827', '#111827');
-    this.drawText(image, `${rootName || 'CLIENT'} - OWNERSHIP STRUCTURE`, Math.max(22, Math.round(width / 2) - 170), 32, '#0f172a', 2);
-
-    for (let depth = 0; depth <= nodes.maxDepth; depth++) {
-      const y = Math.round(centerY(depth) + 10);
-      const isRootLayer = depth === 0;
-      this.drawRect(image, framePadding + 10, y, labelWidth, 42, labelPalette[depth] || '#e2e8f0', '#64748b');
-      this.drawText(image, `LAYER ${depth}`, framePadding + 30, y + 14, isRootLayer ? '#ffffff' : '#0f172a', 1);
-    }
-
-    for (const item of nodes.items.filter((item) => item.parentId)) {
-      const parent = nodes.items.find((candidate) => candidate.id === item.parentId);
-      if (!parent) continue;
-      const x1 = Math.round(centerX(parent.x));
-      const y1 = Math.round(centerY(parent.depth) + nodeHeight);
-      const x2 = Math.round(centerX(item.x));
-      const y2 = Math.round(centerY(item.depth));
-      const elbowY = Math.round((y1 + y2) / 2);
-      this.drawLine(image, x1, y1, x1, elbowY, '#111827');
-      this.drawLine(image, x1, elbowY, x2, elbowY, '#111827');
-      this.drawLine(image, x2, elbowY, x2, y2, '#111827');
-      this.drawLine(image, x2, y2, x2 - 5, y2 - 9, '#111827');
-      this.drawLine(image, x2, y2, x2 + 5, y2 - 9, '#111827');
-      if (item.ownership) this.drawText(image, `${item.ownership}%`, x2 + 8, Math.max(y2 - 22, elbowY + 4), '#0f172a', 1);
-    }
-
-    for (const item of nodes.items) {
-      const x = Math.round(centerX(item.x) - nodeWidth / 2);
-      const y = Math.round(centerY(item.depth));
-      const isRoot = item.id === 'ROOT';
-      const fill = isRoot ? '#0f172a' : item.isUbo ? '#e0f2fe' : palette[(item.depth - 1) % palette.length] || '#f8fafc';
-      const stroke = isRoot ? '#0f172a' : item.isUbo ? '#0891b2' : '#64748b';
-      this.drawRect(image, x + 4, y + 5, nodeWidth, nodeHeight, '#e2e8f0', '#e2e8f0');
-      this.drawRect(image, x, y, nodeWidth, nodeHeight, fill, stroke);
-      const name = this.textLines(item.name || 'Unnamed party', 24);
-      const primaryText = isRoot ? '#ffffff' : '#0f172a';
-      const secondaryText = isRoot ? '#ccfbf1' : '#475569';
-      this.drawText(image, name[0], x + 12, y + 11, primaryText, 1);
-      if (name[1]) this.drawText(image, name[1], x + 12, y + 23, primaryText, 1);
-      this.drawText(image, item.type, x + 12, y + 39, secondaryText, 1);
-      if (item.detail) this.drawText(image, this.textLines(item.detail, 24)[0], x + 12, y + 52, secondaryText, 1);
-      if (item.isUbo) {
-        this.drawRect(image, x + nodeWidth - 52, y + nodeHeight - 18, 42, 13, '#ccfbf1', '#67e8f9');
-        this.drawText(image, 'Beneficial', x + nodeWidth - 74, y + nodeHeight - 16, '#155e75', 1);
-      }
-    }
-
-    return `data:image/png;base64,${this.encodePng(image).toString('base64')}`;
+    return renderOwnershipDiagram(nodes.items, nodes.maxDepth, nodes.leafCount);
   }
+
 
   private ownershipDiagramNodes(rootName: string, rows: RowPayload[]) {
     type DiagramNode = {
