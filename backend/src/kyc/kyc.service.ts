@@ -6,6 +6,7 @@ import {
   EnquiryType,
   KycCaseStatus,
   KycFormSectionKey,
+  KycGeneratedDocument,
   KycGeneratedDocumentType,
   NotificationType,
   Prisma,
@@ -19,15 +20,9 @@ import {
   RiskOverrideReason,
   SignedKycDocumentStage
 } from '@prisma/client';
-import { execFile } from 'child_process';
-import Docxtemplater from 'docxtemplater';
 import PizZip from 'pizzip';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
-import { pathToFileURL } from 'url';
-import { promisify } from 'util';
-import { deflateSync } from 'zlib';
 import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -37,62 +32,7 @@ import { CreateKycCaseDto } from './dto/create-kyc-case.dto';
 import { UpdateKycCaseDto } from './dto/update-kyc-case.dto';
 import { UpdateProposalStatusDto } from './dto/update-proposal-status.dto';
 import { UploadLegalDocumentDto } from './dto/upload-legal-document.dto';
-import { buildKycDocx } from './kyc-docx';
-import { renderOwnershipDiagram } from './ownership-diagram';
-
-const execFileAsync = promisify(execFile);
-
-const TINY_FONT: Record<string, string[]> = {
-  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
-  '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
-  '.': ['00000', '00000', '00000', '00000', '00000', '01100', '01100'],
-  ',': ['00000', '00000', '00000', '00000', '00000', '01100', '01000'],
-  ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
-  "'": ['00100', '00100', '00000', '00000', '00000', '00000', '00000'],
-  '(': ['00010', '00100', '01000', '01000', '01000', '00100', '00010'],
-  ')': ['01000', '00100', '00010', '00010', '00010', '00100', '01000'],
-  '&': ['01100', '10010', '10100', '01000', '10101', '10010', '01101'],
-  '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
-  '%': ['11001', '11010', '00100', '01000', '10110', '00110', '00000'],
-  '|': ['00100', '00100', '00100', '00100', '00100', '00100', '00100'],
-  '?': ['11110', '00001', '00010', '00100', '00100', '00000', '00100'],
-  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
-  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
-  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
-  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
-  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
-  '5': ['11111', '10000', '10000', '11110', '00001', '00001', '11110'],
-  '6': ['01110', '10000', '10000', '11110', '10001', '10001', '01110'],
-  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
-  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
-  '9': ['01110', '10001', '10001', '01111', '00001', '00001', '01110'],
-  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
-  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
-  C: ['01111', '10000', '10000', '10000', '10000', '10000', '01111'],
-  D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
-  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
-  F: ['11111', '10000', '10000', '11110', '10000', '10000', '10000'],
-  G: ['01111', '10000', '10000', '10011', '10001', '10001', '01111'],
-  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
-  I: ['01110', '00100', '00100', '00100', '00100', '00100', '01110'],
-  J: ['00111', '00010', '00010', '00010', '00010', '10010', '01100'],
-  K: ['10001', '10010', '10100', '11000', '10100', '10010', '10001'],
-  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
-  M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
-  N: ['10001', '11001', '10101', '10011', '10001', '10001', '10001'],
-  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
-  P: ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
-  Q: ['01110', '10001', '10001', '10001', '10101', '10010', '01101'],
-  R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
-  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
-  T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
-  U: ['10001', '10001', '10001', '10001', '10001', '10001', '01110'],
-  V: ['10001', '10001', '10001', '10001', '10001', '01010', '00100'],
-  W: ['10001', '10001', '10001', '10101', '10101', '10101', '01010'],
-  X: ['10001', '10001', '01010', '00100', '01010', '10001', '10001'],
-  Y: ['10001', '10001', '01010', '00100', '00100', '00100', '00100'],
-  Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111']
-};
+import { exportKycDocx, exportKycPdf, KYC_DOCX_MIME, KYC_PDF_MIME, KycPdfRenderer } from './export';
 
 const REQUIRED_DOCUMENT_TYPES = [
   'Commercial Registration / CR Extract',
@@ -109,7 +49,10 @@ const REQUIRED_DOCUMENT_TYPES = [
 @Injectable()
 export class KycService {
   private readonly logger = new Logger(KycService.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pdfRenderer: KycPdfRenderer
+  ) {}
 
   async findAll(user: RequestUser) {
     const where: Prisma.KycCaseWhereInput = this.tenantWhere(user);
@@ -1677,31 +1620,45 @@ export class KycService {
 
   async generateDocument(user: RequestUser, id: string, type: KycGeneratedDocumentType) {
     const form = await this.getFormRecord(user, id);
-    const payload = this.serializeForm(form);
-    const version = await this.nextGeneratedVersion(form.id, type);
-    const fileBase = `${this.documentCompanyName(payload)} - KYC Document - v${version}`;
-    const content =
-      type === KycGeneratedDocumentType.DOCX ? this.buildDocx(payload) : await this.buildPdf(payload);
-    const fileName = `${fileBase}.${type === KycGeneratedDocumentType.DOCX ? 'docx' : 'pdf'}`;
-    const mimeType =
-      type === KycGeneratedDocumentType.DOCX
-        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        : 'application/pdf';
-
-    const generated = await this.prisma.kycGeneratedDocument.create({
-      data: {
-        tenantId: form.tenantId,
-        kycCaseId: id,
-        kycFormId: form.id,
-        documentType: type,
-        version,
-        fileName,
-        mimeType,
-        content: new Uint8Array(content),
-        createdBy: user.id,
-        updatedBy: user.id
-      }
+    // The client form has an AML Supervisor "Comments" row; only the formal (non-confidential) comment is exported.
+    const supervisorSubmission = await this.prisma.internalReviewSubmission.findFirst({
+      where: { kycCaseId: id, tenantId: form.tenantId, stage: ReviewStage.SUPERVISOR },
+      select: { formalComments: true }
     });
+    const payload = { ...this.serializeForm(form), amlComments: supervisorSubmission?.formalComments || '' };
+    const isDocx = type === KycGeneratedDocumentType.DOCX;
+    const companyName = this.safeFileName(this.text((payload.sectionA as Record<string, unknown>).legalName) || `KYC Case ${payload.kycCaseId}`).slice(0, 120);
+    const mimeType = isDocx ? KYC_DOCX_MIME : KYC_PDF_MIME;
+    let generated: KycGeneratedDocument | null = null;
+
+    // Simultaneous requests can pick the same version number; retry against the unique constraint.
+    for (let attempt = 0; attempt < 3 && !generated; attempt++) {
+      const version = await this.nextGeneratedVersion(form.id, type);
+      const content = isDocx ? await exportKycDocx(payload, version) : await exportKycPdf(payload, version, this.pdfRenderer);
+      try {
+        generated = await this.prisma.$transaction(async (tx) => {
+          const created = await tx.kycGeneratedDocument.create({
+            data: {
+              tenantId: form.tenantId,
+              kycCaseId: id,
+              kycFormId: form.id,
+              documentType: type,
+              version,
+              fileName: `${companyName} - KYC Document - v${version}.${isDocx ? 'docx' : 'pdf'}`,
+              mimeType,
+              content: new Uint8Array(content),
+              createdBy: user.id,
+              updatedBy: user.id
+            }
+          });
+          await this.audit(tx, user, form.tenantId, 'KycGeneratedDocument', created.id, { event: 'KYC_DOCUMENT_GENERATED', kycCaseId: id, documentType: type, version });
+          return created;
+        });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') || attempt === 2) throw error;
+      }
+    }
+    if (!generated) throw new InternalServerErrorException('Unable to store the generated KYC document');
 
     return {
       id: generated.id,
@@ -1723,6 +1680,12 @@ export class KycService {
       throw new NotFoundException('Generated document not found');
     }
 
+    await this.prisma.$transaction((tx) => this.audit(tx, user, document.tenantId, 'KycGeneratedDocument', document.id, {
+      event: 'KYC_DOCUMENT_DOWNLOADED',
+      kycCaseId: id,
+      documentType: document.documentType,
+      version: document.version
+    }));
     return document;
   }
 
@@ -3011,770 +2974,12 @@ export class KycService {
     return (latest?.version || 0) + 1;
   }
 
-  private buildDocx(payload: SerializedKycForm) {
-    const templateData = this.templateData(payload);
-    const zip = buildKycDocx(templateData, payload, this.loadDocxTemplate());
-    this.applyDocxImages(zip, this.docxImageReplacements(templateData));
-    return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
-  }
-
-  private loadDocxTemplate() {
-    const templatePaths = [
-      join(process.cwd(), 'backend', 'templates', 'kyc-part-1-template.docx'),
-      join(process.cwd(), 'templates', 'kyc-part-1-template.docx'),
-      join(__dirname, '..', '..', 'templates', 'kyc-part-1-template.docx'),
-      join(__dirname, '..', '..', '..', 'backend', 'templates', 'kyc-part-1-template.docx')
-    ];
-
-    for (const templatePath of templatePaths) {
-      if (existsSync(templatePath)) {
-        return readFileSync(templatePath);
-      }
-    }
-
-    return this.createDocxTemplate();
-  }
-
-  private async buildPdf(payload: SerializedKycForm) {
-    return this.renderHtmlToPdf(this.buildPdfHtml(payload));
-  }
-
-  private async renderHtmlToPdf(html: string) {
-    const workDir = mkdtempSync(join(tmpdir(), 'newoon-kyc-pdf-'));
-    const htmlPath = join(workDir, 'kyc-form.html');
-    const pdfPath = join(workDir, 'kyc-form.pdf');
-    const profilePath = join(workDir, 'chromium-profile');
-
-    try {
-      writeFileSync(htmlPath, html, 'utf8');
-      const command = await this.resolveChromiumCommand();
-      const sharedArgs = [
-        '--disable-gpu',
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--no-first-run',
-        '--no-default-browser-check',
-        `--user-data-dir=${profilePath}`,
-        '--no-pdf-header-footer',
-        '--print-to-pdf-no-header',
-        `--print-to-pdf=${pdfPath}`,
-        pathToFileURL(htmlPath).href
-      ];
-      let rendererError: unknown;
-
-      for (const headlessMode of ['--headless=new', '--headless']) {
-        try {
-          const result = await execFileAsync(command, [headlessMode, ...sharedArgs], {
-            timeout: 60000,
-            windowsHide: true,
-            cwd: workDir
-          });
-          if (existsSync(pdfPath)) return readFileSync(pdfPath);
-          this.logger.warn(`PDF renderer ${command} (${headlessMode}) returned without a PDF: ${result.stderr.slice(-2000)}`);
-        } catch (error) {
-          rendererError = error;
-          this.logger.warn(`PDF renderer ${command} (${headlessMode}) failed: ${String((error as { stderr?: string }).stderr || (error as Error).message).slice(-2000)}`);
-        }
-      }
-
-      if (rendererError) {
-        throw new BadRequestException('The PDF renderer could not start Chromium. Confirm Chromium is installed and CHROMIUM_PATH points to its executable.');
-      }
-      throw new BadRequestException('The PDF renderer started but did not create a file. Confirm Chromium can run headless on the server and try again.');
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  }
-
-  private async resolveChromiumCommand() {
-    const candidates = [
-      process.env.CHROMIUM_PATH,
-      'google-chrome-stable',
-      'google-chrome',
-      'chromium',
-      'chromium-browser',
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-    ].filter(Boolean) as string[];
-
-    for (const candidate of candidates) {
-      try {
-        await execFileAsync(candidate, ['--version'], { timeout: 10000, windowsHide: true });
-        return candidate;
-      } catch {
-        // Try the next available Chromium-based browser.
-      }
-    }
-
-    throw new BadRequestException('PDF generation requires Chromium. Install Google Chrome or Chromium on the server, or set CHROMIUM_PATH to its executable.');
-  }
-
-  private buildPdfHtml(payload: SerializedKycForm) {
-    const sectionA = payload.sectionA as Record<string, unknown>;
-    const sectionB = payload.sectionB as Record<string, unknown> & { shareholders?: RowPayload[]; ubos?: RowPayload[] };
-    const sectionC = payload.sectionC as Record<string, unknown> & { managers?: RowPayload[] };
-    const sectionD = payload.sectionD as Record<string, unknown>;
-    const sectionE = payload.sectionE as Record<string, unknown>;
-    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
-    const sectionG = payload.sectionG as Record<string, unknown>;
-    const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
-    const shareholders = this.asArray<RowPayload>(sectionB.shareholders);
-    const ubos = sectionB.ubos?.length ? sectionB.ubos : shareholders.filter((row) => Boolean(row.isUbo));
-    const managers = this.asArray<RowPayload>(sectionC.managers);
-    const value = (input: unknown) => this.pdfText(this.text(input));
-    const selection = (input: unknown, other?: unknown) => this.pdfText(this.optionText(input, other));
-    const table = (headers: string[], rows: string[][]) => this.pdfTable(headers, rows);
-    const documentRows = this.asArray<RowPayload>(sectionF.documents);
-
-    return `<!doctype html>
-<html><head><meta charset="utf-8"><style>
-@page { size: A4; margin: 12mm 11mm 14mm; }
-* { box-sizing: border-box; }
-body { color: #111827; font-family: Arial, Helvetica, sans-serif; font-size: 8.5pt; line-height: 1.35; margin: 0; }
-.header { border-bottom: 3px solid #8d2428; display: flex; justify-content: space-between; padding-bottom: 10px; }
-.brand { color: #8d2428; font-size: 20pt; font-weight: 700; letter-spacing: 0; }.sub { color: #475569; font-size: 8pt; font-weight: 700; }
-.contact { color: #64748b; font-size: 7.5pt; text-align: right; }.title { font-size: 15pt; font-weight: 700; margin: 15px 0 4px; text-align: center; }.intro { margin: 0 0 12px; }
-.section { break-inside: avoid; margin: 12px 0; }.section-title { background: #8d2428; color: white; font-size: 9pt; font-weight: 700; padding: 5px 7px; }
-table { border-collapse: collapse; table-layout: fixed; width: 100%; } th, td { border: 1px solid #94a3b8; overflow-wrap: anywhere; padding: 4px 5px; text-align: left; vertical-align: top; } th { background: #eaf0f7; font-size: 7.5pt; font-weight: 700; } td.label { background: #f8fafc; font-weight: 700; width: 24%; }
-.two-column { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }.note { font-size: 7.5pt; margin: 5px 0; }.total { font-weight: 700; margin: 5px 0; }.signature { display: block; height: 48px; max-width: 180px; object-fit: contain; }.empty { color: #64748b; }.footer { border-top: 1px solid #cbd5e1; color: #64748b; font-size: 7pt; margin-top: 18px; padding-top: 6px; text-align: center; }
-</style></head><body>
-<header class="header"><div><div class="brand">NEWOON</div><div class="sub">KYC &amp; ENGAGEMENT WORKFLOW</div></div><div class="contact">Newoon Corporate Services<br>Doha, Qatar<br>contact@newoon.com</div></header>
-<h1 class="title">KNOW YOUR CUSTOMER FORM</h1>
-<p class="intro">This form is completed before establishing a business relationship and before incorporation of the proposed entity.</p>
-${this.pdfSection('A. General Company Information', table(['Field', 'Details', 'Field', 'Details'], [
-  ['Date', value(sectionA.date), 'KYC Number', value(sectionA.reference)],
-  ['Legal Name of Company', value(sectionA.legalName), 'Commercial Registration No.', value(sectionA.commercialRegistrationNo)],
-  ['Tax Identification No.', value(sectionA.taxIdentificationNo), 'Date of Incorporation', value(sectionA.dateOfIncorporation)],
-  ['Country of Incorporation', selection(sectionA.countryOfIncorporation, sectionA.countryOfIncorporationOther), 'Legal Form', selection(sectionA.legalForm, sectionA.legalFormOther)],
-  ['Registered Office Address', value(sectionA.registeredOfficeAddress), 'Telephone', value(sectionA.telephone)],
-  ['Email', value(sectionA.email), 'Website', value(sectionA.website)],
-  ['Main purpose / nature of business', selection(sectionA.businessNature, sectionA.businessNatureOther), 'License activities', value(sectionA.licenseActivities)],
-  ['Related Industry', selection(sectionA.relatedIndustry, sectionA.relatedIndustryOther), 'Nature of prospective service from Newoon', this.pdfText(this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther))]
-]))}
-${this.pdfSection('B. Control / Interest Details', table(['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'Reliable ID', 'Shareholder %', 'Address', 'Beneficial person'], shareholders.map((row) => [
-  value(row.shareholderType || 'Individual'), value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.shareholderPercentage ?? row.ownershipPercentage), value(row.residenceAddress), row.isUbo ? 'Yes' : 'No'
-])) || '<p class="empty">No shareholders recorded.</p>')}
-<p class="total">Total shareholder %: ${value(sectionB.totalOwnershipPercentage)}% | Total UBO %: ${this.pdfText(String(ubos.reduce((sum, row) => sum + this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage), 0)))}%</p>
-${this.pdfSection('Ultimate Beneficial Owners', table(['Full name', 'Nationality', 'Date of birth', 'Reliable ID', 'UBO %', 'Address'], ubos.map((row) => [value(row.fullName), selection(row.nationality, row.nationalityOther), value(row.dateOfBirth), value(row.identityNumber), value(row.uboInterestPercentage ?? row.ownershipPercentage), value(row.residenceAddress)])) || '<p class="empty">No beneficial owners recorded.</p>')}
-${this.pdfSection('C. Managers / Directors / Secretary / Signatories', table(['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'Date of birth', 'Reliable ID', 'Authorized signatory'], managers.map((row) => [value(row.fullName), selection(row.position, row.positionOther), value(row.entityName), selection(row.nationality, row.nationalityOther), value(row.address), value(row.dateOfBirth), value(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'])) || '<p class="empty">No managers recorded.</p>')}
-${this.pdfSection('D. Compliance and Risk Information', table(['Question', 'Response / details'], [
-  ['Politically exposed person exposure', `${value(sectionD.pepQuestion || 'No')}<br>${value(sectionD.pepDetails)}`],
-  ['Sanction exposure', `${value(sectionD.sanctionQuestion || 'No')}<br>${value(sectionD.sanctionDetails)}`],
-  ['Dual citizenship', `${value(sectionD.dualCitizenshipQuestion || 'No')}<br>${value(sectionD.dualCitizenshipDetails)}`]
-]))}
-${this.pdfSection('E. Key Communication Person', table(['Field', 'Details', 'Field', 'Details'], [
-  ['Full name', value(sectionE.fullName), 'Position / job title', selection(sectionE.position, sectionE.positionOther)],
-  ['Nationality', selection(sectionE.nationality, sectionE.nationalityOther), 'Reliable ID', value(sectionE.identityNumber)],
-  ['Mobile number', value(sectionE.mobileNumber), 'Email', value(sectionE.email)]
-]))}
-${this.pdfSection('F. Required Documents', table(['Document', 'Available', 'Uploaded file'], documentRows.map((row) => [value(row.documentType), row.isProvided ? 'Yes' : 'No', value(row.fileName)])) || '<p class="empty">No document checklist entries recorded.</p>')}
-${this.pdfSection('G. Client Declaration', table(['Field', 'Details'], [
-  ['Full name', value(sectionG.fullName)], ['Position', selection(sectionG.position, sectionG.positionOther)], ['Date', value(sectionG.date)],
-  ['Authorized signature', this.pdfImage(sectionG.signatureDataUrl, sectionG.signatureFileName)], ['Company stamp', this.pdfImage(sectionG.stampDataUrl, sectionG.stampFileName)]
-]))}
-${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date', 'Decision / comments', 'Signature'], [
-  ['AML Supervisor', value(sectionH.amlName), value(sectionH.amlDate), value(sectionH.amlComments), this.pdfImage(sectionH.amlSignatureDataUrl, sectionH.amlSignatureFileName)],
-  ['DMLRO', value(sectionH.dmlroName), value(sectionH.dmlroDate), value(sectionH.dmlroComments || sectionH.dmlroReason), this.pdfImage(sectionH.dmlroSignatureDataUrl, sectionH.dmlroSignatureFileName)],
-  ['MLRO', value(sectionH.mlroName), value(sectionH.mlroDate), value(sectionH.mlroComments), this.pdfImage(sectionH.mlroSignatureDataUrl, sectionH.mlroSignatureFileName)],
-  ['SEF', value(sectionH.sefName), value(sectionH.sefDate), value(sectionH.sefComments || sectionH.sefConditions), this.pdfImage(sectionH.sefSignatureDataUrl, sectionH.sefSignatureFileName)]
-]))}
-<footer class="footer">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</footer>
-</body></html>`;
-  }
-
-  private pdfSection(title: string, content: string) {
-    return `<section class="section"><div class="section-title">${this.pdfText(title)}</div>${content}</section>`;
-  }
-
-  private pdfTable(headers: string[], rows: string[][]) {
-    if (!rows.length) return '';
-    return `<table><thead><tr>${headers.map((header) => `<th>${this.pdfText(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell || '<span class="empty">-</span>'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-  }
-
-  private pdfText(value: string) {
-    const escaped = value.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    return escaped ? escaped.replace(/\n/g, '<br>') : '<span class="empty">-</span>';
-  }
-
-  private pdfImage(dataUrl: unknown, fileName: unknown) {
-    const image = this.parseImageDataUrl(this.text(dataUrl));
-    if (!image) return this.pdfText(this.text(fileName));
-    return `<img class="signature" src="data:${image.mimeType};base64,${image.buffer.toString('base64')}" alt="Uploaded signature or stamp">`;
-  }
-
-  private templateData(payload: SerializedKycForm) {
-    const sectionA = payload.sectionA as Record<string, unknown>;
-    const sectionB = payload.sectionB as Record<string, unknown> & { shareholders?: RowPayload[]; ubos?: RowPayload[] };
-    const sectionC = payload.sectionC as Record<string, unknown> & { managers?: RowPayload[] };
-    const sectionD = payload.sectionD as Record<string, unknown>;
-    const sectionE = payload.sectionE as Record<string, unknown>;
-    const sectionF = payload.sectionF as Record<string, unknown> & { documents?: RowPayload[]; additionalDocuments?: RowPayload[] };
-    const sectionG = payload.sectionG as Record<string, unknown>;
-    const sectionH = (payload.sectionH || {}) as Record<string, unknown>;
-    const ownershipRows = this.asArray<RowPayload>(sectionB.shareholders);
-    const effectiveUbos = sectionB.ubos?.length ? sectionB.ubos : ownershipRows.filter((row) => Boolean(row.isUbo));
-    const shareholders = this.templateRows(ownershipRows, (row, index) => ({
-      shareholderNo: String(index + 1),
-      shareholderType: this.text(row.shareholderType || 'Individual'),
-      shareholderFullName: this.text(row.fullName),
-      shareholderNationality: this.optionText(row.nationality, row.nationalityOther),
-      shareholderDateOfBirth: this.text(row.dateOfBirth),
-      shareholderIdentityNumber: this.text(row.identityNumber),
-      shareholderOwnershipPercentage: this.text(row.shareholderPercentage ?? row.ownershipPercentage),
-      shareholderResidenceAddress: this.text(row.residenceAddress),
-      shareholderLinkedClient: this.text(row.linkedClientName),
-      shareholderIsUbo: row.isUbo ? 'Yes' : 'No'
-    }));
-    const ubos = this.templateRows(effectiveUbos, (row, index) => ({
-      uboNo: String(index + 1),
-      uboFullName: this.text(row.fullName),
-      uboNationality: this.optionText(row.nationality, row.nationalityOther),
-      uboDateOfBirth: this.text(row.dateOfBirth),
-      uboIdentityNumber: this.text(row.identityNumber),
-      uboOwnershipPercentage: this.text(row.uboInterestPercentage ?? row.ownershipPercentage),
-      uboResidenceAddress: this.text(row.residenceAddress)
-    }));
-    const managers = this.templateRows(sectionC.managers, (row, index) => ({
-      managerNo: String(index + 1),
-      managerFullName: this.text(row.fullName),
-      managerEntityName: this.text(row.entityName),
-      managerNationality: this.optionText(row.nationality, row.nationalityOther) || this.managerNationalityFallback(row),
-      managerAddress: this.text(row.address) || this.managerAddressFallback(row),
-      managerNationalityAndAddress: this.text(row.nationalityAndAddress),
-      managerDateOfBirth: this.text(row.dateOfBirth),
-      managerIdentityNumber: this.text(row.identityNumber),
-      managerPosition: this.optionText(row.position, row.positionOther),
-      managerAuthorizedSignatory: row.isAuthorizedSignatory ? 'Yes' : 'No'
-    }));
-    const totalUboPercentage = effectiveUbos.reduce((sum, row) => sum + this.numberValue(row.uboInterestPercentage ?? row.ownershipPercentage), 0);
-
-    const ownershipRootName = this.text(sectionA.legalName) || 'Client company';
-    const ownershipStructureText = this.ownershipStructureText(ownershipRootName, ownershipRows);
-
-    return {
-      date: this.text(sectionA.date),
-      // Word treats ordinary hyphens as line-break opportunities in the narrow reference field.
-      reference: this.nonBreakingHyphens(sectionA.reference),
-      legalName: this.text(sectionA.legalName),
-      commercialRegistrationNo: this.text(sectionA.commercialRegistrationNo),
-      taxIdentificationNo: this.text(sectionA.taxIdentificationNo),
-      dateOfIncorporation: this.text(sectionA.dateOfIncorporation),
-      countryOfIncorporation: this.optionText(sectionA.countryOfIncorporation, sectionA.countryOfIncorporationOther),
-      legalForm: this.optionText(sectionA.legalForm, sectionA.legalFormOther),
-      registeredOfficeAddress: this.text(sectionA.registeredOfficeAddress),
-      telephone: this.text(sectionA.telephone),
-      email: this.text(sectionA.email),
-      website: this.text(sectionA.website),
-      businessNature: this.optionText(sectionA.businessNature, sectionA.businessNatureOther),
-      licenseActivities: this.text(sectionA.licenseActivities),
-      relatedIndustry: this.optionText(sectionA.relatedIndustry, sectionA.relatedIndustryOther),
-      prospectiveService: this.listText(sectionA.prospectiveService, sectionA.prospectiveServiceOther),
-      totalOwnershipPercentage: this.text(sectionB.totalOwnershipPercentage),
-      uboDifferentFromShareholders: this.text(sectionB.uboDifferentFromShareholders),
-      uboDifferentYes: this.checkboxMark(sectionB.uboDifferentFromShareholders === 'Yes'),
-      uboDifferentNo: this.checkboxMark(sectionB.uboDifferentFromShareholders !== 'Yes'),
-      uboGroupStructureNotes: this.text(sectionB.uboGroupStructureNotes),
-      shareholders,
-      ubos,
-      managers,
-      totalUboPercentage: this.text(totalUboPercentage),
-      ownershipStructureText: this.imageToken('ownershipStructure'),
-      shareholdersText: this.rowsText(ownershipRows, ['shareholderType', 'fullName', 'nationality', 'identityNumber', 'shareholderPercentage']),
-      ubosText: this.rowsText(effectiveUbos, ['fullName', 'nationality', 'identityNumber', 'uboInterestPercentage']),
-      managersText: this.rowsText(sectionC.managers, ['fullName', 'entityName', 'position', 'isAuthorizedSignatory']),
-      pepQuestion: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'Yes'),
-      pepNo: this.checkboxMark(this.text(sectionD.pepQuestion || 'No') === 'No'),
-      pepDetails: this.text(sectionD.pepDetails),
-      pepDocumentFileNames: this.listText(sectionD.pepDocumentFileNames),
-      pepSupportingDocuments: this.listText(sectionD.pepDocumentFileNames),
-      sanctionQuestion: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'Yes'),
-      sanctionNo: this.checkboxMark(this.text(sectionD.sanctionQuestion || 'No') === 'No'),
-      sanctionDetails: this.text(sectionD.sanctionDetails),
-      sanctionDocumentFileNames: this.listText(sectionD.sanctionDocumentFileNames),
-      sanctionSupportingDocuments: this.listText(sectionD.sanctionDocumentFileNames),
-      dualCitizenshipQuestion: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'Yes'),
-      dualCitizenshipNo: this.checkboxMark(this.text(sectionD.dualCitizenshipQuestion || 'No') === 'No'),
-      dualCitizenshipDetails: this.text(sectionD.dualCitizenshipDetails),
-      dualCitizenshipPassportFileName: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
-      dualCitizenshipPassportFileNames: this.listText(sectionD.dualCitizenshipPassportFileNames) || this.text(sectionD.dualCitizenshipPassportFileName),
-      communicationFullName: this.text(sectionE.fullName),
-      communicationPosition: this.optionText(sectionE.position, sectionE.positionOther),
-      communicationNationality: this.optionText(sectionE.nationality, sectionE.nationalityOther),
-      communicationIdentityNumber: this.text(sectionE.identityNumber),
-      communicationMobile: this.text(sectionE.mobileNumber),
-      communicationEmail: this.text(sectionE.email),
-      requiredDocumentsText: this.requiredDocumentsText(sectionF.documents),
-      additionalDocumentsText: this.rowsText(sectionF.additionalDocuments, ['fileName']) || '-',
-      uploadedFilesNote: this.text(sectionF.uploadedFilesNote) || '-',
-      docCommercialRegistration: this.requiredDocumentMark(sectionF.documents, 'Commercial Registration'),
-      docEntityCard: this.requiredDocumentMark(sectionF.documents, 'Entity Card'),
-      docCertificateOfIncorporation: this.requiredDocumentMark(sectionF.documents, 'Certificate of Incorporation'),
-      docArticlesOfAssociation: this.requiredDocumentMark(sectionF.documents, 'Articles of Association'),
-      docIdentityCopies: this.requiredDocumentMark(sectionF.documents, 'QID / Passport copies'),
-      docLegalEntityShareholderCr: this.requiredDocumentMark(sectionF.documents, 'CR of legal entity parties'),
-      docNationalAddressCertificates: this.requiredDocumentMark(sectionF.documents, 'National address certificates'),
-      docAuditedFinancialStatements: this.requiredDocumentMark(sectionF.documents, 'Latest Audited Financial Statements'),
-      docTaxCard: this.requiredDocumentMark(sectionF.documents, 'Tax Card'),
-      declarationFullName: this.text(sectionG.fullName),
-      declarationPosition: this.optionText(sectionG.position, sectionG.positionOther),
-      declarationDate: this.text(sectionG.date),
-      signatureFileName: this.signatureDisplay('declarationSignature', sectionG.signatureFileName, sectionG.signatureDataUrl),
-      stampFileName: this.signatureDisplay('companyStamp', sectionG.stampFileName, sectionG.stampDataUrl),
-      amlAccuracyChecked: this.text(sectionH.amlAccuracyChecked),
-      amlAccuracyYes: this.checkboxMark(Boolean(sectionH.amlAccuracyChecked)),
-      amlAccuracyNo: this.checkboxMark(!sectionH.amlAccuracyChecked),
-      amlClarificationFindings: this.text(sectionH.amlClarificationFindings),
-      riskClassification: this.text(sectionH.riskClassification),
-      riskHigh: this.checkboxMark(sectionH.riskClassification === 'HIGH'),
-      riskMedium: this.checkboxMark(sectionH.riskClassification === 'MEDIUM'),
-      riskLow: this.checkboxMark(sectionH.riskClassification === 'LOW'),
-      dueDiligenceType: this.text(sectionH.dueDiligenceType),
-      dueSimplified: this.checkboxMark(sectionH.dueDiligenceType === 'SIMPLIFIED'),
-      dueRegular: this.checkboxMark(sectionH.dueDiligenceType === 'REGULAR'),
-      dueEnhanced: this.checkboxMark(sectionH.dueDiligenceType === 'ENHANCED'),
-      amlName: this.text(sectionH.amlName),
-      amlSignatureFileName: this.signatureDisplay('amlSignature', sectionH.amlSignatureFileName, sectionH.amlSignatureDataUrl),
-      amlDate: this.text(sectionH.amlDate),
-      amlComments: this.reviewConclusionText([
-        ['Risk classification', this.text(sectionH.riskClassification)],
-        ['Due diligence type', this.text(sectionH.dueDiligenceType)]
-      ]),
-      dmlroName: this.text(sectionH.dmlroName),
-      dmlroSignatureFileName: this.signatureDisplay('dmlroSignature', sectionH.dmlroSignatureFileName, sectionH.dmlroSignatureDataUrl),
-      dmlroDate: this.text(sectionH.dmlroDate),
-      dmlroRiskClassification: this.text(sectionH.dmlroRiskClassification),
-      dmlroDecision: this.reviewDecisionText(sectionH.dmlroDecision),
-      dmlroConditions: this.text(sectionH.dmlroConditions),
-      dmlroReason: this.text(sectionH.dmlroReason),
-      dmlroComments: this.reviewConclusionText([
-        ['Risk classification', this.text(sectionH.dmlroRiskClassification)],
-        ['Decision', this.reviewDecisionText(sectionH.dmlroDecision)],
-        ['Conditions', this.text(sectionH.dmlroConditions)],
-        ['Reason / additional information', this.text(sectionH.dmlroReason)],
-        ['Comments', this.text(sectionH.dmlroComments)]
-      ]),
-      mlroName: this.text(sectionH.mlroName),
-      mlroSignatureFileName: this.signatureDisplay('mlroSignature', sectionH.mlroSignatureFileName, sectionH.mlroSignatureDataUrl),
-      mlroDate: this.text(sectionH.mlroDate),
-      mlroDecision: this.reviewDecisionText(sectionH.mlroDecision),
-      mlroFinalRiskClassification: this.text(sectionH.mlroFinalRiskClassification || sectionH.riskClassification),
-      mlroRiskReasonCategory: this.labelText(sectionH.mlroRiskReasonCategory),
-      mlroRiskExplanation: this.text(sectionH.mlroRiskExplanation),
-      mlroConditions: this.text(sectionH.mlroConditions),
-      mlroComments: this.reviewConclusionText([
-        ['Final decision', this.reviewDecisionText(sectionH.mlroDecision)],
-        ['Final risk classification', this.text(sectionH.mlroFinalRiskClassification || sectionH.riskClassification)],
-        ['Risk reason category', this.labelText(sectionH.mlroRiskReasonCategory)],
-        ['Risk explanation', this.text(sectionH.mlroRiskExplanation)],
-        ['Conditions', this.text(sectionH.mlroConditions)],
-        ['Comments', this.text(sectionH.mlroComments)]
-      ]),
-      sefName: this.text(sectionH.sefName),
-      sefSignatureFileName: this.signatureDisplay('sefSignature', sectionH.sefSignatureFileName, sectionH.sefSignatureDataUrl),
-      sefDate: this.text(sectionH.sefDate),
-      sefDecision: this.reviewDecisionText(sectionH.sefDecision),
-      sefConditions: this.text(sectionH.sefConditions),
-      sefComments: this.reviewConclusionText([
-        ['Management decision', this.reviewDecisionText(sectionH.sefDecision)],
-        ['Conditions / reason', this.text(sectionH.sefConditions)],
-        ['Comments', this.text(sectionH.sefComments)]
-      ]),
-      _docxImages: {
-        ownershipStructure: this.ownershipStructureImageDataUrl(ownershipRootName, ownershipRows),
-        declarationSignature: this.text(sectionG.signatureDataUrl),
-        companyStamp: this.text(sectionG.stampDataUrl),
-        amlSignature: this.text(sectionH.amlSignatureDataUrl),
-        dmlroSignature: this.text(sectionH.dmlroSignatureDataUrl),
-        mlroSignature: this.text(sectionH.mlroSignatureDataUrl),
-        sefSignature: this.text(sectionH.sefSignatureDataUrl)
-      }
-    };
-  }
-
-  private templateRows<T extends Record<string, string>>(rows: RowPayload[] | undefined, mapper: (row: RowPayload, index: number) => T) {
-    return rows?.length ? rows.map(mapper) : [];
-  }
-
-  private signatureDisplay(key: string, fileName: unknown, dataUrl: unknown) {
-    return this.parseImageDataUrl(this.text(dataUrl)) ? this.imageToken(key) : this.text(fileName);
-  }
-
-  private imageToken(key: string) {
-    return `__KYC_IMAGE_${key}__`;
-  }
-
-  private docxImageReplacements(templateData: Record<string, unknown>) {
-    const images = (templateData._docxImages || {}) as Record<string, unknown>;
-    const replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer }; size?: { cx: number; cy: number } }> = [];
-
-    for (const [key, value] of Object.entries(images)) {
-      const image = this.parseImageDataUrl(this.text(value));
-      if (image) {
-        let size = this.docxImageSize(key);
-        if (key === 'ownershipStructure' && image.extension === 'png' && image.buffer.length >= 24) {
-          const width = image.buffer.readUInt32BE(16);
-          const height = image.buffer.readUInt32BE(20);
-          if (width && height) {
-            const scale = Math.min(6480000 / width, 4500000 / height);
-            size = { cx: Math.round(width * scale), cy: Math.round(height * scale) };
-          }
-        }
-        replacements.push({ key, token: this.imageToken(key), image, size });
-      }
-    }
-
-    return replacements;
-  }
-
-  private applyDocxImages(
-    zip: PizZip,
-    replacements: Array<{ key: string; token: string; image: { mimeType: string; extension: string; buffer: Buffer }; size?: { cx: number; cy: number } }>
-  ) {
-    if (!replacements.length) return;
-
-    const documentFile = zip.file('word/document.xml');
-    if (!documentFile) return;
-
-    let documentXml = documentFile.asText();
-    let relsXml =
-      zip.file('word/_rels/document.xml.rels')?.asText() ||
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
-    let contentTypesXml = zip.file('[Content_Types].xml')?.asText() || '';
-
-    replacements.forEach((replacement, index) => {
-      const relId = `rIdKycSignature${Date.now()}${index}`;
-      const fileName = `kyc-signature-${replacement.key}.${replacement.image.extension}`;
-      zip.file(`word/media/${fileName}`, replacement.image.buffer);
-
-      relsXml = relsXml.replace(
-        '</Relationships>',
-        `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${fileName}"/></Relationships>`
-      );
-
-      contentTypesXml = this.ensureContentType(contentTypesXml, replacement.image.extension, replacement.image.mimeType);
-      documentXml = documentXml.replace(
-        new RegExp(`<w:t[^>]*>${this.escapeRegExp(replacement.token)}</w:t>`, 'g'),
-        this.docxImageDrawing(relId, replacement.size).replace('<wp:docPr id="1"', `<wp:docPr id="${10000 + index}"`)
-      );
-    });
-
-    zip.file('word/document.xml', documentXml);
-    zip.file('word/_rels/document.xml.rels', relsXml);
-    zip.file('[Content_Types].xml', contentTypesXml);
-  }
-
-  private parseImageDataUrl(value: string) {
-    const match = /^data:(image\/(?:png|jpeg|jpg|gif|svg\+xml));base64,(.+)$/i.exec(value);
-    if (!match) return null;
-    const mimeType = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
-    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/svg+xml' ? 'svg' : mimeType.split('/')[1];
-    return {
-      mimeType,
-      extension,
-      buffer: Buffer.from(match[2], 'base64')
-    };
-  }
-
-  private ensureContentType(contentTypesXml: string, extension: string, mimeType: string) {
-    if (contentTypesXml.includes(`Extension="${extension}"`)) return contentTypesXml;
-    return contentTypesXml.replace('</Types>', `<Default Extension="${extension}" ContentType="${mimeType}"/></Types>`);
-  }
-
-  private docxImageSize(key: string) {
-    if (key === 'ownershipStructure') return { cx: 4800000, cy: 2800000 };
-    return { cx: 1900000, cy: 650000 };
-  }
-
-  private docxImageDrawing(relId: string, size?: { cx: number; cy: number }) {
-    const cx = size?.cx || 1900000;
-    const cy = size?.cy || 650000;
-    return `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="Signature"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="Signature"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
-  }
-
-  private escapeRegExp(value: string) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  private yesNoMark(value: unknown, expected: 'Yes' | 'No') {
-    return this.checkboxMark(this.text(value || 'No') === expected);
-  }
-
-  private documentMark(rows: RowPayload[] | undefined, label: string) {
-    const row = rows?.find((item) => this.text(item.documentType).toLowerCase().includes(label.toLowerCase()));
-    return this.checkboxMark(Boolean(row?.isProvided));
-  }
-
-  private checkboxMark(isChecked: boolean) {
-    return String.fromCodePoint(isChecked ? 0x2612 : 0x2610);
-  }
-
-  private requiredDocumentMark(rows: RowPayload[] | undefined, label: string) {
-    const row = rows?.find((item) => this.text(item.documentType).toLowerCase().includes(label.toLowerCase()));
-    return this.checkboxMark(Boolean(row?.isProvided));
-  }
-
-  private rowsText(rows: RowPayload[] | undefined, fields: string[]) {
-    if (!rows?.length) return '';
-    return rows
-      .map((row, index) => `${index + 1}. ${fields.map((field) => this.optionText(row[field], row[`${field}Other`])).filter(Boolean).join(' | ')}`)
-      .join('\n');
-  }
-
-  private requiredDocumentsText(rows: RowPayload[] | undefined) {
-    if (!rows?.length) return '';
-    return rows
-      .map((row, index) => {
-        const received = row.isProvided ? 'Received' : 'Not received';
-        const fileName = this.text(row.fileName) || '-';
-        return `${index + 1}. ${this.text(row.documentType)} | ${received} | ${fileName}`;
-      })
-      .join('\n');
-  }
-
-  private ownershipStructureText(rootName: string, rows: RowPayload[]) {
-    if (!rows.length) return 'No ownership structure generated';
-
-    const childrenByParent = rows.reduce<Record<string, RowPayload[]>>((groups, row, index) => {
-      const rowId = this.text(row.id) || `ownership-${index + 1}`;
-      const parentKey = this.text(row.parentRowId) || 'ROOT';
-      groups[parentKey] = [...(groups[parentKey] || []), { ...row, id: rowId }];
-      return groups;
-    }, {});
-
-    const lines = [rootName || 'Client company'];
-    const render = (parentId: string, depth: number) => {
-      for (const row of childrenByParent[parentId] || []) {
-        const marker = row.isUbo ? ' [Beneficial]' : '';
-        const linked = this.text(row.linkedClientName) ? ` | Linked client: ${this.text(row.linkedClientName)}` : '';
-        lines.push(
-          `${'  '.repeat(depth)}- ${this.text(row.fullName) || 'Unnamed party'} (${this.text(row.shareholderType || 'Individual')}, ${this.text(row.ownershipPercentage) || '0'}%)${marker}${linked}`
-        );
-        render(this.text(row.id), depth + 1);
-      }
-    };
-
-    render('ROOT', 1);
-    return lines.join('\n');
-  }
-
-  private ownershipStructureImageDataUrl(rootName: string, rows: RowPayload[]) {
-    const nodes = this.ownershipDiagramNodes(rootName || 'Client company', rows);
-    return renderOwnershipDiagram(nodes.items, nodes.maxDepth, nodes.leafCount);
-  }
-
-
-  private ownershipDiagramNodes(rootName: string, rows: RowPayload[]) {
-    type DiagramNode = {
-      id: string;
-      parentId: string;
-      name: string;
-      type: string;
-      ownership: string;
-      detail: string;
-      isUbo: boolean;
-      depth: number;
-      x: number;
-    };
-
-    const normalizedRows: RowPayload[] = rows.map((row, index) => ({ ...row, id: this.text(row.id) || `ownership-${index + 1}` }));
-    const childrenByParent = normalizedRows.reduce<Record<string, RowPayload[]>>((groups, row) => {
-      const parentId = this.text(row.parentRowId) || 'ROOT';
-      groups[parentId] = [...(groups[parentId] || []), row];
-      return groups;
-    }, {});
-
-    const items: DiagramNode[] = [
-      { id: 'ROOT', parentId: '', name: rootName, type: 'Client company', ownership: '', detail: '(Layer 0)', isUbo: false, depth: 0, x: 0.5 }
-    ];
-    let leafIndex = 0;
-    let maxDepth = 0;
-
-    const render = (parentId: string, depth: number): number => {
-      const children = childrenByParent[parentId] || [];
-      if (!children.length) return leafIndex++;
-      const childXs = children.map((row) => {
-        const rowId = this.text(row.id);
-        const childX = render(rowId, depth + 1);
-        items.push({
-          id: rowId,
-          parentId,
-          name: this.text(row.fullName) || 'Unnamed party',
-          type: this.text(row.shareholderType || 'Individual'),
-          ownership: this.text(row.ownershipPercentage || '0'),
-          detail: this.optionText(row.nationality, row.nationalityOther) || this.text(row.residenceAddress),
-          isUbo: Boolean(row.isUbo),
-          depth,
-          x: childX
-        });
-        maxDepth = Math.max(maxDepth, depth);
-        return childX;
-      });
-      return childXs.reduce((sum, value) => sum + value, 0) / childXs.length;
-    };
-
-    const rootX = render('ROOT', 1);
-    const leafCount = Math.max(1, leafIndex);
-    items.forEach((item) => {
-      item.x = item.id === 'ROOT' ? rootX : item.x;
-      item.x = (item.x + 0.5) / leafCount;
-    });
-
-    return { items, leafCount, maxDepth };
-  }
-
-  private textLines(value: string, maxLength: number) {
-    const words = value.split(/\s+/).filter(Boolean);
-    const lines = ['', ''];
-    for (const word of words) {
-      const target = lines[0].length + word.length + 1 <= maxLength ? 0 : 1;
-      if (lines[target].length + word.length + 1 <= maxLength) {
-        lines[target] = `${lines[target]} ${word}`.trim();
-      }
-    }
-    return [lines[0] || value.slice(0, maxLength), lines[1]];
-  }
-
-  private createPngCanvas(width: number, height: number, background: string) {
-    const data = Buffer.alloc(width * height * 4);
-    const color = this.hexColor(background);
-    for (let offset = 0; offset < data.length; offset += 4) {
-      data[offset] = color.r;
-      data[offset + 1] = color.g;
-      data[offset + 2] = color.b;
-      data[offset + 3] = 255;
-    }
-    return { width, height, data };
-  }
-
-  private drawRect(image: { width: number; height: number; data: Buffer }, x: number, y: number, width: number, height: number, fill: string, stroke: string) {
-    const fillColor = this.hexColor(fill);
-    const strokeColor = this.hexColor(stroke);
-    for (let py = y; py < y + height; py++) {
-      for (let px = x; px < x + width; px++) {
-        const isBorder = py === y || py === y + height - 1 || px === x || px === x + width - 1;
-        this.setPixel(image, px, py, isBorder ? strokeColor : fillColor);
-      }
-    }
-  }
-
-  private drawLine(image: { width: number; height: number; data: Buffer }, x1: number, y1: number, x2: number, y2: number, colorValue: string) {
-    const color = this.hexColor(colorValue);
-    let dx = Math.abs(x2 - x1);
-    let dy = -Math.abs(y2 - y1);
-    const sx = x1 < x2 ? 1 : -1;
-    const sy = y1 < y2 ? 1 : -1;
-    let error = dx + dy;
-    let x = x1;
-    let y = y1;
-
-    while (true) {
-      this.setPixel(image, x, y, color);
-      this.setPixel(image, x + 1, y, color);
-      if (x === x2 && y === y2) break;
-      const e2 = 2 * error;
-      if (e2 >= dy) {
-        error += dy;
-        x += sx;
-      }
-      if (e2 <= dx) {
-        error += dx;
-        y += sy;
-      }
-      dx = Math.abs(x2 - x1);
-      dy = -Math.abs(y2 - y1);
-    }
-  }
-
-  private drawText(image: { width: number; height: number; data: Buffer }, value: string, x: number, y: number, colorValue: string, scale: number) {
-    const color = this.hexColor(colorValue);
-    const text = value.toUpperCase().replace(/[^\x20-\x7E]/g, '');
-    let cursorX = x;
-    for (const character of text) {
-      const glyph = this.glyph(character);
-      for (let row = 0; row < glyph.length; row++) {
-        for (let column = 0; column < glyph[row].length; column++) {
-          if (glyph[row][column] !== '1') continue;
-          for (let sy = 0; sy < scale; sy++) {
-            for (let sx = 0; sx < scale; sx++) {
-              this.setPixel(image, cursorX + column * scale + sx, y + row * scale + sy, color);
-            }
-          }
-        }
-      }
-      cursorX += 6 * scale;
-    }
-  }
-
-  private glyph(character: string) {
-    return TINY_FONT[character] || TINY_FONT['?'];
-  }
-
-  private setPixel(image: { width: number; height: number; data: Buffer }, x: number, y: number, color: { r: number; g: number; b: number }) {
-    if (x < 0 || y < 0 || x >= image.width || y >= image.height) return;
-    const offset = (Math.floor(y) * image.width + Math.floor(x)) * 4;
-    image.data[offset] = color.r;
-    image.data[offset + 1] = color.g;
-    image.data[offset + 2] = color.b;
-    image.data[offset + 3] = 255;
-  }
-
-  private hexColor(value: string) {
-    const normalized = value.replace('#', '');
-    const number = Number.parseInt(normalized, 16);
-    return {
-      r: (number >> 16) & 255,
-      g: (number >> 8) & 255,
-      b: number & 255
-    };
-  }
-
-  private encodePng(image: { width: number; height: number; data: Buffer }) {
-    const raw = Buffer.alloc((image.width * 4 + 1) * image.height);
-    for (let y = 0; y < image.height; y++) {
-      raw[y * (image.width * 4 + 1)] = 0;
-      image.data.copy(raw, y * (image.width * 4 + 1) + 1, y * image.width * 4, (y + 1) * image.width * 4);
-    }
-
-    return Buffer.concat([
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-      this.pngChunk('IHDR', Buffer.concat([this.uint32(image.width), this.uint32(image.height), Buffer.from([8, 6, 0, 0, 0])])),
-      this.pngChunk('IDAT', deflateSync(raw)),
-      this.pngChunk('IEND', Buffer.alloc(0))
-    ]);
-  }
-
-  private pngChunk(type: string, data: Buffer) {
-    const typeBuffer = Buffer.from(type);
-    return Buffer.concat([this.uint32(data.length), typeBuffer, data, this.uint32(this.crc32(Buffer.concat([typeBuffer, data])))]);
-  }
-
-  private uint32(value: number) {
-    const buffer = Buffer.alloc(4);
-    buffer.writeUInt32BE(value >>> 0, 0);
-    return buffer;
-  }
-
-  private crc32(buffer: Buffer) {
-    let crc = 0xffffffff;
-    for (const byte of buffer) {
-      crc ^= byte;
-      for (let index = 0; index < 8; index++) {
-        crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-      }
-    }
-    return (crc ^ 0xffffffff) >>> 0;
-  }
-
   private text(value: unknown) {
     if (value === null || value === undefined) return '';
     if (value === 'undefined') return '';
     if (value instanceof Prisma.Decimal) return value.toString();
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return String(value);
-  }
-
-  private nonBreakingHyphens(value: unknown) {
-    return this.text(value).replace(/-/g, String.fromCodePoint(0x2011));
   }
 
   private optionText(value: unknown, otherValue: unknown): string {
@@ -3787,147 +2992,6 @@ ${this.pdfSection('H. Internal Use Only', table(['Review stage', 'Name', 'Date',
     }
 
     return this.text(value);
-  }
-
-  private labelText(value: unknown) {
-    return this.text(value)
-      .replace(/_/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  private reviewDecisionText(value: unknown) {
-    const decision = this.text(value);
-    const labels: Record<string, string> = {
-      APPROVE: 'Approve',
-      APPROVE_WITH_CONDITIONS: 'Approve with conditions',
-      REJECT: 'Reject',
-      REQUEST_ADDITIONAL_INFORMATION: 'Request additional information',
-      RETURN_TO_SUPERVISOR: 'Return to AML Supervisor',
-      RETURN_TO_DMLRO: 'Return to DMLRO',
-      RETURN_TO_MLRO: 'Return to MLRO',
-      SEND_TO_SEF: 'Send to SEF'
-    };
-
-    return labels[decision] || this.labelText(decision);
-  }
-
-  private reviewConclusionText(rows: Array<[string, string]>) {
-    const text = rows
-      .filter(([, value]) => value && value !== '-')
-      .map(([label, value]) => `${label}: ${value}`)
-      .join('\n');
-
-    return text || '-';
-  }
-
-  private listText(value: unknown, otherValue?: unknown) {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.optionText(item, otherValue)).filter(Boolean).join(', ');
-    }
-
-    return this.optionText(value, otherValue);
-  }
-
-  private managerNationalityFallback(row: RowPayload) {
-    const combined = this.text(row.nationalityAndAddress);
-    if (!combined.includes('|')) return combined;
-    return combined.split('|')[0]?.trim() || '';
-  }
-
-  private managerAddressFallback(row: RowPayload) {
-    const combined = this.text(row.nationalityAndAddress);
-    if (!combined.includes('|')) return '';
-    return combined.split('|').slice(1).join('|').trim();
-  }
-
-  private documentCompanyName(payload: SerializedKycForm) {
-    const sectionA = payload.sectionA as Record<string, unknown>;
-    const rawName = this.text(sectionA.legalName).trim() || `KYC Case ${payload.kycCaseId}`;
-    return rawName
-      .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120);
-  }
-
-  private createDocxTemplate() {
-    const content = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-${this.docxParagraph('NEWOON KYC FORM')}
-${this.docxParagraph('A. General Company Information')}
-${this.docxParagraph('Date: {date} | KYC Number: {reference}')}
-${this.docxParagraph('Legal Name of Company: {legalName}')}
-${this.docxParagraph('Commercial Registration No.: {commercialRegistrationNo} | Tax Identification No.: {taxIdentificationNo}')}
-${this.docxParagraph('Date/Country of Incorporation: {dateOfIncorporation} / {countryOfIncorporation} | Legal Form: {legalForm}')}
-${this.docxParagraph('Registered Office Address: {registeredOfficeAddress}')}
-${this.docxParagraph('Telephone: {telephone} | Email: {email} | Website: {website}')}
-${this.docxParagraph('Business Nature: {businessNature}')}
-${this.docxParagraph('License Activities: {licenseActivities} | Related Industry: {relatedIndustry}')}
-${this.docxParagraph('Nature of prospective service from Newoon: {prospectiveService}')}
-${this.docxParagraph('B. Control / Interest Details')}
-${this.docxParagraph('Listed parties:\\n{shareholdersText}')}
-${this.docxParagraph('Total shareholder percentage: {totalOwnershipPercentage}% | Total UBO percentage: {totalUboPercentage}% | Beneficial person different from listed parties: {uboDifferentFromShareholders}')}
-${this.docxParagraph('Beneficial structure notes: {uboGroupStructureNotes}')}
-${this.docxParagraph('Control structure:\\n{ownershipStructureText}')}
-${this.docxParagraph('Beneficial persons:\\n{ubosText}')}
-${this.docxParagraph('C. Manager / Authorized Signatory / Directors / Secretary')}
-${this.docxParagraph('{managersText}')}
-${this.docxParagraph('D. Compliance and Risk Information')}
-${this.docxParagraph('Any PEP exposure?: {pepQuestion} | Details: {pepDetails} | Supporting documents: {pepDocumentFileNames}')}
-${this.docxParagraph('Any sanction exposure?: {sanctionQuestion} | Details: {sanctionDetails} | Supporting documents: {sanctionDocumentFileNames}')}
-${this.docxParagraph('Any dual citizenship?: {dualCitizenshipQuestion} | Details: {dualCitizenshipDetails} | Passport copies: {dualCitizenshipPassportFileName}')}
-${this.docxParagraph('E. Key Communication Person')}
-${this.docxTable([
-  ['Full name', '{communicationFullName}', 'Position / Job title', '{communicationPosition}'],
-  ['Nationality', '{communicationNationality}', 'QID / Passport Number', '{communicationIdentityNumber}'],
-  ['Mobile Number', '{communicationMobile}', 'Email', '{communicationEmail}']
-])}
-${this.docxParagraph('F. Required Documents Checklist')}
-${this.docxParagraph('{requiredDocumentsText}')}
-${this.docxParagraph('Additional Documents')}
-${this.docxParagraph('{additionalDocumentsText}')}
-${this.docxParagraph('Additional notes for KYC preparation documents: {uploadedFilesNote}')}
-${this.docxParagraph('G. Client Declaration')}
-${this.docxParagraph('{declarationFullName} | {declarationPosition} | {declarationDate} | Signature: {signatureFileName} | Stamp: {stampFileName}')}
-${this.docxParagraph('H. Internal Use Only')}
-${this.docxParagraph('Risk: {riskClassification} | Due diligence: {dueDiligenceType} | AML Supervisor Name: {amlName} | AML Supervisor signature: {amlSignatureFileName} | AML Supervisor date: {amlDate}')}
-${this.docxParagraph('DMLRO: {dmlroName} | Signature: {dmlroSignatureFileName} | Date: {dmlroDate} | Risk classification: {dmlroRiskClassification} | Decision: {dmlroDecision} | Conditions: {dmlroConditions} | Reason: {dmlroReason} | Comments: {dmlroComments}')}
-${this.docxParagraph('MLRO: {mlroName} | Signature: {mlroSignatureFileName} | Date: {mlroDate} | Final decision: {mlroDecision} | Final risk: {mlroFinalRiskClassification} | Risk reason: {mlroRiskReasonCategory} | Risk explanation: {mlroRiskExplanation} | Conditions: {mlroConditions} | Comments: {mlroComments}')}
-${this.docxParagraph('Newoon Corporate Services - Footer service line')}
-<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>
-</w:body></w:document>`;
-
-    const zip = new PizZip();
-    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
-    zip.folder('_rels')?.file('.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-    zip.folder('word')?.file('document.xml', content);
-    return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
-  }
-
-  private docxParagraph(text: string) {
-    return `<w:p><w:r><w:t xml:space="preserve">${this.escapeXml(text)}</w:t></w:r></w:p>`;
-  }
-
-  private docxTable(rows: string[][]) {
-    const widths = [2100, 2500, 2100, 2500];
-    const cells = rows
-      .map((row) => {
-        const rowCells = row
-          .map((value, index) => {
-            const bold = index % 2 === 0 ? '<w:b/>' : '';
-            return `<w:tc><w:tcPr><w:tcW w:w="${widths[index] || 2300}" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr>${bold}</w:rPr><w:t xml:space="preserve">${this.escapeXml(value)}</w:t></w:r></w:p></w:tc>`;
-          })
-          .join('');
-        return `<w:tr>${rowCells}</w:tr>`;
-      })
-      .join('');
-
-    return `<w:tbl><w:tblPr><w:tblW w:w="9200" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/></w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${widths.map((width) => `<w:gridCol w:w="${width}"/>`).join('')}</w:tblGrid>${cells}</w:tbl>`;
-  }
-
-  private escapeXml(value: string) {
-    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   private legalDocumentUploadRoot() {

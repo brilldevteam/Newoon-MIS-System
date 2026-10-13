@@ -614,7 +614,7 @@ export class ScreeningService {
         entityType: ScreeningEntityType.MANAGER,
         name: manager.fullName,
         identifier: manager.identityNumber,
-        country: manager.nationality,
+        country: this.firstText(manager.nationality),
         role: manager.position || 'Manager / authorized signatory'
       });
     });
@@ -782,9 +782,10 @@ export class ScreeningService {
     return Array.isArray(value) ? value : [];
   }
 
+  // Nationality is multi-select (an array, or "Qatar, India" once saved); screening uses the first country.
   private firstText(value: unknown) {
-    if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string' && Boolean(item.trim())) || '';
-    return this.stringValue(value);
+    if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string' && Boolean(item.trim()))?.trim() || '';
+    return this.stringValue(value).split(',')[0]?.trim() || '';
   }
 
   private isRecord(value: unknown): value is JsonRecord {

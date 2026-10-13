@@ -1,5 +1,11 @@
 # KYC DOCX Template
 
+## Current Export Behavior
+
+KYC DOCX and PDF downloads are rendered from the shared model in `backend/src/kyc/export/`. This template supplies only the letterhead (`word/media/image1.png`) and footer (`word/media/image3.png`) artwork, which `kyc-export-assets.ts` trims automatically. Changing placeholders or body text in the template has no effect. To change the letterhead, replace those two images in the template, keeping their file names.
+
+The placeholder guidance below is historical. Read `docs/DEVELOPER_HANDOVER.md` for current rendering and QA instructions.
+
 Place the approved blank KYC DOCX template here:
 
 ```text

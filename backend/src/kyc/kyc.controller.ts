@@ -148,8 +148,11 @@ export class KycController {
     @Res() response: Response
   ) {
     const document = await this.kycService.downloadGeneratedDocument(user, id, documentId);
+    // ASCII fallback plus RFC 5987 UTF-8 name: Node rejects raw non-Latin-1 header characters (Arabic, curly quotes).
+    const asciiName = document.fileName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
     response.setHeader('Content-Type', document.mimeType);
-    response.setHeader('Content-Disposition', `attachment; filename="${document.fileName}"`);
+    response.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(document.fileName)}`);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(Buffer.from(document.content));
   }
 

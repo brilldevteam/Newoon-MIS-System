@@ -1,4 +1,4 @@
-param([string]$Directory = "$PSScriptRoot\..\..\docs\kyc-export-preview")
+param([string]$Directory = "$PSScriptRoot\..\..\docs\kyc-export-preview\standard", [string]$Name = 'kyc-chromium', [string]$Prefix = 'pdf-page', [int]$Width = 0)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
@@ -11,7 +11,7 @@ function Await-Result($Operation, [Type]$ResultType) {
     return $task.Result
 }
 $Directory = (Resolve-Path -LiteralPath $Directory).Path
-$file = Await-Result ([Windows.Storage.StorageFile]::GetFileFromPathAsync("$Directory\kyc-sample.pdf")) ([Windows.Storage.StorageFile])
+$file = Await-Result ([Windows.Storage.StorageFile]::GetFileFromPathAsync("$Directory\$Name.pdf")) ([Windows.Storage.StorageFile])
 $pdf = Await-Result ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
 for ($i = 0; $i -lt $pdf.PageCount; $i++) {
     $page = $pdf.GetPage($i)
@@ -20,12 +20,18 @@ for ($i = 0; $i -lt $pdf.PageCount; $i++) {
         $prepare = $page.PreparePageAsync()
         $actionMethod = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and -not $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 } | Select-Object -First 1
         $actionMethod.Invoke($null, @($prepare)).Wait()
-        $action = $page.RenderToStreamAsync($stream)
+        if ($Width -gt 0) {
+            $options = New-Object Windows.Data.Pdf.PdfPageRenderOptions
+            $options.DestinationWidth = $Width
+            $action = $page.RenderToStreamAsync($stream, $options)
+        } else {
+            $action = $page.RenderToStreamAsync($stream)
+        }
         $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and -not $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 } | Select-Object -First 1
         $task = $method.Invoke($null, @($action))
         $task.Wait()
         $input = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream)
-        $output = [System.IO.File]::Create("$Directory\page-$($i + 1).png")
+        $output = [System.IO.File]::Create("$Directory\$Prefix-$($i + 1).png")
         try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
     } finally { $page.Dispose(); $stream.Dispose() }
 }

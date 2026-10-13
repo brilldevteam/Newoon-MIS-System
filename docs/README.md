@@ -1,5 +1,13 @@
 # Newoon KYC & Engagement Workflow Management System
 
+## Current Developer Entry Point
+
+Read [Developer Handover](DEVELOPER_HANDOVER.md) and [Repository Instructions](../AGENTS.md) first. They cover current architecture, safe setup, deployment, document QA, and known limitations.
+
+The Step 1 description below is historical and does not describe the current implemented application. Its migration/seed instructions are not production deployment instructions. The seed script resets passwords for existing seeded accounts; never run it casually on a shared database.
+
+## Historical Step 1 Reference
+
 This repository contains the Step 1 SaaS-ready foundation for Newoon's KYC and engagement workflow platform.
 
 ## Scope
