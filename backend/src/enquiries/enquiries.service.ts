@@ -1,3 +1,4 @@
+import { preliminaryDeclaration } from '../common/preliminary-review';
 import {
   BadRequestException,
   ConflictException,
@@ -14,6 +15,8 @@ import { basename, isAbsolute, join, normalize, relative } from 'path';
 import PizZip from 'pizzip';
 import { randomUUID } from 'crypto';
 import { beneficialOwners } from '../common/ownership';
+import { KycPdfRenderer } from '../kyc/export/kyc-pdf-renderer';
+import { preliminaryPdfHtml } from './preliminary-pdf';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -36,7 +39,13 @@ const REQUIRED_DOCUMENT_TYPES = [
 export class EnquiriesService {
   private readonly logger = new Logger(EnquiriesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly preliminaryPdf: KycPdfRenderer) {}
+
+  async downloadPreliminaryPdf(user: RequestUser, id: string) {
+    const { data } = await this.getPreliminaryKyc(user, id);
+    if (!Object.keys(data).length) throw new BadRequestException('No Preliminary KYC form is available to download.');
+    return this.preliminaryPdf.render(preliminaryPdfHtml(data), { headerTemplate: '<span></span>', footerTemplate: '<span></span>', marginTopMm: 12, marginBottomMm: 12, marginLeftMm: 12, marginRightMm: 12 });
+  }
 
   async create(user: RequestUser, dto: CreateEnquiryDto) {
     try {
@@ -522,12 +531,16 @@ export class EnquiriesService {
         })) });
       }
 
-      const sectionA = this.enquirySectionA(enquiry, details);
+      const sectionA = { ...this.enquirySectionA(enquiry, details), ...(enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? { preliminaryKyc } : {}) };
       const sectionE = this.enquirySectionE(enquiry, details);
       const requiredRows = this.requiredDocumentRows(legalDocuments);
 
       await prisma.kycSectionData.createMany({
         data: [
+          ...(enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? [{
+            tenantId, kycCaseId: createdCase.id, kycFormId: form.id, sectionKey: KycFormSectionKey.CLIENT_DECLARATION,
+            data: this.requiredJsonValue(preliminaryDeclaration(preliminaryKyc)), createdBy: user.id, updatedBy: user.id
+          }] : []),
           {
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, sectionKey: KycFormSectionKey.OWNERSHIP,
             data: this.requiredJsonValue({ shareholders: ownershipRows, ubos: beneficialRows }), createdBy: user.id, updatedBy: user.id
@@ -896,7 +909,7 @@ export class EnquiriesService {
       ubos: this.asArray<Record<string, unknown>>(dto.ubos).map((row) => ({
         id: this.optionalText(row.id) || randomUUID(), shareholderType: 'Individual', parentRowId: this.optionalText(row.parentRowId), sourceShareholderId: this.optionalText(row.sourceShareholderId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
-        address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: true
+        address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), ...(row.parentRowId ? { uboPercentage: this.optionalText(row.uboPercentage) || '' } : {}), isUbo: true
       })),
       management: this.asArray<Record<string, unknown>>(dto.management).map((row) => ({
         fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', '), positions: this.asArray<string>(row.positions).map(String).filter(Boolean)
@@ -924,6 +937,12 @@ export class EnquiriesService {
       throw new BadRequestException(`Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`);
     }
     const management = this.asArray<Record<string, unknown>>(data.management);
+    for (const row of this.asArray<Record<string, unknown>>(data.ubos)) {
+      if (row.parentRowId) {
+        if (!this.optionalText(row.uboPercentage)) throw new BadRequestException('Enter a UBO percentage for each beneficial owner linked to a corporate shareholder.');
+        this.ownershipPercentageValue(row.uboPercentage);
+      }
+    }
     if (!management.length || management.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.position))) {
       throw new BadRequestException('Add at least one proposed management or control person with name and position.');
     }

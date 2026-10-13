@@ -2,6 +2,7 @@ import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
 import { mergeBeneficialOwners } from '../utils/ownership';
+import { filledContactRows } from '../utils/contact-preview';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
@@ -64,7 +65,7 @@ type StoredAttachmentFile = NonNullable<AttachmentDraft['storedFiles']>[number];
 
 type EnquiryStep = 'type' | 'details' | 'ownership' | 'management' | 'contact' | 'declaration' | 'exposure' | 'attachments' | 'notes';
 
-type PreliminaryOwner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
+type PreliminaryOwner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
 type PreliminaryManagementPerson = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
 type PreliminaryDeclaration = {
   fullName: string;
@@ -281,13 +282,8 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
   if (step === 'contact' && form.enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES') {
     if (!form.keyContactName.trim()) return 'Key contact full name is required.';
     if (!form.keyContactEmail.trim()) return 'Key contact email is required.';
-    if (!form.keyContactPhoneCountry) return 'Key contact country code is required.';
-    if (!form.keyContactPhone.trim()) return 'Key contact phone number is required.';
     if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
       return 'Key contact position is required.';
-    }
-    if (!nationalityText(form.keyContactNationality, form.keyContactNationalityOther)) {
-      return 'Key contact nationality is required.';
     }
     if (!form.keyContactPassportNumber.trim() && !form.keyContactQidNumber.trim()) {
       return 'Enter either a key contact passport number or QID number.';
@@ -305,6 +301,9 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     const total = percentages.reduce((sum, value) => sum + value, 0);
     if (Math.abs(total - 100) > 0.005) {
       return `Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`;
+    }
+    if (form.preliminaryUbos.some((row) => row.parentRowId && (!row.uboPercentage?.trim() || !Number.isFinite(Number(row.uboPercentage)) || Number(row.uboPercentage) < 0 || Number(row.uboPercentage) > 100))) {
+      return 'Enter a UBO percentage between 0 and 100 for each beneficial owner linked to a corporate shareholder.';
     }
   }
 
@@ -484,7 +483,7 @@ export function AddEnquiryPage() {
               sourceOfFunds: form.sourceOfInitialCapital,
               expectedBusiness: resolvedRequestedServices(form),
               shareholders: form.preliminaryShareholders,
-              ubos: mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos),
+              ubos: form.preliminaryUbos,
               management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.join(', ') || row.position })),
               contact: {
                 fullName: form.keyContactName,
@@ -819,19 +818,19 @@ export function AddEnquiryPage() {
               </label>
               <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
                 <SearchableSelect
-                  label="Code *"
+                  label="Code"
                   value={form.keyContactPhoneCountry}
                   options={countryOptions}
                   optionLabels={countryDialLabels}
                   onChange={setPhoneCountry}
                 />
                 <label className="text-sm font-medium text-slate-700">
-                  Phone <RequiredMark />
-                  <input required value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  Phone
+                  <input value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
               </div>
               <SearchableMultiSelect
-                label="Nationality *"
+                label="Nationality"
                 value={form.keyContactNationality}
                 otherValue={form.keyContactNationalityOther}
                 options={nationalityOptions}
@@ -1073,7 +1072,7 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
         <p className="font-bold">Proposed Shareholders</p>
         <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryShareholders.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
         <p className="mt-2 font-bold">Ultimate Beneficial owners (Natural Person Only)</p>
-        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'Ownership %']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'UBO %']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
         <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos))}%</p>
         <p className="mt-2">If a shareholder is a corporate entity, please provide its Commercial Registration (or equivalent incorporation document) and ownership structure until the ultimate beneficial owner(s) (natural person(s)) are identified.</p>
       </PdfSection>
@@ -1090,12 +1089,12 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
       <div className="mt-16 border-t-4 border-black pt-10">
         <PdfSection title="Section E: Key Contact person">
           <p className="mb-1 font-bold">Provide the contact information of the key contact person:</p>
-          <PdfTable headers={['No.', 'Field', 'Details']} rows={[
+          <PdfTable headers={['No.', 'Field', 'Details']} rows={filledContactRows([
             ['1', 'Full Name', value(form.keyContactName)], ['2', 'Nationality', value(nationalityText(form.keyContactNationality, form.keyContactNationalityOther))],
             ['3', 'Passport Number', value(form.keyContactPassportNumber)], ['4', 'Passport Expiry Date', value(form.keyContactPassportExpiryDate)],
             ['5', 'QID Number', value(form.keyContactQidNumber)], ['6', 'QID Expiry Date', value(form.keyContactQidExpiryDate)],
             ['7', 'Mobile Number', value(form.keyContactPhone)], ['8', 'Email', value(form.keyContactEmail)]
-          ]} />
+          ])} />
         </PdfSection>
       </div>
       <PdfSection title="Section F: Client Declaration">
@@ -1104,8 +1103,8 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
           <tr><th className="w-1/3 border border-black px-1 py-0.5">Full Name</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.fullName)}</td></tr>
           <tr><th className="border border-black px-1 py-0.5">Position</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.position)}</td></tr>
           <tr><th className="border border-black px-1 py-0.5">Date</th><td className="border border-black px-1 py-0.5">{value(form.preliminaryDeclaration.date)}</td></tr>
-          <tr><th className="border border-black px-1 py-0.5">Authorised signature</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={form.preliminaryDeclaration.authorizedSignature} dataUrl={form.preliminaryDeclaration.authorizedSignatureDataUrl} /></td></tr>
-          <tr><th className="border border-black px-1 py-0.5">Company Stamp</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview fileName={form.preliminaryDeclaration.companyStamp} dataUrl={form.preliminaryDeclaration.companyStampDataUrl} /></td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Authorised signature</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview label="Authorised signature" dataUrl={form.preliminaryDeclaration.authorizedSignatureDataUrl} /></td></tr>
+          <tr><th className="border border-black px-1 py-0.5">Company Stamp</th><td className="border border-black px-1 py-0.5"><PreliminaryUploadPreview label="Company stamp" dataUrl={form.preliminaryDeclaration.companyStampDataUrl} /></td></tr>
         </tbody></table>
       </PdfSection>
     </article>
@@ -1114,9 +1113,9 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
 
 function PdfSection({ title, children }: { title: string; children: React.ReactNode }) { return <section className="mt-3"><h3 className="border-b-4 border-[#dce9f7] pb-0.5 text-[10px] font-bold">{title}</h3><div className="mt-1">{children}</div></section>; }
 function PdfTable({ headers, rows }: { headers: string[]; rows: string[][] }) { return <table className="w-full border-collapse text-left"><thead><tr>{headers.map((header, index) => <th key={`${header}-${index}`} className="border border-black px-1 py-0.5 font-bold">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((item, cellIndex) => <td key={cellIndex} className="border border-black px-1 py-0.5 align-top">{item}</td>)}</tr>)}</tbody></table>; }
-function PreliminaryUploadPreview({ fileName, dataUrl }: { fileName?: string; dataUrl?: string }) {
-  if (!fileName) return <>-</>;
-  return <div className="min-h-6"><span>{fileName}</span>{dataUrl?.startsWith('data:image/') ? <img src={dataUrl} alt={fileName} className="mt-1 max-h-20 max-w-40 object-contain" /> : null}</div>;
+function PreliminaryUploadPreview({ dataUrl, label }: { dataUrl?: string; label: string }) {
+  if (!dataUrl?.startsWith('data:image/')) return <>-</>;
+  return <div className="max-w-full py-2" style={{ breakInside: 'avoid' }}><img src={dataUrl} alt={label} style={{ display: 'block', width: '260px', maxWidth: '100%', height: '112px', objectFit: 'contain', objectPosition: 'left center' }} /></div>;
 }
 
 function readFileAsDataUrl(file: File) {

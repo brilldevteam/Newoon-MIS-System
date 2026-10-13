@@ -31,6 +31,7 @@ import { hasAnyRole } from '../utils/access-control';
 import { countryDialOptions } from '../utils/country-phone';
 import { PDF_ONLY_ACCEPT, PDF_ONLY_HINT, STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT, validatePdfDocuments, validateStandardDocuments } from '../utils/upload-security';
 import { getApiErrorMessage } from '../services/api';
+import { remainingScreeningEntities } from '../utils/screening-options';
 
 const countryOptions = countryDialOptions.map((country) => country.name);
 
@@ -53,6 +54,7 @@ const resultOptions: Array<{ value: ScreeningResultStatus; label: string }> = [
 ];
 
 const googleResultOptions: Array<{ value: ScreeningResultStatus; label: string }> = [
+  { value: 'NOT_CHECKED', label: 'Not checked' },
   { value: 'NO_NEGATIVE_NEWS', label: 'No negative news' },
   { value: 'NEGATIVE_NEWS_FOUND', label: 'Negative news found' },
   { value: 'PREVIOUSLY_NEGATIVE_NEWS', label: 'Previously negative news' },
@@ -195,10 +197,11 @@ export function KycScreeningPage() {
     showToast(`${summary}${error.includes('\n') ? ' See the guidance at the top.' : ''}`, 'error');
   }, [error, showToast]);
 
-  const entityOptions = useMemo(() => context?.entities.map(entityLabel) || [], [context]);
+  const remainingEntities = useMemo(() => context ? remainingScreeningEntities(context.entities, context.records) : [], [context]);
+  const entityOptions = useMemo(() => remainingEntities.map(entityLabel), [remainingEntities]);
   const selectedEntity = useMemo(
-    () => context?.entities.find((entity) => entityLabel(entity) === selectedEntityLabel) || null,
-    [context, selectedEntityLabel]
+    () => remainingEntities.find((entity) => entityLabel(entity) === selectedEntityLabel) || null,
+    [remainingEntities, selectedEntityLabel]
   );
   const mergedDocumentsByCheck = useMemo(() => {
     const groups = new Map<ScreeningCheckType, ScreeningDocument[]>();

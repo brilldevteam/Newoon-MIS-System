@@ -2,6 +2,7 @@ import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, Sea
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
+import { safeCommentHtml } from '../components/RichTextEditor';
 import { useAuth } from '../hooks/useAuth';
 import { getApiErrorMessage } from '../services/api';
 import {
@@ -52,6 +53,7 @@ export function KycCaseDetailsPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
+  const [reviewFeedback, setReviewFeedback] = useState<NonNullable<KycCase['reviewFeedback']>>([]);
   const [services, setServices] = useState<string[]>([]);
   const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
   const [comment, setComment] = useState('');
@@ -71,9 +73,11 @@ export function KycCaseDetailsPage() {
   const [returnToBdReason, setReturnToBdReason] = useState('');
 
   useEffect(() => {
+    setReviewFeedback([]);
     if (id) {
       getKycCase(id).then((item) => {
         setKycCase(item);
+        setReviewFeedback(item.reviewFeedback || []);
         setServices(serviceListValue(item.service?.name));
         setProposalStatus(item.proposalStatus);
       });
@@ -692,6 +696,15 @@ export function KycCaseDetailsPage() {
               </button>
             </form>
             <div className="mt-5 space-y-3">
+              {(kycCase.reviewFeedback || reviewFeedback).map((item) => (
+                <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-semibold text-slate-950">{item.stage === 'SUPERVISOR' ? 'AML Supervisor' : item.stage}{['RETURN_TO_SUPERVISOR', 'RETURN_TO_DMLRO', 'REQUEST_ADDITIONAL_INFORMATION'].includes(item.decision) ? ' - Return feedback' : ' - Review feedback'}</p>
+                  {item.reason ? <div className="mt-2"><p className="text-xs font-semibold text-slate-600">Reason</p><div className="review-rich-text break-words text-sm text-slate-700" dangerouslySetInnerHTML={{ __html: safeCommentHtml(item.reason) }} /></div> : null}
+                  {item.comments && item.comments !== item.reason ? <div className="review-rich-text mt-2 break-words text-sm text-slate-700" dangerouslySetInnerHTML={{ __html: safeCommentHtml(item.comments) }} /> : null}
+                  {item.conditions && item.conditions !== item.reason && item.conditions !== item.comments ? <div className="mt-2"><p className="text-xs font-semibold text-slate-600">Conditions</p><div className="review-rich-text break-words text-sm text-slate-700" dangerouslySetInnerHTML={{ __html: safeCommentHtml(item.conditions) }} /></div> : null}
+                  <p className="mt-2 text-xs text-slate-500">{item.author ? `${item.author.firstName} ${item.author.lastName}` : item.stage} | {formatDate(item.submittedAt)}</p>
+                </div>
+              ))}
               {kycCase.comments.map((item) => (
                 <div key={item.id} className="rounded-md bg-slate-50 p-3">
                   <p className="text-sm text-slate-700">{item.body}</p>

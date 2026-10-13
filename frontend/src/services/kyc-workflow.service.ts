@@ -242,6 +242,16 @@ export type StatusHistory = {
 };
 
 export type KycCase = {
+  reviewFeedback?: Array<{
+    id: string;
+    stage: string;
+    submittedAt: string;
+    author: { firstName: string; lastName: string } | null;
+    comments: string;
+    reason: string;
+    conditions: string;
+    decision: string;
+  }>;
   id: string;
   sourceEnquiry?: { id: string; enquiryType: EnquiryType; details?: Record<string, unknown> | null } | null;
   kycForm?: { status: string } | null;
@@ -404,6 +414,7 @@ export type KycGeneratedDocument = {
 };
 
 export type KycFormData = {
+  preliminaryDocument?: Record<string, unknown> | null;
   id: string;
   tenantId: string;
   kycCaseId: string;
@@ -489,6 +500,12 @@ export function createEnquiry(payload: EnquiryPayload) {
 
 export function getEnquiry(id: string) {
   return api.get<Enquiry>(`/enquiries/${id}`).then((response) => response.data);
+}
+
+export async function downloadPreliminaryKycPdf(id: string) {
+  const response = await api.get(`/enquiries/${id}/preliminary-kyc/pdf`, { responseType: 'blob', timeout: 60000 });
+  const url = window.URL.createObjectURL(response.data);
+  try { downloadBlob(url, `preliminary-kyc-${id}.pdf`); } finally { window.URL.revokeObjectURL(url); }
 }
 
 export function updateEnquiry(id: string, payload: EnquiryPayload) {

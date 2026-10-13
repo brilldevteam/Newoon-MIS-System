@@ -2,6 +2,7 @@ import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Sav
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
+import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
@@ -2320,7 +2321,9 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
 function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
   return (
     <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
-      <div className="mx-auto min-h-[1120px] w-full max-w-[794px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-sm">
+      {form.preliminaryDocument ? <PreliminaryKycDocument data={form.preliminaryDocument} embedded /> : null}
+      <div className={`mx-auto w-full max-w-[794px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-sm ${form.preliminaryDocument ? 'mt-4' : 'min-h-[1120px]'}`}>
+        {!form.preliminaryDocument ? <>
         <div className="flex items-start justify-between border-b-4 border-brand-600 pb-4">
           <div>
             <p className="text-2xl font-bold tracking-normal text-brand-900">NEWOON</p>
@@ -2373,6 +2376,7 @@ function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         <PreviewSection title="G. Client Declaration">
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
+        </> : null}
         <PreviewSection title="H. Internal Use Only">
           <PreviewGrid rows={[['Risk classification', form.sectionH?.riskClassification], ['Due diligence type', form.sectionH?.dueDiligenceType]]} />
           <PreviewGroup title="AML Supervisor">

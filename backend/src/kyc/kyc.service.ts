@@ -1,6 +1,8 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { hasComment, safeComment } from '../common/review-comments';
 import { beneficialOwners } from '../common/ownership';
+import { declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
+import { sharedReviewFeedback } from '../common/shared-review-feedback';
 import {
   ConfidentialVisibilityScope,
   DueDiligenceType,
@@ -78,7 +80,31 @@ export class KycService {
       throw new NotFoundException('KYC case not found');
     }
 
-    return this.withKycNumber(kycCase);
+    const versions = await this.prisma.internalReviewVersion.findMany({
+      where: { tenantId: kycCase.tenantId, kycCaseId: id, submittedAt: { not: null } },
+      select: { id: true, stage: true, snapshot: true, submittedBy: true, submittedAt: true },
+      orderBy: { submittedAt: 'desc' }
+    });
+    const authors = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set(versions.map((version) => version.submittedBy).filter((authorId): authorId is string => Boolean(authorId)))] } },
+      select: { id: true, firstName: true, lastName: true }
+    });
+    const reviewFeedback = versions.flatMap((version) => {
+      const feedback = sharedReviewFeedback(version.stage, version.snapshot);
+      if (!feedback) return [];
+      const author = authors.find((item) => item.id === version.submittedBy);
+      return [{ id: version.id, stage: version.stage, submittedAt: version.submittedAt, author: author ? { firstName: author.firstName, lastName: author.lastName } : null, ...feedback }];
+    });
+    const formalComments = await this.prisma.reviewerComment.findMany({
+      where: { tenantId: kycCase.tenantId, kycCaseId: id, type: ReviewCommentType.FORMAL },
+      select: { id: true, stage: true, body: true, createdAt: true, author: { select: { firstName: true, lastName: true } } }
+    });
+    reviewFeedback.push(...formalComments.map((comment) => ({
+      id: comment.id, stage: comment.stage, submittedAt: comment.createdAt, author: comment.author,
+      comments: safeComment(comment.body), reason: '', conditions: '', decision: ''
+    })));
+    reviewFeedback.sort((left, right) => (right.submittedAt?.getTime() || 0) - (left.submittedAt?.getTime() || 0));
+    return { ...await this.withKycNumber(kycCase), reviewFeedback };
   }
 
   async create(user: RequestUser, dto: CreateKycCaseDto) {
@@ -1889,6 +1915,10 @@ export class KycService {
       (form.sections.find((item) => item.sectionKey === key)?.data || {}) as Record<string, unknown>;
     const ownershipSection = section(KycFormSectionKey.OWNERSHIP);
     const sectionA = section(KycFormSectionKey.GENERAL_COMPANY);
+    const sourceDetails = preliminaryObject(form.kycCase.sourceEnquiry?.details);
+    const preliminary = preliminaryObject(sectionA.preliminaryKyc || sourceDetails.preliminaryKyc);
+    const preliminaryDocument = sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && form.version === 1 && Object.keys(preliminary).length
+      ? preliminary : null;
 
     return {
       id: form.id,
@@ -1897,6 +1927,7 @@ export class KycService {
       status: form.status,
       isLocked: form.isLocked,
       version: form.version,
+      preliminaryDocument,
       sectionA: {
         ...sectionA,
         reference: this.text(sectionA.reference)
@@ -1917,7 +1948,9 @@ export class KycService {
       sectionD: section(KycFormSectionKey.COMPLIANCE_RISK),
       sectionE: section(KycFormSectionKey.COMMUNICATION_PERSON),
       sectionF: this.sectionFWithCaseDocuments(section(KycFormSectionKey.REQUIRED_DOCUMENTS), form.requiredDocuments, form.kycCase.legalDocuments),
-      sectionG: section(KycFormSectionKey.CLIENT_DECLARATION),
+      sectionG: sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY'
+        ? declarationWithPreliminaryFallback(section(KycFormSectionKey.CLIENT_DECLARATION), preliminary)
+        : section(KycFormSectionKey.CLIENT_DECLARATION),
       sectionH: form.internalReview,
       generatedDocuments: form.generatedDocuments.map((document) => ({
         id: document.id,
@@ -1940,7 +1973,8 @@ export class KycService {
       requiredDocuments: { orderBy: { sortOrder: 'asc' as const } },
       kycCase: {
         include: {
-          legalDocuments: { orderBy: { createdAt: 'desc' as const } }
+          legalDocuments: { orderBy: { createdAt: 'desc' as const } },
+          sourceEnquiry: { select: { details: true } }
         }
       },
       internalReview: true,
@@ -2533,7 +2567,10 @@ export class KycService {
       (await tx.internalReviewVersion.count({
         where: { kycCaseId: kycCase.id, stage }
       })) + 1;
-    const data = this.jsonValue(dto.data || dto);
+    const data = this.jsonValue({ ...preliminaryObject(dto.data || dto), formalComments: safeComment(dto.formalComments),
+      ...(dto.reason !== undefined ? { reason: safeComment(dto.reason) } : {}),
+      ...(dto.conditions !== undefined ? { conditions: safeComment(dto.conditions) } : {}),
+      ...(dto.decision !== undefined ? { decision: dto.decision } : {}) });
 
     const saved = await tx.internalReviewSubmission.upsert({
       where: { kycCaseId_stage: { kycCaseId: kycCase.id, stage } },
@@ -2608,7 +2645,10 @@ export class KycService {
       (await tx.internalReviewVersion.count({
         where: { kycCaseId: kycCase.id, stage: ReviewStage.DMLRO }
       })) + 1;
-    const data = this.jsonValue(dto.data || dto);
+    const data = this.jsonValue({ ...preliminaryObject(dto.data || dto), formalComments: safeComment(dto.formalComments),
+      ...(dto.reason !== undefined ? { reason: safeComment(dto.reason) } : {}),
+      ...(dto.conditions !== undefined ? { conditions: safeComment(dto.conditions) } : {}),
+      ...(dto.decision !== undefined ? { decision: dto.decision } : {}) });
 
     const saved = await tx.internalReviewSubmission.upsert({
       where: { kycCaseId_stage: { kycCaseId: kycCase.id, stage: ReviewStage.DMLRO } },

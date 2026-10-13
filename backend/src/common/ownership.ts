@@ -9,7 +9,8 @@ export function beneficialOwners(shareholders: Party[], manual: Party[]): Party[
       row.sourceShareholderId && row.sourceShareholderId === other.id ||
       String(other.fullName || '').trim().toLowerCase() === name &&
       String(other.identityNumber || '').trim() === String(row.identityNumber || '').trim())) continue;
-    result.push(row);
+    const isPreliminaryLinkedOwner = row.parentRowId && row.uboInterestPercentage === undefined && row.ownershipPercentage !== undefined;
+    result.push(isPreliminaryLinkedOwner ? { ...row, ownershipPercentage: row.uboPercentage ?? '' } : row);
   }
   return result;
 }
