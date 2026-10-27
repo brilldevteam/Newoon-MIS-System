@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { hasComment, safeComment } from '../common/review-comments';
 import { beneficialOwners } from '../common/ownership';
+import { complianceValidationError } from '../common/kyc-compliance';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
 import { sharedReviewFeedback } from '../common/shared-review-feedback';
 import { preliminaryPdfHtml } from '../enquiries/preliminary-pdf';
@@ -520,6 +521,7 @@ export class KycService {
       };
       await addCheck('Screening', () => this.assertScreeningReady(tx, kycCase));
       await addCheck('CRRF', () => this.assertCrrfReady(tx, kycCase));
+      await addCheck('Full KYC compliance and risk', () => this.assertComplianceReady(tx, kycCase));
       const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       checks.push({ label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'Upload at least one document required for KYC preparation.' });
       const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
@@ -747,6 +749,10 @@ export class KycService {
   async saveReviewDraft(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>) {
     this.assertStageRole(user, stage);
     const kycCase = await this.findOne(user, id);
+    if (![this.stageStatus(stage, 'pending'), this.stageStatus(stage, 'inProgress')].includes(kycCase.status)) {
+      throw new BadRequestException('Review editing is locked while the case is with another review stage.');
+    }
+    await this.assertReviewStageActive(id, stage);
     await this.assertEditableReview(id, stage);
 
     return this.prisma.internalReviewSubmission.upsert({
@@ -1174,8 +1180,8 @@ export class KycService {
     const isPreliminaryCase = await this.isPreliminaryProposedCompanyCase(kycCase.sourceEnquiryId);
     if (isPreliminaryCase) {
       this.assertFinalApprovalReceived(kycCase.status);
-      if (!this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
-        throw new ForbiddenException('Only AML Supervisor can decide whether the approved Preliminary KYC is final.');
+      if (!this.hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+        throw new ForbiddenException('Only AML Supervisor, DMLRO or MLRO can decide whether the approved Preliminary KYC is final.');
       }
       if (decision === 'AMENDMENT_REQUIRED') return this.startPreliminaryFullKyc(user, kycCase, dto);
       return this.routePreliminaryFinalKycForApproval(user, kycCase);
@@ -1187,7 +1193,7 @@ export class KycService {
 
     this.assertFinalApprovalReceived(kycCase.status);
     const approvalOwnerRoles = kycCase.status === KycCaseStatus.SEF_APPROVED ? ['SEF'] : ['MLRO'];
-    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
       throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
     }
 
@@ -1263,11 +1269,22 @@ export class KycService {
       mlroComments: null, mlroConditions: null, mlroRiskExplanation: null, mlroFinalRiskClassification: null,
       sefSignatureDataUrl: null, sefSignatureFileName: null, sefDate: null, sefDecision: null,
       sefComments: null, sefConditions: null,
+      ...(fullKyc ? {
+        amlClarificationFindings: form.internalReview?.amlClarificationFindings,
+        dmlroComments: form.internalReview?.dmlroComments,
+        dmlroReason: form.internalReview?.dmlroReason,
+        dmlroConditions: form.internalReview?.dmlroConditions,
+        mlroComments: form.internalReview?.mlroComments,
+        mlroConditions: form.internalReview?.mlroConditions,
+        mlroRiskExplanation: form.internalReview?.mlroRiskExplanation,
+        sefComments: form.internalReview?.sefComments,
+        sefConditions: form.internalReview?.sefConditions
+      } : {}),
       updatedBy: user.id
     } });
     await tx.internalReviewSubmission.updateMany({
       where: { tenantId: form.tenantId, kycCaseId: kycCase.id },
-      data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, data: {}, formalComments: null, submittedAt: null, submittedById: null, updatedBy: user.id }
+      data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, ...(fullKyc ? {} : { data: {}, formalComments: null, submittedAt: null, submittedById: null }), updatedBy: user.id }
     });
     await tx.signedKycDocument.updateMany({ where: { tenantId: form.tenantId, kycCaseId: kycCase.id }, data: { activeVersion: false } });
     await this.audit(tx, user, form.tenantId, 'KycFormRevision', revision.id, {
@@ -1320,7 +1337,7 @@ export class KycService {
     const kycCase = await this.findOne(user, id);
     this.assertFinalApprovalReceived(kycCase.status);
     const approvalOwnerRoles = kycCase.status === KycCaseStatus.SEF_APPROVED ? ['SEF'] : ['MLRO'];
-    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+    if (!this.hasAnyRole(user, [...approvalOwnerRoles, 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
       throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
     }
     const sections = Array.isArray(dto.sections) ? dto.sections.map((value) => this.optionalText(value)).filter(Boolean) as string[] : [];
@@ -1362,9 +1379,13 @@ export class KycService {
     return this.prisma.$transaction(async (tx) => {
       await this.beginFormAmendment(tx, user, kycCase, reason, true);
       await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
-      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id } });
+      await tx.internalReviewTask.upsert({
+        where: { kycCaseId_stage_status: { kycCaseId: kycCase.id, stage: ReviewStage.SUPERVISOR, status: ReviewTaskStatus.PENDING } },
+        update: { updatedBy: user.id },
+        create: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: ReviewStage.SUPERVISOR, status: ReviewTaskStatus.PENDING, createdBy: user.id, updatedBy: user.id }
+      });
       await tx.workflowComment.create({ data: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, authorId: user.id, body: reason } });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.AML_REVIEW_STARTED, 'AML Supervisor opened the populated full KYC form for completion.');
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, 'Populated full KYC opened for AML preparation; approved Preliminary KYC retained in revision history.');
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
     }, { timeout: 60000 });
   }
@@ -1433,6 +1454,8 @@ export class KycService {
 
   async autoSaveForm(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const payload = dto as KycFormDraftPayload;
+    // Reject a locked review before any of the individual section writes run.
+    if (payload.sectionH) await this.assertFormReviewEditable(user, id, payload.sectionH);
 
     const guarded = (section: Record<string, unknown>) => ({ ...section, expectedVersion: payload.version });
     if (payload.sectionA) await this.saveSectionData(user, id, KycFormSectionKey.GENERAL_COMPANY, guarded(payload.sectionA));
@@ -1773,11 +1796,14 @@ export class KycService {
   }
 
   async saveInternalReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
+    await this.assertFormReviewEditable(user, id, dto);
     const roles = this.internalReviewAllowedRoles(dto);
     const form = await this.requireWritableForm(user, id, roles, dto.expectedVersion);
     const data = this.internalReviewData(dto);
 
     await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM "KycCase" WHERE id = ${id} FOR UPDATE`);
+      await this.assertFormReviewEditable(user, id, dto, tx);
       await tx.kycInternalReview.upsert({
         where: { kycFormId: form.id },
         update: { ...data, updatedBy: user.id },
@@ -1990,7 +2016,8 @@ export class KycService {
     if (
       this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR']) &&
       !this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']) &&
-      !this.isPreparationEditableStatus(kycCase.status)
+      !this.isPreparationEditableStatus(kycCase.status) &&
+      !(await this.isLegacyFullKycDraft(id, kycCase.status, user))
     ) {
       throw new BadRequestException('KYC preparation is locked while the case is under review. It can be edited again only after DMLRO returns it to the AML Supervisor.');
     }
@@ -2321,11 +2348,17 @@ export class KycService {
       throw new NotFoundException('KYC case not found');
     }
 
-    if (!this.isPreparationEditableStatus(kycCase.status)) {
+    if (!this.isPreparationEditableStatus(kycCase.status) && !(await this.isLegacyFullKycDraft(id, kycCase.status, user))) {
       throw new BadRequestException('KYC preparation is locked while the case is under DMLRO, MLRO, or SEF review. It can be edited again only after DMLRO returns it to the AML Supervisor.');
     }
 
     return kycCase;
+  }
+
+  private async isLegacyFullKycDraft(id: string, status: KycCaseStatus, user: RequestUser) {
+    if (status !== KycCaseStatus.AML_REVIEW_STARTED) return false;
+    const form = await this.prisma.kycForm.findFirst({ where: { kycCaseId: id, ...this.formTenantWhere(user) } });
+    return Boolean(form?.fullKycStarted && form.status === 'AMENDMENT_DRAFT' && !form.isLocked);
   }
 
   private isPreparationEditableStatus(status: KycCaseStatus) {
@@ -2512,8 +2545,8 @@ export class KycService {
     }
   }
 
-  private async assertEditableReview(kycCaseId: string, stage: ReviewStage) {
-    const existing = await this.prisma.internalReviewSubmission.findUnique({
+  private async assertEditableReview(kycCaseId: string, stage: ReviewStage, db: Prisma.TransactionClient = this.prisma) {
+    const existing = await db.internalReviewSubmission.findUnique({
       where: { kycCaseId_stage: { kycCaseId, stage } }
     });
 
@@ -2522,8 +2555,8 @@ export class KycService {
     }
   }
 
-  private async assertReviewStageActive(kycCaseId: string, stage: ReviewStage) {
-    const task = await this.prisma.internalReviewTask.findFirst({
+  private async assertReviewStageActive(kycCaseId: string, stage: ReviewStage, db: Prisma.TransactionClient = this.prisma) {
+    const task = await db.internalReviewTask.findFirst({
       where: { kycCaseId, stage, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS] } }
     });
     if (!task) {
@@ -2594,8 +2627,18 @@ export class KycService {
   }
 
   private async assertReviewPackageReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
+    await this.assertComplianceReady(tx, kycCase);
     await this.assertScreeningReady(tx, kycCase);
     await this.assertCrrfReady(tx, kycCase);
+  }
+
+  private async assertComplianceReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
+    const form = await tx.kycForm.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId }, include: { sections: true } });
+    if (form) {
+      const section = (key: KycFormSectionKey) => (form.sections.find((item) => item.sectionKey === key)?.data || {}) as Record<string, unknown>;
+      const error = complianceValidationError(section(KycFormSectionKey.GENERAL_COMPANY), section(KycFormSectionKey.COMPLIANCE_RISK), form.fullKycStarted);
+      if (error) throw new BadRequestException(error);
+    }
   }
 
   private async assertScreeningReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
@@ -3027,6 +3070,27 @@ export class KycService {
     }
   }
 
+  private async assertFormReviewEditable(user: RequestUser, id: string, dto: Record<string, unknown>, db: Prisma.TransactionClient = this.prisma) {
+    await this.findOne(user, id);
+    const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
+    if (part === 'ALL') {
+      if (!this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN'])) throw new ForbiddenException('Administrator access required');
+      return;
+    }
+    const stage = part === 'DMLRO' ? ReviewStage.DMLRO : part === 'MLRO' ? ReviewStage.MLRO : part === 'SEF' ? ReviewStage.SEF : ReviewStage.SUPERVISOR;
+    this.assertStageRole(user, stage);
+    if (stage === ReviewStage.SUPERVISOR) {
+      await this.requireWritableCase(user, id);
+    } else {
+      const kycCase = await db.kycCase.findFirstOrThrow({ where: { id, ...this.tenantWhere(user) } });
+      if (![this.stageStatus(stage, 'pending'), this.stageStatus(stage, 'inProgress')].includes(kycCase.status)) {
+        throw new BadRequestException(`${this.stageLabel(stage)} editing is locked while the case is with another review stage.`);
+      }
+      await this.assertReviewStageActive(id, stage, db);
+    }
+    await this.assertEditableReview(id, stage, db);
+  }
+
   private internalReviewAllowedRoles(dto: Record<string, unknown>) {
     const part = typeof dto.reviewPart === 'string' ? dto.reviewPart : 'AML';
     if (part === 'ALL') return ['COMPANY_ADMIN', 'SUPER_ADMIN'];
@@ -3356,7 +3420,7 @@ export class KycService {
   private caseInclude() {
     return {
       sourceEnquiry: { select: { id: true, enquiryType: true, details: true } },
-      kycForm: { select: { status: true } },
+      kycForm: { select: { status: true, fullKycStarted: true, isLocked: true } },
       client: { include: { contacts: true } },
       service: true,
       legalDocuments: { orderBy: { createdAt: 'desc' as const } },

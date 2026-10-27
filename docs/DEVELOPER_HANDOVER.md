@@ -1,5 +1,18 @@
 # Newoon MIS Developer Handover
 
+## Preliminary to Full KYC Preparation (2026-10-27)
+
+- Choosing full KYC completion creates an archived original and opens the populated new revision at `SUPERVISOR_REVIEW_PENDING`, with a Supervisor task. Completed review tasks are retained instead of deleted. Workflow/reviewer comments, submitted review versions, signatures/stamps in the archived form, generated exports and status history are not deleted by this conversion.
+- Full conversion keeps internal review comments/reasons/conditions and submitted review data while reopening the current submission. Prior approval signatures/decisions are reset in the new draft only; prior approvals remain in the archived form and review versions. Confidential notes retain their existing access restrictions.
+- Existing affected drafts at `AML_REVIEW_STARTED` are editable only when `fullKycStarted`, `AMENDMENT_DRAFT` and unlocked all match. Other cases at that status remain locked. No migration or data reset is needed. Verify with `node backend/scripts/check-kyc-form-revisions.cjs` and the review-lock checks after building; real multi-user/database tests remain necessary.
+
+## Full KYC Compliance and Final Decision (2026-10-27)
+
+- Full KYC Section D requires explicit Yes/No answers for PEP exposure, sanction exposure and dual citizenship before Supervisor submission; Yes answers require details. Drafts remain saveable. Unanswered questions are no longer displayed as an assumed No. The same saved values feed PDF and DOCX exports.
+- Preliminary KYC excludes Section D from the editor and downloads. Explicit conversion to full KYC restores it and its submission checks. No database migration is required.
+- AML Supervisor, DMLRO and MLRO can confirm final KYC or request completion/amendment after the existing final approval prerequisite. Existing administrator, AML Team preliminary and SEF permissions remain unchanged. This does not permit editing submitted review fields or bypass approval stages.
+- Verify with `node backend/scripts/check-kyc-compliance.cjs` after building, plus the existing ownership/review checks. These are synthetic/mocked checks; verify role-specific handoffs on staging before release.
+
 ## KYC Revision Comparison (2026-10-13)
 
 - Feature branch: `feature/kyc-amendment-comparison/2026-10-13`. DMLRO returns to AML, final-KYC amendments, and preliminary-to-full conversion archive the current form before advancing its revision. The active form is populated from the current data; historical snapshots have no write endpoint. The existing review routing, readiness checks and authorization remain enforced.

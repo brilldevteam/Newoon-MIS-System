@@ -178,7 +178,7 @@ export class EnquiriesService {
 
   async update(user: RequestUser, id: string, dto: UpdateEnquiryDto) {
     const existing = await this.findOne(user, id);
-    if (!this.canModifyEnquiry(user, existing.status)) {
+    if (!(await this.canModifyEnquiry(user, existing.status, id))) {
       throw new BadRequestException('This enquiry has already been submitted. It can be edited again only after AML returns it to BD.');
     }
 
@@ -662,7 +662,7 @@ export class EnquiriesService {
   async savePreliminaryKyc(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const enquiry = await this.findOne(user, id);
     this.assertProposedCompanyEnquiry(enquiry);
-    if (!this.canModifyEnquiry(user, enquiry.status)) {
+    if (!(await this.canModifyEnquiry(user, enquiry.status, id))) {
       throw new BadRequestException('The Preliminary KYC form is locked after the enquiry is submitted. AML must return the enquiry before it can be edited.');
     }
     const data = this.preliminaryKycData(dto, enquiry);
@@ -701,7 +701,7 @@ export class EnquiriesService {
     validateUploadFiles(files, ['pdf', 'word', 'excel', 'image'], 'enquiry attachment');
 
     const enquiry = await this.findOne(user, id);
-    if (!this.canModifyEnquiry(user, enquiry.status)) {
+    if (!(await this.canModifyEnquiry(user, enquiry.status, id))) {
       throw new BadRequestException('This enquiry has already been submitted. Uploads are enabled again only after AML returns it to BD.');
     }
 
@@ -870,7 +870,15 @@ export class EnquiriesService {
     return user.tenantId;
   }
 
-  private canModifyEnquiry(user: RequestUser, status: EnquiryStatus) {
+  private async canModifyEnquiry(user: RequestUser, status: EnquiryStatus, enquiryId: string) {
+    if (!this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      const cases = await this.prisma.kycCase.findMany({
+        where: { sourceEnquiryId: enquiryId, ...this.tenantWhere(user) },
+        select: { status: true }
+      });
+      const preparationStatuses: KycCaseStatus[] = [KycCaseStatus.INQUIRY_RECEIVED, KycCaseStatus.PROPOSAL_OPTIONAL, KycCaseStatus.LEGAL_DOCUMENTS_PENDING, KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
+      if (cases.some((item) => !preparationStatuses.includes(item.status))) return false;
+    }
     if (!this.hasAnyRole(user, ['OPERATING_TEAM']) || this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM'])) {
       return true;
     }

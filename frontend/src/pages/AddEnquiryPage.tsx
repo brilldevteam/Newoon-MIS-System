@@ -11,6 +11,8 @@ import { TypedDateInput } from '../components/TypedDateInput';
 import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
+import { useAuth } from '../hooks/useAuth';
+import { hasAnyRole } from '../utils/access-control';
 
 const enquiryTypes: EnquiryType[] = ['EXISTING_LEGAL_ENTITY', 'PROPOSED_COMPANY', 'CURRENT_CLIENT_NEW_SERVICES'];
 
@@ -281,12 +283,13 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
 
   if (step === 'contact' && form.enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES') {
     if (!form.keyContactName.trim()) return 'Key contact full name is required.';
-    if (!form.keyContactEmail.trim()) return 'Key contact email is required.';
+    const dialCode = countryDialOptions.find((country) => country.name === form.keyContactPhoneCountry)?.dialCode || '';
+    const mobileNumber = form.keyContactPhone.trim();
+    if (!/\d/.test(dialCode && mobileNumber.startsWith(dialCode) ? mobileNumber.slice(dialCode.length) : mobileNumber)) {
+      return 'Key contact mobile number is required.';
+    }
     if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
       return 'Key contact position is required.';
-    }
-    if (!form.keyContactPassportNumber.trim() && !form.keyContactQidNumber.trim()) {
-      return 'Enter either a key contact passport number or QID number.';
     }
   }
 
@@ -335,6 +338,7 @@ function validateEnquiryForm(form: EnquiryValidationForm): { step: EnquiryStep; 
 }
 
 export function AddEnquiryPage() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
   const isEditMode = Boolean(id);
@@ -388,6 +392,10 @@ export function AddEnquiryPage() {
       .then(([clientItems, enquiry]) => {
         setClients(clientItems);
         if (!enquiry) return;
+        if (!hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']) && enquiry.generatedKycCases?.some((item) => !['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(item.status))) {
+          navigate(`/enquiries/${id}`, { replace: true });
+          return;
+        }
         const details = enquiry.details || {};
         const keyContactPosition = splitOtherValue(enquiry.keyContactPosition, positionOptions);
         const keyContactNationality = splitNationalities(details.keyContactNationality, nationalityOptions);
@@ -813,8 +821,8 @@ export function AddEnquiryPage() {
                 allowOther
               />
               <label className="text-sm font-medium text-slate-700">
-                Email <RequiredMark />
-                <input required type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                Email
+                <input type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
               <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
                 <SearchableSelect
@@ -825,8 +833,8 @@ export function AddEnquiryPage() {
                   onChange={setPhoneCountry}
                 />
                 <label className="text-sm font-medium text-slate-700">
-                  Phone
-                  <input value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                  Mobile number <RequiredMark />
+                  <input required type="tel" value={form.keyContactPhone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
               </div>
               <SearchableMultiSelect

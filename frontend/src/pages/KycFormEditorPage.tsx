@@ -998,14 +998,22 @@ export function KycFormEditorPage() {
     [form.sectionB.shareholders]
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
-  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase?.status || '');
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase?.status || '') ||
+    (kycCase?.status === 'AML_REVIEW_STARTED' && form.fullKycStarted === true && form.status === 'AMENDMENT_DRAFT' && !form.isLocked);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';
-  const canEditVisibleForm = canEditAllSections || canPrepareKyc || sectionHMode !== 'AML';
+  const reviewerEditable = sectionHMode === 'DMLRO'
+    ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase?.status || '')
+    : sectionHMode === 'MLRO'
+      ? ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase?.status || '')
+      : sectionHMode === 'SEF'
+        ? ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase?.status || '')
+        : false;
+  const canEditVisibleForm = !form.isLocked && (canEditAllSections || canPrepareKyc || reviewerEditable);
   const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted;
   const visibleSections = useMemo(
-    () => sections.filter((section) => canEditAllSections || canPrepareKyc || section.key === 'sectionH'),
-    [canEditAllSections, canPrepareKyc]
+    () => sections.filter((section) => (!isPreliminaryProposedCompanyForm || section.key !== 'sectionD') && (canEditAllSections || canPrepareKyc || section.key === 'sectionH')),
+    [canEditAllSections, canPrepareKyc, isPreliminaryProposedCompanyForm]
   );
 
   useEffect(() => {
@@ -1030,6 +1038,7 @@ export function KycFormEditorPage() {
 
   async function save(section: SectionKey) {
     if (!id) return;
+    if (!canEditVisibleForm || saving) return null;
     setSaving(true);
     setMessage('');
     setError('');
@@ -1081,6 +1090,7 @@ export function KycFormEditorPage() {
 
   async function saveDraft() {
     if (!id) return null;
+    if (!canEditVisibleForm) return null;
     setSaving(true);
     setMessage('');
     setError('');
@@ -1105,8 +1115,10 @@ export function KycFormEditorPage() {
     setMessage('');
     setError('');
     try {
-      const saved = await saveDraft();
-      if (!saved) return;
+      if (canEditVisibleForm) {
+        const saved = await saveDraft();
+        if (!saved) return;
+      }
       const document = await generateKycDocument(id, type);
       const updated = await getKycForm(id);
       const normalized = normalizeForm(updated);
@@ -1364,19 +1376,19 @@ export function KycFormEditorPage() {
             <Save className="h-4 w-4" />
             {saving ? 'Saving...' : 'Save Draft'}
           </button> : null}
-          {sectionHMode === 'DMLRO' ? (
+          {sectionHMode === 'DMLRO' && canEditVisibleForm ? (
             <button onClick={submitDmlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
               {dmlroSubmitLabel}
             </button>
           ) : null}
-          {sectionHMode === 'MLRO' ? (
+          {sectionHMode === 'MLRO' && canEditVisibleForm ? (
             <button onClick={submitMlroFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
               {mlroSubmitLabel}
             </button>
           ) : null}
-          {sectionHMode === 'SEF' ? (
+          {sectionHMode === 'SEF' && canEditVisibleForm ? (
             <button onClick={submitSefFromKycForm} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
               <Send className="h-4 w-4" />
               {sefSubmitLabel}
@@ -1957,17 +1969,17 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
 
   return (
     <div className="space-y-5">
-      <Choice label="Any PEP exposure?" value={data.pepQuestion || 'No'} onChange={setPepQuestion} />
+      <Choice label="Any PEP exposure? *" value={data.pepQuestion || ''} onChange={setPepQuestion} />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
       {hasPepExposure ? (
         <SectionDSupportingDocuments label="PEP supporting documents" data={data} fieldKey="pepDocumentFileNames" onChange={onChange} />
       ) : null}
-      <Choice label="Any sanction exposure?" value={data.sanctionQuestion || 'No'} onChange={setSanctionQuestion} />
+      <Choice label="Any sanction exposure? *" value={data.sanctionQuestion || ''} onChange={setSanctionQuestion} />
       <Field label="Sanction details" value={data.sanctionDetails} onChange={(value) => update(data, onChange, 'sanctionDetails', value)} textarea wide />
       {hasSanctionExposure ? (
         <SectionDSupportingDocuments label="Sanction supporting documents" data={data} fieldKey="sanctionDocumentFileNames" onChange={onChange} />
       ) : null}
-      <Choice label="Any dual citizenship?" value={data.dualCitizenshipQuestion || 'No'} onChange={setDualCitizenshipQuestion} />
+      <Choice label="Any dual citizenship? *" value={data.dualCitizenshipQuestion || ''} onChange={setDualCitizenshipQuestion} />
       {hasDualCitizenship ? (
         <FormGrid>
           <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
