@@ -37,6 +37,7 @@ export type KycDocumentModel = {
 };
 
 export type KycExportPayload = {
+  fullKycStarted?: boolean;
   kycCaseId: string;
   sectionA: unknown;
   sectionB: unknown;
@@ -130,6 +131,10 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
 
   const companyName = text(a.legalName);
   const parties = rows(b.shareholders).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `party-${index + 1}` }));
+  const shareholderTotal = parties.filter((row) => !text(row.parentRowId)).reduce((sum, row) => {
+    const percentage = Number(row.shareholderPercentage ?? row.ownershipPercentage);
+    return sum + (Number.isFinite(percentage) ? percentage : 0);
+  }, 0);
   const beneficial = beneficialOwners(parties, rows(b.ubos));
   const diagramParties: Rec[] = [...parties, ...beneficial.filter((row) => row.parentRowId && !parties.some((party) => party.id === row.id || party.fullName === row.fullName && party.identityNumber === row.identityNumber)).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `ubo-${index + 1}`, shareholderType: 'Individual', isUbo: true }))];
   const managers = rows(c.managers);
@@ -189,7 +194,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
           text(row.identityNumber), text(row.shareholderPercentage ?? row.ownershipPercentage), text(row.residenceAddress), text(row.linkedClientName), row.isUbo ? 'Yes' : 'No'
         ])
       ),
-      para([t(`Total shareholder %: ${text(b.totalOwnershipPercentage) || '0'}% | Total UBO %: ${text(b.totalUboPercentage) || '0'}%`, true)], { spaceBefore: 4, spaceAfter: 1 }),
+      para([t(`Total shareholder %: ${Number(shareholderTotal.toFixed(2))}% | Total UBO %: ${text(b.totalUboPercentage) || '0'}%`, true)], { spaceBefore: 4, spaceAfter: 1 }),
       para(`Beneficial person different from listed parties: ${text(b.uboDifferentFromShareholders) || 'No'}`, { spaceAfter: 1 }),
       para(`Beneficial structure notes: ${dash(text(b.uboGroupStructureNotes))}`, { spaceAfter: 4 }),
       { kind: 'diagram', title: 'Control Structure', diagram, emptyText: 'No control structure generated.' },
@@ -207,14 +212,14 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       ])
     )]),
 
-    section('D. Compliance and Risk Information', [fields([
+    ...(a.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !payload.fullKycStarted ? [] : [section('D. Compliance and Risk Information', [fields([
       ['Any PEP exposure?', text(d.pepQuestion)],
       ['PEP details', text(d.pepDetails)],
       ['Any sanction exposure?', text(d.sanctionQuestion)],
       ['Sanction details', text(d.sanctionDetails)],
       ['Any dual citizenship?', text(d.dualCitizenshipQuestion)],
       ['Dual citizenship details', text(d.dualCitizenshipDetails)]
-    ])]),
+    ])])]),
 
     section('E. Key Communication Person', [fields([
       ['Full name', text(e.fullName)],

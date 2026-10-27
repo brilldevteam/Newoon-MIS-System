@@ -254,7 +254,7 @@ export type KycCase = {
   }>;
   id: string;
   sourceEnquiry?: { id: string; enquiryType: EnquiryType; details?: Record<string, unknown> | null } | null;
-  kycForm?: { status: string } | null;
+  kycForm?: { status: string; fullKycStarted?: boolean; isLocked?: boolean } | null;
   title: string;
   kycNumber?: string;
   status: KycCaseStatus;

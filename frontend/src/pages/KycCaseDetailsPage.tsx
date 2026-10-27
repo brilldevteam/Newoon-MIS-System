@@ -258,11 +258,12 @@ export function KycCaseDetailsPage() {
     return <p className="text-sm text-slate-500">Loading KYC case...</p>;
   }
 
-  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ||
+    (kycCase.status === 'AML_REVIEW_STARTED' && kycCase.kycForm?.fullKycStarted === true && kycCase.kycForm.status === 'AMENDMENT_DRAFT' && !kycCase.kycForm.isLocked);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const canUploadDocuments =
     hasAnyRole(user, workflowRoles.documentUpload) &&
-    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+    preparationEditable;
   const canDeleteDocuments = hasAnyRole(user, workflowRoles.documentDelete);
   const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
   const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
@@ -291,11 +292,11 @@ export function KycCaseDetailsPage() {
             : null
       : null;
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
-  const finalDecisionRole = isPreliminaryProposedCompany ? 'AML Supervisor' : kycCase.status === 'SEF_APPROVED' ? 'SEF' : 'MLRO';
+  const finalDecisionRole = 'AML Supervisor, DMLRO or MLRO';
   const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const canCompleteFinalKycDecision =
-    (isPreliminaryProposedCompany && finalDecisionPending && hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
-    (!isPreliminaryProposedCompany && ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
+    (finalDecisionPending && hasAnyRole(user, ['AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
+    (isPreliminaryProposedCompany && finalDecisionPending && hasAnyRole(user, ['AML_TEAM'])) ||
     (kycCase.status === 'SEF_APPROVED' && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN']));
   const canReturnToBd =
     Boolean(kycCase.sourceEnquiry) &&

@@ -71,7 +71,7 @@ async function main() {
   tx.crrfRecord.findFirst = async () => ({ riskRating: 'MEDIUM', documents: [{ storagePath: 'synthetic.pdf' }] });
   await assert.rejects(route, /VALID_PACKAGE_REACHED_LOCK/);
   service.serializeForm = () => ({ sectionA: {}, sectionB: { shareholders: [{ fullName: 'Missing Owner', identityNumber: '999' }], ubos: [] }, sectionC: { managers: [] } });
-  tx.kycForm.findFirst = async () => ({});
+  tx.kycForm.findFirst = async () => ({ sections: [{ sectionKey: 'COMPLIANCE_RISK', data: { pepQuestion: 'No', sanctionQuestion: 'No', dualCitizenshipQuestion: 'No' } }] });
   await assert.rejects(route, /Complete Screening/);
   tx.kycForm.findFirst = async () => null;
   tx.screeningCaseDocument.findMany = async () => [];
