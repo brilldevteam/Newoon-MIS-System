@@ -58,12 +58,16 @@ async function run() {
       assert.equal(await page.$eval('#login-email', (el) => el.value), '');
       assert.equal(await page.$eval('#login-password', (el) => el.value), '');
       assert.ok(!(await page.$eval('body', (el) => el.innerText)).includes('Workflow test access'));
+      assert.match(await page.$eval('h1', (el) => el.textContent), /Get Started Now/);
+      assert.equal(await page.$eval('aside', (el) => getComputedStyle(el).display !== 'none'), width >= 1024);
+      const dimensions = await page.evaluate(() => ['login-email', 'login-password'].map((id) => { const rect = document.getElementById(id).parentElement.getBoundingClientRect(); return { width: rect.width, height: rect.height }; }));
+      assert.deepEqual(dimensions[0], dimensions[1], 'Login input containers must have equal dimensions');
       await page.screenshot({ path: path.join(output, `${name}-login-empty.png`), fullPage: true });
       await page.click('[aria-label="Show password"]');
       assert.equal(await page.$eval('#login-password', (el) => el.type), 'text');
       await page.click('[aria-label="Hide password"]');
       await page.type('#login-email', 'wrong@example.invalid'); await page.type('#login-password', 'Synthetic-wrong-password');
-      await clickText('Sign in'); await page.waitForSelector('[role="alert"]');
+      await clickText('Log in'); await page.waitForSelector('[role="alert"]');
       assert.match(await page.$eval('[role="alert"]', (el) => el.textContent), /Invalid email/);
       await noOverflow(); await page.screenshot({ path: path.join(output, `${name}-login.png`), fullPage: true });
       await page.goto('http://fixture.test/users'); await page.waitForFunction(() => document.querySelector('#root').textContent.includes('admin@example.invalid'));
@@ -93,7 +97,7 @@ async function run() {
       allowLogin = true;
       await page.goto('http://fixture.test/login');
       await page.type('#login-email', 'admin@example.invalid'); await page.type('#login-password', 'Synthetic-valid-password');
-      await clickText('Sign in'); await page.waitForFunction(() => document.querySelector('#root').textContent.includes('Dashboard fixture'));
+      await clickText('Log in'); await page.waitForFunction(() => document.querySelector('#root').textContent.includes('Dashboard fixture'));
       assert.equal(await page.evaluate(() => localStorage.getItem('newoon_token')), 'fixture-token');
       assert.deepEqual(errors, []); await page.close();
     }
