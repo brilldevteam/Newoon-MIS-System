@@ -1,5 +1,12 @@
 # Newoon MIS Developer Handover
 
+## Login and User Administration (2026-10-29)
+
+- Login is now a compact sign-in screen with empty fields, no default password and no public demo-account shortcuts. Email whitespace/case is normalized; invalid credentials still fail bcrypt verification. This does not reset existing accounts or remove development seed data.
+- Users now supports tenant-scoped account creation, profile/role/status editing and admin password reset. Company Admin cannot assign/manage Super Admin, suspend itself, change its own roles or remove the last active company admin. Service-level role checks remain mandatory even when area permissions are configured. Writes and audits share transactions; company-admin edits lock the tenant for last-admin checks.
+- Assign existing workflow roles rather than inventing new role names. Global role/module permissions remain in the existing Super-Admin-only Access Control page. No schema migration, seed, invitation email or public registration was added. Password reset does not revoke existing JWTs; suspension is checked at subsequent requests. Do not claim full session revocation.
+- Operator recovery: `node --env-file=backend/.env backend/scripts/reset-admin-password.cjs` from repo root in an interactive terminal. It changes only an existing administrator password, prompts privately and records an audit. See [User Administration](USER_ADMINISTRATION.md) for procedures and verification commands. Deploy frontend and backend together; server credentials/data were not modified locally.
+
 ## Preliminary to Full KYC Preparation (2026-10-27)
 
 - Choosing full KYC completion creates an archived original and opens the populated new revision at `SUPERVISOR_REVIEW_PENDING`, with a Supervisor task. Completed review tasks are retained instead of deleted. Workflow/reviewer comments, submitted review versions, signatures/stamps in the archived form, generated exports and status history are not deleted by this conversion.
