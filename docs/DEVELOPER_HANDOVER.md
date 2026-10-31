@@ -1,5 +1,12 @@
 # Newoon MIS Developer Handover
 
+## Dashboard Reporting Accuracy (2026-10-31)
+
+- Dashboard Clients counts ACTIVE records only, matching the existing Clients register. PROSPECT records created during intake are not activated or deleted by this fix. Tenant totals query stored tenants instead of assuming one; users without a tenant cannot request tenant-scoped metrics.
+- Preparation totals include returned, legacy AML preparation and final-document/signature stages. Approval totals include pending, in-progress, information-request and intermediate approval stages. The two dashboard-linked workflow filters use the same status sets; case transitions and unfiltered lists are unchanged. Rejected/on-hold cases are outside these active/approved groups.
+- Counts remain database-derived and scoped to the current tenant (Super Admin spans tenants). Enabled modules counts enabled tenant-module assignments, not the module catalog. The percentage is explicitly labelled as the approval rate among tracked preparation/review/approved cases, not a general health score. Failed summary requests show an error rather than fabricated zero totals.
+- Verify after building with `node backend/scripts/check-dashboard-summary.cjs`. Checks use synthetic persistence; deployed data, real database concurrency and server behavior require separate verification. No migration, seed or data rewrite is needed.
+
 ## Login and User Administration (2026-10-29)
 
 - Login retains its original split branding/form layout, with equally sized input/button controls and responsive spacing. Fields start empty, with no default password or public demo-account shortcuts. Email whitespace/case is normalized; invalid credentials still fail bcrypt verification. This does not reset existing accounts or remove development seed data.

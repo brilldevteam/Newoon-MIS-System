@@ -35,8 +35,8 @@ export function KycWorkflowPage() {
   const canEditOrDeleteCases = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
   const activeFilter = searchParams.get('filter') || '';
   const visibleCases = cases.filter((kycCase) => {
-    if (activeFilter === 'pending-kyc') return ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED'].includes(kycCase.status);
-    if (activeFilter === 'pending-approvals') return ['SUPERVISOR_REVIEW_PENDING', 'DMLRO_REVIEW_PENDING', 'MLRO_REVIEW_PENDING', 'SEF_DECISION_PENDING'].includes(kycCase.status);
+    if (activeFilter === 'pending-kyc') return ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'RETURNED_TO_BD', 'SUBMITTED_TO_AML', 'AML_REVIEW_STARTED', 'FINAL_SIGNATURES_PENDING', 'FINAL_DOCUMENTS_PENDING'].includes(kycCase.status);
+    if (activeFilter === 'pending-approvals') return ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_REVIEW_IN_PROGRESS', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_REVIEW_COMPLETED', 'MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS', 'SEF_APPROVED'].includes(kycCase.status);
     return true;
   });
 
