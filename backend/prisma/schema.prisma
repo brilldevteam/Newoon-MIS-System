@@ -72,6 +72,7 @@ model Tenant {
 }
 
 model User {
+  profile UserProfile?
   id           String         @id @default(uuid())
   tenantId     String?
   tenant       Tenant?        @relation(fields: [tenantId], references: [id])
@@ -1261,4 +1262,12 @@ model AuditLog {
   metadata   Json?
   ipAddress  String?
   createdAt  DateTime    @default(now())
+}
+
+model UserProfile {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio String @default("")
+  avatarDataUrl String?
+  updatedAt DateTime @updatedAt
 }

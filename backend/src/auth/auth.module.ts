@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SelfPasswordController, SelfPasswordService } from './self-password.controller';
+import { SelfProfileController, SelfProfileService } from './self-profile.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { AccessControlModule } from '../access-control/access-control.module';
 
@@ -23,8 +24,8 @@ import { AccessControlModule } from '../access-control/access-control.module';
       })
     })
   ],
-  controllers: [AuthController, SelfPasswordController],
-  providers: [AuthService, JwtStrategy, SelfPasswordService],
+  controllers: [AuthController, SelfPasswordController, SelfProfileController],
+  providers: [AuthService, JwtStrategy, SelfPasswordService, SelfProfileService],
   exports: [AuthService]
 })
 export class AuthModule {}

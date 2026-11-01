@@ -7,25 +7,23 @@ import {
   LayoutDashboard,
   Layers,
   ListChecks,
-  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   SearchCheck,
   SlidersHorizontal,
   ShieldCheck,
-  UserCircle,
   UserRoundPlus,
   Users
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { AccountMenu } from '../components/AccountMenu';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
 import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
-  { to: '/account/password', label: 'Change Password', icon: UserCircle, roles: [] },
   { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake, area: 'clients' },
   { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
@@ -244,25 +242,7 @@ export function AppLayout() {
                 ) : null}
               </div>
             ) : null}
-            {user ? (
-              <div className="hidden items-center gap-2 border-r border-slate-200 pr-3 sm:flex">
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-700">
-                  <UserCircle className="h-5 w-5" />
-                </span>
-                <div className="min-w-0 text-right">
-                  <p className="truncate text-sm font-semibold text-slate-950">{fullName || user.email}</p>
-                  <p className="truncate text-xs text-slate-500">{roleList(user)}</p>
-                </div>
-              </div>
-            ) : null}
-            <button
-              type="button"
-              onClick={logout}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Logout</span>
-            </button>
+            {user ? <AccountMenu name={fullName || user.email} role={roleList(user)} logout={logout} /> : null}
           </div>
         </header>
         <main className="min-w-0 px-4 py-6 lg:px-8">

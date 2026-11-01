@@ -10,6 +10,7 @@ import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
 import { ChangePasswordPage } from '../pages/ChangePasswordPage';
+import { MyProfilePage } from '../pages/MyProfilePage';
 import { AddEnquiryPage } from '../pages/AddEnquiryPage';
 import { EnquiryDetailsPage } from '../pages/EnquiryDetailsPage';
 import { EnquiryListPage } from '../pages/EnquiryListPage';
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
           { path: '/account/password', element: <ChangePasswordPage /> },
+          { path: '/account/profile', element: <MyProfilePage /> },
           {
             element: <RequireAccess area="enquiries" fallbackRoles={workflowRoles.enquiries} />,
             children: [{ path: '/enquiries', element: <EnquiryListPage /> }]
