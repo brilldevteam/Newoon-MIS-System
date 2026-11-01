@@ -25,6 +25,7 @@ import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
+  { to: '/account/password', label: 'Change Password', icon: UserCircle, roles: [] },
   { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake, area: 'clients' },
   { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },

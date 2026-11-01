@@ -9,6 +9,7 @@ import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
+import { ChangePasswordPage } from '../pages/ChangePasswordPage';
 import { AddEnquiryPage } from '../pages/AddEnquiryPage';
 import { EnquiryDetailsPage } from '../pages/EnquiryDetailsPage';
 import { EnquiryListPage } from '../pages/EnquiryListPage';
@@ -45,6 +46,7 @@ export const router = createBrowserRouter([
           { path: '/', element: <HomeRedirect /> },
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
+          { path: '/account/password', element: <ChangePasswordPage /> },
           {
             element: <RequireAccess area="enquiries" fallbackRoles={workflowRoles.enquiries} />,
             children: [{ path: '/enquiries', element: <EnquiryListPage /> }]
