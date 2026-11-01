@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Camera, Save, Trash2, UserCircle } from 'lucide-react';
+import { Camera, CheckCircle2, LoaderCircle, Save, Trash2, UserCircle } from 'lucide-react';
 import { getSelfProfile, saveSelfProfile, SelfProfile } from '../services/profile.service';
 import { getApiErrorMessage } from '../services/api';
-import { Link } from 'react-router-dom';
+import { AccountSettingsLayout } from '../components/AccountSettingsLayout';
 
 export function MyProfilePage() {
   const [account, setAccount] = useState<SelfProfile | null>(null);
@@ -42,20 +42,28 @@ export function MyProfilePage() {
       window.dispatchEvent(new Event('profile-updated')); setSaved(true);
     } catch (err) { setError(getApiErrorMessage(err, 'Unable to save profile.')); } finally { setBusy(false); }
   }
-  if (loading) return <p role="status">Loading profile...</p>;
-  return <section className="mx-auto w-full max-w-2xl space-y-6">
-    <header className="flex flex-wrap items-center justify-between gap-3"><h1 className="text-2xl font-semibold">My Profile</h1><Link to="/account/password" className="text-sm font-semibold text-brand-700">Change Password</Link></header>
-    {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-    {account && <form onSubmit={submit} className="space-y-6" aria-busy={busy}>
-      <div className="flex flex-wrap items-center gap-4"><span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-slate-400">{avatarDataUrl ? <img src={avatarDataUrl} alt="Profile picture" className="h-full w-full object-cover" /> : <UserCircle className="h-14 w-14" />}</span>
-        <div className="space-y-2"><label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"><Camera className="h-4 w-4" />Change picture<input aria-label="Profile picture" type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} className="sr-only" onChange={(event) => { void picture(event.target.files?.[0]); event.target.value = ''; }} /></label>
-        {avatarDataUrl && <button title="Remove picture" aria-label="Remove picture" type="button" disabled={busy} onClick={() => { setAvatar(null); setSaved(false); }} className="ml-2 rounded-md p-2 text-slate-500 hover:bg-slate-100"><Trash2 className="h-4 w-4" /></button>}<p className="text-xs text-slate-500">PNG, JPEG or WebP. Maximum 2 MB.</p></div>
-      </div>
-      <div className="grid gap-5 sm:grid-cols-2">{[['First name', 'profile-first', firstName, setFirst], ['Last name', 'profile-last', lastName, setLast]].map(([label, id, value, setter]) => <div key={id as string}><label htmlFor={id as string} className="text-sm font-medium">{label as string}</label><input id={id as string} value={value as string} onChange={(event) => { (setter as (value: string) => void)(event.target.value); setSaved(false); }} required maxLength={80} disabled={busy} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2" /></div>)}</div>
-      <dl className="grid gap-4 border-y border-slate-200 py-4 text-sm sm:grid-cols-2"><div><dt className="text-slate-500">Email</dt><dd className="mt-1 break-all">{account.email}</dd></div><div><dt className="text-slate-500">Role</dt><dd className="mt-1 break-words">{account.roles.map((row) => row.role.name.replace(/_/g, ' ')).join(', ')}</dd></div></dl>
-      <div><label htmlFor="profile-bio" className="text-sm font-medium">Bio</label><textarea id="profile-bio" rows={5} maxLength={500} value={bio} disabled={busy} onChange={(event) => { setBio(event.target.value); setSaved(false); }} className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2" /><p className="text-right text-xs text-slate-500">{bio.length}/500</p></div>
-      {saved && <p role="status" className="text-sm text-emerald-700">Profile saved.</p>}
-      <button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-md bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"><Save className="h-4 w-4" />{busy ? 'Saving...' : 'Save profile'}</button>
-    </form>}
-  </section>;
+  return <AccountSettingsLayout title="My Profile">
+    {loading ? <p role="status" className="flex items-center gap-2 p-6 text-sm text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin" />Loading profile...</p> : <>
+      {error && <p role="alert" className="m-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {account && <form onSubmit={submit} aria-busy={busy}>
+        <div className="flex flex-wrap items-center gap-5 border-b border-slate-200 bg-slate-50/70 p-5 sm:px-7 sm:py-6">
+          <span className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white text-brand-600 ring-4 ring-white shadow-sm">{avatarDataUrl ? <img src={avatarDataUrl} alt="Profile picture" className="h-full w-full object-cover" /> : <UserCircle className="h-12 w-12" />}</span>
+          <div className="min-w-0 space-y-2"><h2 className="text-sm font-semibold text-slate-900">Profile picture</h2><div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-within:ring-2 focus-within:ring-brand-600"><Camera className="h-4 w-4" />Change picture<input aria-label="Profile picture" type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} className="sr-only" onChange={(event) => { void picture(event.target.files?.[0]); event.target.value = ''; }} /></label>
+            {avatarDataUrl && <button title="Remove picture" aria-label="Remove picture" type="button" disabled={busy} onClick={() => { setAvatar(null); setSaved(false); }} className="grid h-9 w-9 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>}
+          </div><p className="text-xs text-slate-500">PNG, JPEG or WebP. Maximum 2 MB.</p></div>
+        </div>
+        <div className="space-y-6 p-5 sm:p-7">
+          <h2 className="text-sm font-semibold text-slate-950">Personal details</h2>
+          <div className="grid gap-5 sm:grid-cols-2">{[{ label: 'First name', id: 'profile-first', value: firstName, set: setFirst }, { label: 'Last name', id: 'profile-last', value: lastName, set: setLast }].map((field) => <div key={field.id}><label htmlFor={field.id} className="text-sm font-medium text-slate-700">{field.label}</label><input id={field.id} value={field.value} onChange={(event) => { field.set(event.target.value); setSaved(false); }} required maxLength={80} disabled={busy} className="mt-2 h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50" /></div>)}</div>
+          <dl className="grid gap-5 border-y border-slate-100 py-5 text-sm sm:grid-cols-2"><div><dt className="text-xs font-medium text-slate-500">Email address</dt><dd className="mt-2 break-all text-slate-800">{account.email}</dd></div><div><dt className="text-xs font-medium text-slate-500">Role</dt><dd className="mt-2 break-words font-medium text-slate-800">{account.roles.map((row) => row.role.name.replace(/_/g, ' ')).join(', ')}</dd></div></dl>
+          <div><div className="flex items-center justify-between gap-3"><label htmlFor="profile-bio" className="text-sm font-medium text-slate-700">Bio</label><span className="text-xs text-slate-400">Optional</span></div><textarea id="profile-bio" rows={4} maxLength={500} value={bio} disabled={busy} onChange={(event) => { setBio(event.target.value); setSaved(false); }} className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-3 text-sm leading-6 text-slate-900 shadow-sm outline-none transition focus:border-brand-600 focus:ring-2 focus:ring-brand-100" /><p className="mt-1 text-right text-xs tabular-nums text-slate-400">{bio.length}/500</p></div>
+        </div>
+        <footer className="flex flex-wrap items-center justify-end gap-4 border-t border-slate-200 bg-slate-50/60 px-5 py-4 sm:px-7">
+          {saved && <p role="status" className="mr-auto flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 className="h-4 w-4" />Profile saved.</p>}
+          <button type="submit" disabled={busy} className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-md bg-brand-700 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-800 focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2 disabled:opacity-60">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{busy ? 'Saving...' : 'Save profile'}</button>
+        </footer>
+      </form>}
+    </>}
+  </AccountSettingsLayout>;
 }

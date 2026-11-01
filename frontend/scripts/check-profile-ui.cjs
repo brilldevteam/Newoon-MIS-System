@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'); const path = require('node:path'); const os = require('node:os');
 const esbuild = require('esbuild'); const puppeteer = require('puppeteer-core');
 async function main() {
-  const bundle = esbuild.buildSync({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {MemoryRouter,Routes,Route} from 'react-router-dom'; import {AccountMenu} from './frontend/src/components/AccountMenu'; import {MyProfilePage} from './frontend/src/pages/MyProfilePage'; createRoot(document.getElementById('root')).render(<MemoryRouter><header className='flex justify-end p-4'><AccountMenu name='Sample Person' role='SEF' logout={()=>localStorage.removeItem('newoon_token')}/></header><main className='p-4'><Routes><Route path='/' element={<p>Workspace</p>}/><Route path='/account/profile' element={<MyProfilePage/>}/></Routes></main></MemoryRouter>);`, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'import.meta.env.VITE_API_URL': JSON.stringify('/api') } });
+  const bundle = esbuild.buildSync({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {MemoryRouter,Routes,Route} from 'react-router-dom'; import {AccountMenu} from './frontend/src/components/AccountMenu'; import {MyProfilePage} from './frontend/src/pages/MyProfilePage'; import {ChangePasswordPage} from './frontend/src/pages/ChangePasswordPage'; createRoot(document.getElementById('root')).render(<MemoryRouter><header className='flex justify-end p-4'><AccountMenu name='Sample Person' role='SEF' logout={()=>localStorage.removeItem('newoon_token')}/></header><main className='p-4'><Routes><Route path='/' element={<p>Workspace</p>}/><Route path='/account/profile' element={<MyProfilePage/>}/><Route path='/account/password' element={<ChangePasswordPage/>}/></Routes></main></MemoryRouter>);`, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'import.meta.env.VITE_API_URL': JSON.stringify('/api') } });
   const assets = 'frontend/dist/assets'; const css = fs.readdirSync(assets).find((name) => name.endsWith('.css'));
   const html = `<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>${fs.readFileSync(path.join(assets, css), 'utf8')}</style></head><body><div id='root'></div><script>${bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless: true, args: ['--no-sandbox', '--disable-gpu'] });
@@ -15,6 +15,7 @@ async function main() {
       await page.setRequestInterception(true);
       page.on('request', (request) => {
         const url = new URL(request.url());
+        if (url.pathname === '/api/auth/change-password') return void request.respond({ contentType: 'application/json', body: JSON.stringify({ message: 'Password changed' }) });
         if (url.pathname.endsWith('.woff2')) return void request.respond({ contentType: 'font/woff2', body: fs.readFileSync(path.join(assets, path.basename(url.pathname))) });
         if (url.pathname === '/api/auth/profile') {
           if (request.method() === 'PATCH' && !fail) { const body = JSON.parse(request.postData()); assert.equal(body.roles, undefined); profile = { ...profile, firstName: body.firstName, lastName: body.lastName, profile: { bio: body.bio, avatarDataUrl: body.avatarDataUrl } }; }
@@ -37,7 +38,16 @@ async function main() {
       await page.waitForFunction(() => document.querySelector('#root').textContent.includes('Profile saved.')); assert.equal(profile.profile.avatarDataUrl, null);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await page.screenshot({ path: path.join(output, `profile-${width}.png`), fullPage: true });
-      fail = true; await page.click('button[type="submit"]'); await page.waitForSelector('[role="alert"]'); assert.deepEqual(errors, []); await page.close();
+      fail = true; await page.click('button[type="submit"]'); await page.waitForSelector('[role="alert"]');
+      await page.click('nav[aria-label="Account settings"] a[href="/account/password"]'); await page.waitForSelector('#current-password');
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: path.join(output, `password-${width}.png`), fullPage: true });
+      await page.type('#current-password', 'Synthetic-current-password'); await page.type('#new-password', 'Synthetic-new-password-2026'); await page.type('#confirm-password', 'Synthetic-other-password-2026');
+      await page.click('button[type="submit"]'); await page.waitForSelector('[role="alert"]');
+      assert.match(await page.$eval('[role="alert"]', (el) => el.textContent), /do not match/);
+      await page.$eval('#confirm-password', (el) => { const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(el, 'Synthetic-new-password-2026'); el.dispatchEvent(new Event('input', { bubbles: true })); });
+      await page.click('button[type="submit"]'); await page.waitForFunction(() => document.querySelector('#root').textContent.includes('Sign in again with your new password.'));
+      assert.deepEqual(errors, []); await page.close();
     }
     console.log(`Profile browser checks passed: dropdown/Escape, navigation, save, picture/remove, error and desktop/mobile layout. Screenshots: ${output}`);
   } finally { await browser.close(); }
