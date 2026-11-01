@@ -261,7 +261,7 @@ export function EnquiryDetailsPage() {
         </dl>
       </section>
 
-      {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? <PreliminaryKycDocument data={{ ...preliminaryKyc, expectedBusiness: preliminaryKyc.expectedBusiness || enquiry.requestedServices }} /> : null}
+      {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? <PreliminaryKycDocument data={{ ...preliminaryKyc, kycNumber: generatedKycCase?.kycNumber || '', expectedBusiness: preliminaryKyc.expectedBusiness || enquiry.requestedServices }} /> : null}
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white">

@@ -656,7 +656,9 @@ export class EnquiriesService {
     const enquiry = await this.findOne(user, id);
     this.assertProposedCompanyEnquiry(enquiry);
     const details = this.objectValue(enquiry.details);
-    return { enquiry, data: this.objectValue(details.preliminaryKyc), completedAt: this.optionalText(this.objectValue(details.preliminaryKyc).completedAt) };
+    const preliminary = this.objectValue(details.preliminaryKyc);
+    const kycNumber = enquiry.generatedKycCases[0]?.kycNumber;
+    return { enquiry, data: Object.keys(preliminary).length ? { ...preliminary, kycNumber: kycNumber || '' } : preliminary, completedAt: this.optionalText(preliminary.completedAt) };
   }
 
   async savePreliminaryKyc(user: RequestUser, id: string, dto: Record<string, unknown>) {

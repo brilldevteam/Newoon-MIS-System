@@ -1326,8 +1326,9 @@ export class KycService {
     };
     const isDocx = type === KycGeneratedDocumentType.DOCX;
     if (isDocx && payload.preliminaryDocument) throw new BadRequestException('Download preliminary revisions as PDF to preserve their original layout.');
+    const archivedPreliminary = { ...preliminaryObject(payload.preliminaryDocument), kycNumber: preliminaryObject(payload.preliminaryDocument).kycNumber || preliminaryObject(payload.sectionA).reference };
     const content = payload.preliminaryDocument
-      ? await this.pdfRenderer.render(preliminaryPdfHtml(preliminaryObject(payload.preliminaryDocument)), { headerTemplate: '<span></span>', footerTemplate: '<span></span>', marginTopMm: 12, marginBottomMm: 12, marginLeftMm: 12, marginRightMm: 12 })
+      ? await this.pdfRenderer.render(preliminaryPdfHtml(archivedPreliminary), { headerTemplate: '<span></span>', footerTemplate: '<span></span>', marginTopMm: 12, marginBottomMm: 12, marginLeftMm: 12, marginRightMm: 12 })
       : isDocx ? await exportKycDocx(exportPayload, revision.version) : await exportKycPdf(exportPayload, revision.version, this.pdfRenderer);
     await this.prisma.$transaction((tx) => this.audit(tx, user, revision.tenantId, 'KycFormRevision', revision.id, { action: 'KYC_REVISION_DOWNLOADED', version: revision.version, type }));
     return { content, fileName: `KYC-Revision-${revision.version}.${isDocx ? 'docx' : 'pdf'}`, mimeType: isDocx ? KYC_DOCX_MIME : KYC_PDF_MIME };
@@ -1823,7 +1824,7 @@ export class KycService {
   }
 
   async generateDocument(user: RequestUser, id: string, type: KycGeneratedDocumentType) {
-    const form = await this.getFormRecord(user, id);
+    const form = await this.ensureKycNumber(await this.getFormRecord(user, id));
     // The client form has an AML Supervisor "Comments" row; only the formal (non-confidential) comment is exported.
     const supervisorSubmission = await this.prisma.internalReviewSubmission.findFirst({
       where: { kycCaseId: id, tenantId: form.tenantId, stage: ReviewStage.SUPERVISOR },
@@ -2081,11 +2082,12 @@ export class KycService {
       status: form.status,
       isLocked: form.isLocked,
       version: form.version,
-      preliminaryDocument,
+      preliminaryDocument: preliminaryDocument && (form.kycCase.kycNumber || this.text(sectionA.reference))
+        ? { ...preliminaryDocument, kycNumber: form.kycCase.kycNumber || this.text(sectionA.reference) } : preliminaryDocument,
       fullKycStarted: form.fullKycStarted,
       sectionA: {
         ...sectionA,
-        reference: this.text(sectionA.reference)
+        reference: form.kycCase.kycNumber || this.text(sectionA.reference)
       },
       sectionB: {
         ...ownershipSection,
