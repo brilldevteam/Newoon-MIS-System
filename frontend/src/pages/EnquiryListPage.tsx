@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.service';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
 import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
@@ -36,7 +37,6 @@ export function EnquiryListPage() {
   const [error, setError] = useState('');
   const canDeleteEnquiries = hasAnyRole(user, ['SUPER_ADMIN']);
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
-  const canEditEnquiries = hasAnyRole(user, workflowRoles.enquiryEditing);
 
   useEffect(() => {
     loadEnquiries();
@@ -134,7 +134,7 @@ export function EnquiryListPage() {
                         <Link to={`/enquiries/${enquiry.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="View">
                           <Eye className="h-4 w-4" />
                         </Link>
-                        {canEditEnquiries ? (
+                        {canEditEnquiryRecord(user, enquiry) ? (
                           <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="Edit">
                             <Edit3 className="h-4 w-4" />
                           </Link>

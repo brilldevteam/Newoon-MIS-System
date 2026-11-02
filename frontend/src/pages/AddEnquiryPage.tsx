@@ -12,7 +12,7 @@ import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, up
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 import { useAuth } from '../hooks/useAuth';
-import { hasAnyRole } from '../utils/access-control';
+import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
 
 const enquiryTypes: EnquiryType[] = ['EXISTING_LEGAL_ENTITY', 'PROPOSED_COMPANY', 'CURRENT_CLIENT_NEW_SERVICES'];
 
@@ -338,7 +338,7 @@ function validateEnquiryForm(form: EnquiryValidationForm): { step: EnquiryStep; 
 }
 
 export function AddEnquiryPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
   const isEditMode = Boolean(id);
@@ -388,11 +388,12 @@ export function AddEnquiryPage() {
   const [declarationFiles, setDeclarationFiles] = useState<{ authorizedSignature?: File; companyStamp?: File }>({});
 
   useEffect(() => {
+    if (authLoading) return;
     Promise.all([listClients(), id ? getEnquiry(id) : Promise.resolve(null)])
       .then(([clientItems, enquiry]) => {
         setClients(clientItems);
         if (!enquiry) return;
-        if (!hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']) && enquiry.generatedKycCases?.some((item) => !['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(item.status))) {
+        if (!canEditEnquiryRecord(user, enquiry)) {
           navigate(`/enquiries/${id}`, { replace: true });
           return;
         }
@@ -458,7 +459,7 @@ export function AddEnquiryPage() {
       })
       .catch((requestError: any) => setError(getRequestErrorMessage(requestError, 'Unable to load enquiry details.')))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, authLoading]);
 
   function buildPayload(completed: boolean): EnquiryPayload {
     const keyContactDetails =

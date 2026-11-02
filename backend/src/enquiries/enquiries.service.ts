@@ -878,10 +878,10 @@ export class EnquiriesService {
         where: { sourceEnquiryId: enquiryId, ...this.tenantWhere(user) },
         select: { status: true }
       });
-      const preparationStatuses: KycCaseStatus[] = [KycCaseStatus.INQUIRY_RECEIVED, KycCaseStatus.PROPOSAL_OPTIONAL, KycCaseStatus.LEGAL_DOCUMENTS_PENDING, KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
+      const preparationStatuses: KycCaseStatus[] = [KycCaseStatus.INQUIRY_RECEIVED, KycCaseStatus.PROPOSAL_OPTIONAL, KycCaseStatus.LEGAL_DOCUMENTS_PENDING, KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED, KycCaseStatus.RETURNED_TO_BD, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
       if (cases.some((item) => !preparationStatuses.includes(item.status))) return false;
     }
-    if (!this.hasAnyRole(user, ['OPERATING_TEAM']) || this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM'])) {
+    if (this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM'])) {
       return true;
     }
 
