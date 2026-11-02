@@ -380,7 +380,7 @@ export type AppNotification = {
   isRead: boolean;
   createdAt: string;
   kycCase?: KycCase | null;
-  enquiry?: { id: string } | null;
+  enquiry?: { id: string; status?: string } | null;
 };
 
 export type ReviewTask = {

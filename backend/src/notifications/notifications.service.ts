@@ -12,7 +12,7 @@ export class NotificationsService {
       where: this.notificationWhere(user),
       include: {
         kycCase: { include: { client: true, service: true } },
-        enquiry: { select: { id: true } }
+        enquiry: { select: { id: true, status: true } }
       },
       orderBy: { createdAt: 'desc' },
       take: 20
@@ -33,7 +33,7 @@ export class NotificationsService {
       data: { isRead: true },
       include: {
         kycCase: { include: { client: true, service: true } },
-        enquiry: { select: { id: true } }
+        enquiry: { select: { id: true, status: true } }
       }
     });
   }
