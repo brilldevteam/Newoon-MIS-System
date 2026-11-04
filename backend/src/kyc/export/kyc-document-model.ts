@@ -1,6 +1,6 @@
 import { KycImage, normalizeImage } from './kyc-export-assets';
 import { beneficialOwners } from '../../common/ownership';
-import { uboDisplayName } from '../../common/ubo-display-name';
+import { uboCompanyName } from '../../common/ubo-display-name';
 import { commentLines } from '../../common/review-comments';
 import { decisionText, enumText, optionText, text } from './kyc-export-format';
 import { OwnershipDiagram, OwnershipParty, renderOwnershipDiagram } from './ownership-diagram';
@@ -200,8 +200,8 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       para(`Beneficial structure notes: ${dash(text(b.uboGroupStructureNotes))}`, { spaceAfter: 4 }),
       { kind: 'diagram', title: 'Control Structure', diagram, emptyText: 'No control structure generated.' },
       data(
-        [['Beneficial person', 20], ['Nationality', 14], ['DOB', 12], ['Identity No.', 16], ['UBO %', 9], ['Address', 29]],
-        beneficial.map((row) => [uboDisplayName(row, parties), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth), text(row.identityNumber), text(row.uboInterestPercentage ?? row.ownershipPercentage), text(row.residenceAddress)])
+        [['Beneficial person', 17], ['Company', 22], ['Nationality', 10], ['DOB', 10], ['Identity No.', 14], ['UBO %', 8], ['Address', 19]],
+        beneficial.map((row) => [text(row.fullName), uboCompanyName(row, parties), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth), text(row.identityNumber), text(row.uboInterestPercentage ?? row.ownershipPercentage), text(row.residenceAddress)])
       )
     ]),
 

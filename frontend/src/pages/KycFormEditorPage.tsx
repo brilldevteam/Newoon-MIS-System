@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { mergeBeneficialOwners } from '../utils/ownership';
-import { uboDisplayName } from '../utils/ubo-display-name';
+import { uboCompanyName } from '../utils/ubo-display-name';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
@@ -2362,7 +2362,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <p>Beneficial person different from listed parties: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>Beneficial structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
           <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
-          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [uboDisplayName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Beneficial person', 'Company', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} widths={[17, 22, 10, 10, 14, 8, 19]} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, uboCompanyName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
           <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
@@ -2896,8 +2896,8 @@ function renderPreviewValue(label: string, value: any) {
   return value || '-';
 }
 
-function PreviewTable({ headers, rows }: { headers: string[]; rows: any[][] }) {
-  return <table className="mt-2 w-full border-collapse text-[10px]"><thead><tr>{headers.map((header) => <th key={header} className="border border-slate-300 bg-slate-100 p-1 text-left">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{headers.map((header, cellIndex) => <td key={cellIndex} className="border border-slate-300 p-1">{renderPreviewValue(header, row[cellIndex])}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-slate-300 p-2 text-center text-slate-500">No rows added</td></tr>}</tbody></table>;
+function PreviewTable({ headers, rows, widths }: { headers: string[]; rows: any[][]; widths?: number[] }) {
+  return <table className={`mt-2 w-full border-collapse text-[10px] ${widths ? 'table-fixed [overflow-wrap:anywhere]' : ''}`}>{widths && <colgroup>{widths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>}<thead><tr>{headers.map((header) => <th key={header} className="border border-slate-300 bg-slate-100 p-1 text-left">{header}</th>)}</tr></thead><tbody>{rows.length ? rows.map((row, index) => <tr key={index}>{headers.map((header, cellIndex) => <td key={cellIndex} className="border border-slate-300 p-1">{renderPreviewValue(header, row[cellIndex])}</td>)}</tr>) : <tr><td colSpan={headers.length} className="border border-slate-300 p-2 text-center text-slate-500">No rows added</td></tr>}</tbody></table>;
 }
 
 function update(data: Record<string, any>, onChange: (value: Record<string, any>) => void, key: string, value: any) {
