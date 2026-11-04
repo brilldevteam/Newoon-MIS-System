@@ -1,4 +1,5 @@
 import { beneficialOwners } from '../common/ownership';
+import { uboDisplayName } from '../common/ubo-display-name';
 
 type Row = Record<string, unknown>;
 const object = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -24,7 +25,7 @@ export function preliminaryPdfHtml(data: Row): string {
     [1, `Proposed Company Name: ${data.companyName || '-'}`], [2, `Proposed Legal Form: ${data.proposedLegalForm || '-'}`], [3, `Jurisdiction of Registration: ${data.jurisdiction || '-'}`], [4, 'Country of incorporation: -'], [5, `Proposed Registered Office Address: ${data.registeredOfficeAddress || '-'}`], [6, `Proposed Business Activity: ${data.businessActivity || '-'}`], [7, `Expected Source of Initial Capital: ${data.sourceOfFunds || '-'}`], [8, `Expected Business from Newoon: ${Array.isArray(data.expectedBusiness) ? data.expectedBusiness.join(', ') : data.expectedBusiness || '-'}`]
   ])}
   ${table('Section B: Proposed Shareholders', ['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %'], parties(shareholders))}<p><strong>Total ownership %: ${total(shareholders)}%</strong></p>
-  ${table('Ultimate Beneficial Owners (Natural Person Only)', ['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'UBO %'], parties(ubos))}<p><strong>Total UBO %: ${total(ubos)}%</strong></p>
+  ${table('Ultimate Beneficial Owners (Natural Person Only)', ['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'UBO %'], parties(ubos.map((row) => ({ ...row, fullName: uboDisplayName(row, shareholders) }))))}<p><strong>Total UBO %: ${total(ubos)}%</strong></p>
   ${table('Section C: Proposed Management & Control Persons', ['No.', 'Name', 'Passport / QID', 'Nationality', 'Position'], rows(data.management).map((row, index) => [index + 1, row.fullName, row.identityNumber, row.nationality, Array.isArray(row.positions) && row.positions.length ? row.positions.join(', ') : row.position]))}
   ${table('Section D: Required Documents', ['Document', 'Available'], rows(data.documents).map((row) => [row.documentType, row.available ? 'Yes' : 'No']))}
   ${table('Section E: Key Contact Person', ['No.', 'Field', 'Details'], contactEntries.map(([label, item], index) => [index + 1, label, item]))}

@@ -1,0 +1,50 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs'); const path = require('node:path'); const os = require('node:os');
+const esbuild = require('esbuild'); const puppeteer = require('puppeteer-core'); const PizZip = require('pizzip');
+const { uboDisplayName } = require('../dist/common/ubo-display-name');
+const { beneficialOwners } = require('../dist/common/ownership');
+const { exportKycDocx, exportKycHtml } = require('../dist/kyc/export');
+const { preliminaryPdfHtml } = require('../dist/enquiries/preliminary-pdf');
+async function main() {
+  const parent = { id: 'company', fullName: 'Synthetic Corporate Holdings & Investment Company', shareholderType: 'Corporate Entity', shareholderPercentage: '100', ownershipPercentage: '100' };
+  const linked = { id: 'person', fullName: 'Synthetic Linked Individual', identityNumber: 'SYNTHETIC-001', shareholderType: 'Individual', parentRowId: 'company', isUbo: true, shareholderPercentage: '25', uboInterestPercentage: '25' };
+  const direct = { id: 'direct', fullName: 'Synthetic Direct Individual', shareholderType: 'Individual', isUbo: true, ownershipPercentage: '75' };
+  const shareholders = [parent, linked]; const before = JSON.stringify(shareholders);
+  const expected = `${linked.fullName} (Through: ${parent.fullName})`;
+  assert.equal(uboDisplayName(linked, shareholders), expected);
+  assert.equal(uboDisplayName({ ...linked, id: 'copy', sourceShareholderId: 'person', parentRowId: '' }, shareholders), expected);
+  assert.equal(uboDisplayName(direct, shareholders), direct.fullName);
+  assert.match(uboDisplayName({ ...linked, parentRowId: 'missing' }, shareholders), /unavailable/);
+  assert.equal(beneficialOwners(shareholders, [linked, direct]).length, 2, 'Keep existing deduplication');
+  const payload = { kycCaseId: 'synthetic', sectionA: { legalName: 'Synthetic Client', reference: 'KYC-SYNTHETIC', formVariant: 'STANDARD' }, sectionB: { shareholders, ubos: [linked, direct], totalUboPercentage: 100 }, sectionC: { managers: [] }, sectionD: {}, sectionE: {}, sectionF: {}, sectionG: {}, sectionH: {} };
+  const html = await exportKycHtml(payload, 1);
+  assert.ok(html.includes('Through: Synthetic Corporate Holdings &amp; Investment Company'));
+  const docx = await exportKycDocx(payload, 1); const xml = new PizZip(docx).file('word/document.xml').asText();
+  assert.ok(xml.includes('Through: Synthetic Corporate Holdings &amp; Investment Company'));
+  assert.ok(!xml.includes('Synthetic Direct Individual (Through:'));
+  const preliminary = { companyName: 'Synthetic Client', shareholders: [parent], ubos: [{ ...linked, ownershipPercentage: '25', uboPercentage: '25' }] };
+  assert.ok(preliminaryPdfHtml(preliminary).includes('Through: Synthetic Corporate Holdings &amp; Investment Company'));
+  assert.equal(JSON.stringify(shareholders), before, 'Display must not mutate ownership data');
+  const output = path.join(os.tmpdir(), 'newoon-ubo-company-display'); fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(path.join(output, 'linked-company.docx'), docx);
+  const bundle = esbuild.buildSync({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import {LiveDocumentPreviewPanel,normalizeForm} from './frontend/src/pages/KycFormEditorPage'; import {PreliminaryKycDocument} from './frontend/src/components/PreliminaryKycDocument'; import {uboDisplayName} from './frontend/src/utils/ubo-display-name'; window.displayName=uboDisplayName; const payload=${JSON.stringify(payload)}; createRoot(document.getElementById('root')).render(<><LiveDocumentPreviewPanel form={normalizeForm(payload)}/><PreliminaryKycDocument data={${JSON.stringify(preliminary)}} embedded/></>);`, resolveDir: process.cwd(), loader: 'tsx' }, loader: { '.css': 'empty' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'import.meta.env.VITE_API_URL': JSON.stringify('/api') } });
+  const assets = 'frontend/dist/assets'; const css = fs.readFileSync(path.join(assets, fs.readdirSync(assets).find((file) => file.endsWith('.css'))), 'utf8');
+  const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless: true, args: ['--no-sandbox', '--disable-gpu'] });
+  try {
+    const page = await browser.newPage(); const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.setViewport({ width: 1100, height: 900 });
+    await page.setContent(`<html><head><style>${css}</style></head><body><div id='root'></div><script>${bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script')}</script></body></html>`);
+    await page.waitForFunction(() => document.querySelector('#root').textContent.includes('Through:'));
+    assert.ok((await page.$eval('#root', (el) => el.textContent)).includes(expected));
+    assert.equal(await page.evaluate((args) => window.displayName(...args), [linked, shareholders]), expected);
+    await page.screenshot({ path: path.join(output, 'live-preview.png'), fullPage: true });
+    assert.ok((await page.$eval('aside', (el) => el.textContent)).includes(expected));
+    await page.evaluate(() => { const cell = [...document.querySelectorAll('aside td')].find((el) => el.textContent.includes('Through:')); cell.scrollIntoView({ block: 'center' }); });
+    await page.screenshot({ path: path.join(output, 'live-beneficial-table.png'), fullPage: true });
+    await page.setContent(html); await page.pdf({ path: path.join(output, 'linked-company.pdf'), format: 'A4', printBackground: true, margin: { top: '24mm', bottom: '22mm', left: '14mm', right: '14mm' } });
+    await page.screenshot({ path: path.join(output, 'pdf-source.png'), fullPage: true });
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+  console.log(`Linked UBO company display passed: frontend/full/preliminary exports, direct owners, source links, missing links and unchanged data/calculations. Synthetic previews: ${output}`);
+}
+main().catch((error) => { console.error(error); process.exitCode = 1; });

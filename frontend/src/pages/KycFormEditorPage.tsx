@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { mergeBeneficialOwners } from '../utils/ownership';
+import { uboDisplayName } from '../utils/ubo-display-name';
 import { Link, useParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
@@ -2361,7 +2362,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <p>Beneficial person different from listed parties: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>Beneficial structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
           <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
-          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
+          <PreviewTable headers={['Beneficial person', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} rows={effectiveUboRows(form.sectionB).map((row: Row) => [uboDisplayName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
         </PreviewSection>
         <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
           <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />

@@ -1,5 +1,6 @@
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { filledContactRows } from '../utils/contact-preview';
+import { uboDisplayName } from '../utils/ubo-display-name';
 
 export function PreliminaryKycDocument({ data, embedded = false }: { data: Record<string, any>; embedded?: boolean }) {
   const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
@@ -21,7 +22,7 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
       ]} />
       <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
       <p className="mt-1 font-bold">Total ownership %: {totalOwnership(rows(data.shareholders))}%</p>
-      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'UBO %']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Residence', 'UBO %']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(uboDisplayName(row, rows(data.shareholders))), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
       <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)))}%</p>
       <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />
       <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
