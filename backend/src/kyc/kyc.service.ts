@@ -924,6 +924,7 @@ export class KycService {
       if (finalReviewForm?.status === 'PRELIMINARY_FINAL_REVIEW' && (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)) {
         await tx.kycForm.update({ where: { kycCaseId: id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
         await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Final DMLRO and MLRO approval completed for the Preliminary KYC.');
+        await this.notifyReadyForClientConversion(tx, kycCase);
       }
       await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
@@ -1327,16 +1328,7 @@ export class KycService {
       throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({
-        where: { tenantId: kycCase.tenantId, kycCaseId: id },
-        data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
-      });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Approving review role confirmed the KYC as the final KYC.');
-      await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'APPROVED_KYC_MARKED_FINAL' });
-      await this.createNotification(tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION, 'Final KYC completed', `${kycCase.title} was marked as the final KYC and is ready for the engagement decision.`);
-      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    return this.markApprovedKycFinal(user, kycCase, 'Approving review role confirmed the KYC as the final KYC.', 'APPROVED_KYC_MARKED_FINAL');
   }
 
   private async beginFormAmendment(
@@ -1492,17 +1484,39 @@ export class KycService {
     }, { timeout: 60000 });
   }
 
+  // The Preliminary KYC already passed DMLRO and MLRO approval, so confirming it as final
+  // completes the KYC directly (no second approval round) and hands it to Operations.
   private async routePreliminaryFinalKycForApproval(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>) {
+    return this.markApprovedKycFinal(user, kycCase, 'Approved Preliminary KYC confirmed as the final KYC.', 'PRELIMINARY_KYC_MARKED_FINAL');
+  }
+
+  private async markApprovedKycFinal(
+    user: RequestUser, kycCase: { id: string; tenantId: string; title: string; status: KycCaseStatus }, note: string, action: string
+  ) {
     return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: 'PRELIMINARY_FINAL_REVIEW', isLocked: true, updatedBy: user.id } });
-      await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
-      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } } });
-      await tx.internalReviewTask.createMany({ data: [ReviewStage.DMLRO, ReviewStage.MLRO].map((stage) => ({ tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage, createdBy: user.id, updatedBy: user.id })) });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.DMLRO_REVIEW_PENDING, 'AML Supervisor marked the approved Preliminary KYC as final and sent it for final DMLRO and MLRO approval.');
-      await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final DMLRO approval.`);
-      await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final MLRO approval.`);
+      // Lock the case row so a double click or two reviewers cannot both complete it.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "KycCase" WHERE "id" = ${kycCase.id} AND "tenantId" = ${kycCase.tenantId} FOR UPDATE`);
+      const current = await tx.kycCase.findFirst({ where: { id: kycCase.id, tenantId: kycCase.tenantId }, select: { status: true } });
+      if (current?.status !== kycCase.status) throw new BadRequestException('The case changed during this action. Refresh before trying again.');
+      await tx.kycForm.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id },
+        data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
+      });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
+      await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action });
+      await this.notifyReadyForClientConversion(tx, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
     });
+  }
+
+  // Operations (and the reviewer roles) see CLIENT_READY_FOR_ACTIVATION; it opens the KYC case,
+  // where Operations converts the KYC to a client and uploads the signed engagement letter.
+  private notifyReadyForClientConversion(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; title: string }) {
+    return this.createNotification(
+      tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION,
+      'Final KYC approved - convert to client',
+      `${kycCase.title} is final. Operations: open the case, convert it to a client and upload the signed engagement letter.`
+    );
   }
 
   private async startPreliminaryFullKyc(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>, dto: Record<string, unknown>) {

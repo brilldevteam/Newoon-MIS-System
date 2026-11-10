@@ -1,5 +1,26 @@
 # Newoon MIS Developer Handover
 
+## Preliminary KYC Final Decision in One Step (2026-11-10)
+
+- Before this change, **Final KYC Decision → Use Preliminary KYC as final** on an approved Preliminary (proposed-company) KYC sent the case back for a second DMLRO and MLRO approval. It also locked the form (`KycForm.status = PRELIMINARY_FINAL_REVIEW`). That lock disabled Section H for the reviewers, so those cases could not move on.
+- That second round is removed. Confirming the approved Preliminary KYC as final now works like a normal KYC (`markApprovedKycFinal` in `backend/src/kyc/kyc.service.ts`):
+  - The form becomes `FINAL` and locked, and the case goes straight to `KYC_FINAL_APPROVED`.
+  - The first-round DMLRO and MLRO approvals stay submitted, so the activation checklist still counts them.
+  - Status history and an audit entry are written.
+  - The action locks the case row and refuses a repeat if the status has already changed.
+- Both paths (Preliminary and normal) send one `CLIENT_READY_FOR_ACTIVATION` notification, "Final KYC approved - convert to client". It reaches Operations (and the AML/reviewer roles), and its link opens the KYC case, where Operations converts the case to a client and uploads the signed engagement letter. The legacy MLRO completion for a `PRELIMINARY_FINAL_REVIEW` form now sends this notification too.
+- **Existing stuck cases:** `backend/scripts/finalize-preliminary-final-review.cjs` moves cases whose form is `PRELIMINARY_FINAL_REVIEW` and whose status is DMLRO/MLRO review pending or in progress to `KYC_FINAL_APPROVED`. It also:
+  - locks the first-round DMLRO/MLRO submissions again;
+  - removes the open second-round DMLRO/MLRO tasks;
+  - sends the Operations notification and writes an audit entry.
+
+  Any other case in that form state is listed and left alone. It is a dry run by default: build, then run `node --env-file=backend/.env backend/scripts/finalize-preliminary-final-review.cjs`, then rerun with `--apply` after a database backup.
+- **Checks:** `node backend/scripts/check-preliminary-final.cjs` (mocked persistence). No schema migration is needed.
+- **Local verification:**
+  - A real local Preliminary case went from `MLRO_APPROVED` to `KYC_FINAL_APPROVED` through the API, and Operations received the unread notification linked to the case. No new DMLRO task was created.
+  - The fix script was run against a local case inside a rolled-back transaction.
+  - The Operations screen was not checked in the browser.
+
 ## End-to-End Check and Activation Fixes (2026-11-10)
 
 - **Engagement letter at activation:** general KYC document uploads stay locked after submission, and Operations was never allowed to use them. The KYC page's **Submit decision** therefore failed when a letter was attached after final approval; activation only worked if the letter had been attached at the enquiry stage.
