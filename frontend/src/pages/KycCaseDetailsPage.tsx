@@ -25,7 +25,7 @@ import {
   uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
-import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
+import { kycNextStep, kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
 import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
@@ -329,10 +329,18 @@ export function KycCaseDetailsPage() {
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'}
           </p>
         </div>
-        <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
-          {kycStatusLabel(kycCase.status)}
-        </span>
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
+            {kycStatusLabel(kycCase.status)}
+          </span>
+          {kycStatusOwner(kycCase.status) ? <span className="text-xs font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</span> : null}
+        </div>
       </div>
+      {kycNextStep(kycCase.status) ? (
+        <p role="status" className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+          <span className="font-semibold">Next step:</span> {kycNextStep(kycCase.status)}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         {hasAnyRole(user, workflowRoles.kycFormBuilder) ? <Link to={`/kyc/${kycCase.id}/revisions`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"><FileText className="h-4 w-4" />Form history &amp; compare</Link> : null}
         {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (

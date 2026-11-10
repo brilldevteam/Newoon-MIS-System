@@ -19,7 +19,7 @@ import { getApiErrorMessage } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
-import { kycStatusLabel } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusOwner } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -221,6 +221,7 @@ export function EnquiryDetailsPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</p>
           <p className="mt-2 text-sm font-medium text-slate-950">{generatedKycCase ? kycStatusLabel(generatedKycCase.status) : enquiryStatusLabels[enquiry.status]}</p>
+          {generatedKycCase && kycStatusOwner(generatedKycCase.status) ? <p className="mt-1 text-xs font-medium text-slate-500">Now with: {kycStatusOwner(generatedKycCase.status)}</p> : null}
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Requested Services</p>

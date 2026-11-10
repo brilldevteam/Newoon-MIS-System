@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCase, KycCaseStatus, listKycCases } from '../services/kyc-workflow.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
-import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 function getRequestErrorMessage(error: any, fallback: string) {
   const message = error.response?.data?.message;
@@ -141,6 +141,7 @@ export function KycWorkflowPage() {
                       <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
                         {kycStatusLabel(kycCase.status)}
                       </span>
+                      {kycStatusOwner(kycCase.status) ? <p className="mt-1 text-[11px] font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</p> : null}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
