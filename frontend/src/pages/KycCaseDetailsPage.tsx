@@ -314,7 +314,8 @@ export function KycCaseDetailsPage() {
       : null;
   const finalDecisionPending = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED'].includes(kycCase.status);
   const finalDecisionRole = 'AML Supervisor, DMLRO or MLRO';
-  const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
+  const engagementOnHold = kycCase.status === 'CLIENT_ON_HOLD';
+  const canCompleteEngagement = ['KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ON_HOLD'].includes(kycCase.status) && hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const canCompleteFinalKycDecision =
     (finalDecisionPending && hasAnyRole(user, ['AML_SUPERVISOR', 'DMLRO', 'MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) ||
     (isPreliminaryProposedCompany && finalDecisionPending && hasAnyRole(user, ['AML_TEAM'])) ||
@@ -490,9 +491,13 @@ export function KycCaseDetailsPage() {
       {canCompleteEngagement ? (
         <section id="client-activation" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Signed Engagement and Client Activation</h2>
-          <p className="mt-1 text-sm text-slate-500">Upload the signed engagement letter, then convert and activate the client or reject the engagement.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            {engagementOnHold
+              ? 'This engagement is on hold (the reason is in the Timeline). When the client is ready, upload the new signed engagement letter, choose "Convert to client and activate" and press Submit decision.'
+              : 'Upload the signed engagement letter, then convert and activate the client or reject the engagement.'}
+          </p>
           <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_240px_1fr_auto] lg:items-end">
-            <label className="text-sm font-medium text-slate-700">Signed engagement letter {kycCase.legalDocuments.some((item) => item.documentType === 'Signed Engagement Letter' && item.storagePath) ? <span className="font-normal text-emerald-700">(already uploaded - add a file only to replace it)</span> : <span className="text-red-600">* required, PDF or Word</span>}
+            <label className="text-sm font-medium text-slate-700">Signed engagement letter {kycCase.legalDocuments.some((item) => item.documentType === 'Signed Engagement Letter' && item.storagePath) ? <span className="font-normal text-emerald-700">{engagementOnHold ? '(a letter is on file - add the new signed letter here)' : '(already uploaded - add a file only to replace it)'}</span> : <span className="text-red-600">* required, PDF or Word</span>}
               <input type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setEngagementFile(event.target.files?.[0] || null)} className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
             </label>
             <label className="text-sm font-medium text-slate-700">Decision

@@ -1,5 +1,18 @@
 # Newoon MIS Developer Handover
 
+## Resuming an Engagement on Hold (2026-11-10)
+
+- **The problem:** an engagement put on hold (`CLIENT_ON_HOLD`) could not be resumed. The activation section and `completeEngagementDecision` / `uploadEngagementLetter` only accepted `KYC_FINAL_APPROVED` and `CLIENT_ACTIVATION_PENDING`.
+- **The fix:** all three now also accept `CLIENT_ON_HOLD`. Operations can upload a new signed letter (earlier letters stay on file) and choose Convert, Reject or keep On hold. The case guide and activation section explain how to resume.
+- **Client status on hold or reject:**
+  - Holding or rejecting an engagement no longer changes a client that is already onboarded (has `activatedAt` or a `clientCode`), for example an existing client asking for new services.
+  - A never-activated client stays `PROSPECT` while on hold, or becomes `REJECTED`, with `statusReason` recording why.
+- **Register filter:** `COMPLIANCE_REGISTER_WHERE` (in `common/client-compliance.ts`) replaces the bare status filter. It also hides `ON_HOLD` clients that were never activated (no `activatedAt` and no code), so clients already held under the old behaviour drop out of Compliance Clients until they are converted. No data migration is needed.
+- **Checks:** `check-compliance-clients.cjs` was updated.
+- **Local verification:** the hold → new letter → convert flow was run through the API for both cases:
+  - a never-activated client: kept out of the register while on hold, then got code CL-2026-0008 when converted;
+  - an already-active client: status and code unchanged by the hold.
+
 ## Duplicate Enquiry Prevention (2026-11-10)
 
 - **Server rule** (`backend/src/enquiries/enquiries.service.ts`): one open enquiry per company.

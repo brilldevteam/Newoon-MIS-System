@@ -69,7 +69,7 @@ async function checkListFilters() {
   assert.deepEqual(result.pagination, { page: 1, pageSize: 25, total: 0, totalPages: 1 });
   const where = captured[0].AND;
   assert.deepEqual(where[0], { tenantId: 'tenant-a' }, 'List must be tenant scoped');
-  assert.deepEqual(where[1], { status: { in: ['ACTIVE', 'INACTIVE', 'ON_HOLD'] } }, 'Prospects and rejected clients stay out of the register');
+  assert.deepEqual(where[1], { status: { in: ['ACTIVE', 'INACTIVE', 'ON_HOLD'] }, NOT: { status: 'ON_HOLD', activatedAt: null, clientCode: null } }, 'Prospects, rejected clients and never-activated held engagements stay out of the register');
   assert.deepEqual(where[2], { riskLevel: null });
   assert.deepEqual(where[3], { cddType: null });
   assert.equal(where[4].status, 'ACTIVE');
@@ -360,6 +360,7 @@ async function checkProfileAccess() {
   const allowed = await new ComplianceClientsService(prisma, kycService, accessFor(true)).findOne(actor, 'c1');
   assert.equal(seen.snapshotCase, 'k-active', 'The activated KYC case is the profile source');
   assert.deepEqual(seen.where.status, { in: ['ACTIVE', 'INACTIVE', 'ON_HOLD'] });
+  assert.deepEqual(seen.where.NOT, { status: 'ON_HOLD', activatedAt: null, clientCode: null });
   assert.equal(allowed.crrf.riskRating, 'HIGH');
   assert.equal(allowed.crrf.internalComment, undefined, 'CRRF reviewer comments are never returned');
   assert.equal(allowed.client.tenantId, undefined);
@@ -379,6 +380,7 @@ async function checkDocuments() {
     const state = { sections: [], documents: [], audits: [] };
     const clients = [{ id: 'c1', tenantId: 'tenant-a', status: 'ACTIVE' }, { id: 'c2', tenantId: 'tenant-b', status: 'ACTIVE' }, { id: 'c3', tenantId: 'tenant-a', status: 'PROSPECT' }];
     const matches = (row, where) => Object.entries(where).every(([key, value]) => {
+      if (key === 'NOT') return !matches(row, value);
       if (value && typeof value === 'object' && 'in' in value) return value.in.includes(row[key]);
       if (value && typeof value === 'object' && 'equals' in value) return String(row[key]).toLowerCase() === value.equals.toLowerCase();
       if (value && typeof value === 'object' && 'not' in value) return row[key] !== value.not;

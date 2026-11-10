@@ -109,6 +109,9 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
     if (stage === 4) {
       if (!hasAnyRole(user, ['OPERATING_TEAM', ...ADMIN])) return <Waiting owner="Operations" text={kycNextStep(status)} />;
       const hasLetter = kycCase.legalDocuments.some((document) => document.documentType === 'Signed Engagement Letter' && document.storagePath);
+      if (status === 'CLIENT_ON_HOLD') {
+        return <Todo title="This engagement is on hold - to resume it (Operations)" steps={['Read why it was put on hold in the Timeline.', 'Upload the new signed engagement letter (PDF or Word). The earlier letter stays on file.', 'Choose "Convert to client and activate" and press Submit decision. The client then gets its client code and appears in Compliance Clients.']} action={{ label: 'Go to Client Activation', onClick: () => onJump('client-activation') }} />;
+      }
       return <Todo title="Your next step (Operations)" steps={[`${hasLetter ? 'Done: the signed engagement letter is uploaded.' : 'Upload the signed engagement letter (PDF or Word).'}`, 'Choose "Convert to client and activate" (or reject / put on hold with a reason).', 'Press Submit decision. The client then appears in Compliance Clients with its client code.']} action={{ label: 'Go to Client Activation', onClick: () => onJump('client-activation') }} />;
     }
 

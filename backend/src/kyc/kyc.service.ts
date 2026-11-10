@@ -347,9 +347,10 @@ export class KycService {
 
     const kycCase = await this.prisma.kycCase.findFirst({ where: { id, ...this.tenantWhere(user) } });
     if (!kycCase) throw new NotFoundException('KYC case not found');
-    const activationStatuses: KycCaseStatus[] = [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING];
+    // An engagement on hold can be resumed with a new signed letter.
+    const activationStatuses: KycCaseStatus[] = [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING, KycCaseStatus.CLIENT_ON_HOLD];
     if (!activationStatuses.includes(kycCase.status)) {
-      throw new BadRequestException('The signed engagement letter can be uploaded here once the KYC has final approval and before the engagement decision.');
+      throw new BadRequestException('The signed engagement letter can be uploaded once the KYC has final approval, or while the engagement is on hold.');
     }
 
     const caseDirectory = join(this.legalDocumentUploadRoot(), kycCase.tenantId, kycCase.id);
@@ -1211,9 +1212,11 @@ export class KycService {
 
   async completeEngagementDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const kycCase = await this.findOne(user, id);
+    // CLIENT_ON_HOLD is included so a held engagement can later be converted, rejected or kept on hold.
     const approvedStatuses: KycCaseStatus[] = [
       KycCaseStatus.KYC_FINAL_APPROVED,
-      KycCaseStatus.CLIENT_ACTIVATION_PENDING
+      KycCaseStatus.CLIENT_ACTIVATION_PENDING,
+      KycCaseStatus.CLIENT_ON_HOLD
     ];
     if (!approvedStatuses.includes(kycCase.status)) {
       throw new BadRequestException('The KYC file must receive final approval before the engagement decision.');
@@ -1235,10 +1238,17 @@ export class KycService {
     if (decision === 'CONVERT_TO_CLIENT') {
       await this.activateComplianceClient(user, kycCase);
     } else {
-      await this.prisma.client.update({
-        where: { id: kycCase.clientId },
-        data: { status: decision === 'ON_HOLD' ? 'ON_HOLD' : 'REJECTED' }
-      });
+      // Holding or rejecting this engagement must not change a client that is already onboarded (for example an
+      // existing client asking for new services). A client never activated stays a prospect while on hold.
+      const client = await this.prisma.client.findUniqueOrThrow({ where: { id: kycCase.clientId }, select: { activatedAt: true, clientCode: true } });
+      if (!client.activatedAt && !client.clientCode) {
+        await this.prisma.client.update({
+          where: { id: kycCase.clientId },
+          data: decision === 'ON_HOLD'
+            ? { status: 'PROSPECT', statusReason: `Engagement on hold: ${reason}` }
+            : { status: 'REJECTED', statusReason: `Engagement rejected: ${reason}` }
+        });
+      }
     }
     const note = decision === 'CONVERT_TO_CLIENT'
       ? 'Signed engagement accepted; inquiry converted and client activated'

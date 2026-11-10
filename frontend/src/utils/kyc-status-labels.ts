@@ -90,7 +90,7 @@ const nextSteps: Record<string, string> = {
   KYC_FINAL_APPROVED: 'Operations: attach the signed engagement letter and convert to client.',
   CLIENT_ACTIVATION_PENDING: 'Operations: attach the signed engagement letter and convert to client.',
   RETURNED_TO_BD: 'Operations: correct the enquiry and resubmit it to the AML Supervisor.',
-  CLIENT_ON_HOLD: 'Engagement on hold.',
+  CLIENT_ON_HOLD: 'Engagement on hold. Operations can resume it: upload the new signed engagement letter and convert to client.',
   CLIENT_ACTIVE: 'Client is active. Ongoing compliance continues in Compliance Clients.',
   CLIENT_REJECTED: 'Engagement rejected.',
   MLRO_REJECTED: 'KYC rejected by MLRO.',

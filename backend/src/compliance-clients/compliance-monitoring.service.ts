@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { NotificationType, Prisma } from '@prisma/client';
-import { COMPLIANCE_REGISTER_STATUSES, nextReviewDateFor } from '../common/client-compliance';
+import { COMPLIANCE_REGISTER_WHERE, nextReviewDateFor } from '../common/client-compliance';
 import { standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { userSummarySelect } from '../common/user-summary';
@@ -306,7 +306,7 @@ export class ComplianceMonitoringService {
 
   private async findClient(user: RequestUser, clientId: string): Promise<ClientRef> {
     const client = await this.prisma.client.findFirst({
-      where: { id: clientId, status: { in: [...COMPLIANCE_REGISTER_STATUSES] }, ...this.tenantWhere(user) },
+      where: { id: clientId, ...COMPLIANCE_REGISTER_WHERE, ...this.tenantWhere(user) },
       select: { id: true, tenantId: true, name: true, clientCode: true }
     });
     if (!client) throw new NotFoundException('Compliance client not found');
