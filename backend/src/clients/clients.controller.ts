@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { AccessArea } from '../common/decorators/access-area.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -20,10 +21,12 @@ export class ClientsController {
   }
 
   @Get()
-  findAll(@CurrentUser() user: RequestUser) {
-    return this.clientsService.findAll(user);
+  findAll(@CurrentUser() user: RequestUser, @Query('status') status?: string) {
+    return this.clientsService.findAll(user, status);
   }
 
+  // Used by the KYC form's corporate party lookup, so it follows KYC access in the role matrix.
+  @AccessArea('kyc')
   @Get('match')
   match(
     @CurrentUser() user: RequestUser,

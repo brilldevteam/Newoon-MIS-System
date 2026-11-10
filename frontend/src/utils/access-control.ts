@@ -45,8 +45,19 @@ export const workflowRoles = {
   sefReview: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'SEF'],
   signedDocuments: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO'],
   admin: ['SUPER_ADMIN'],
-  userAdmin: ['SUPER_ADMIN', 'COMPANY_ADMIN']
+  userAdmin: ['SUPER_ADMIN', 'COMPANY_ADMIN'],
+  // Defaults before the access matrix is saved; mirrors the backend "compliance" area defaults.
+  complianceView: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'OPERATING_TEAM'],
+  complianceEdit: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO']
 };
+
+// Presentation only: the API enforces the same matrix in RolesGuard.
+export function hasAreaAccess(user: AuthUser | null | undefined, area: string, write: boolean, fallbackRoles: readonly string[]) {
+  if (!user) return false;
+  if (user.roles.includes('SUPER_ADMIN')) return true;
+  if (user.accessControlConfigured) return Boolean(user.permissions?.includes(write ? `${area}.edit` : `${area}.view`));
+  return hasAnyRole(user, fallbackRoles);
+}
 
 export function hasAnyRole(user: AuthUser | null | undefined, roles: readonly string[]) {
   if (!user) return false;

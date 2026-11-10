@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { hasComment, safeComment } from '../common/review-comments';
+import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
 import { complianceValidationError } from '../common/kyc-compliance';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
@@ -203,9 +204,20 @@ export class KycService {
   async remove(user: RequestUser, id: string) {
     const existing = await this.requireWritableCase(user, id);
 
-    await this.prisma.kycCase.delete({
-      where: { id: existing.id }
-    });
+    // Deleting a case removes its form, reviews, screening and CRRF records; keep an audit entry of who did it.
+    await this.prisma.$transaction([
+      this.prisma.auditLog.create({
+        data: {
+          tenantId: existing.tenantId,
+          actorId: user.id,
+          action: 'DELETE',
+          entityType: 'KycCase',
+          entityId: existing.id,
+          metadata: { kycNumber: existing.kycNumber, title: existing.title, status: existing.status }
+        }
+      }),
+      this.prisma.kycCase.delete({ where: { id: existing.id } })
+    ]);
 
     return { id: existing.id };
   }
@@ -300,6 +312,46 @@ export class KycService {
         where: { id },
         include: this.caseInclude()
       });
+    });
+  }
+
+  // The signed engagement letter arrives after final KYC approval, when general document uploads are locked.
+  // This is the only upload allowed at that stage: one document type, for the roles that make the engagement decision.
+  async uploadEngagementLetter(
+    user: RequestUser,
+    id: string,
+    files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }> = []
+  ) {
+    if (!this.hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN'])) {
+      throw new ForbiddenException('Only the Operations team or an administrator can upload the signed engagement letter.');
+    }
+    if (!files.length) throw new BadRequestException('Select the signed engagement letter to upload.');
+    validateUploadFiles(files, ['pdf', 'word', 'image'], 'engagement letter');
+
+    const kycCase = await this.prisma.kycCase.findFirst({ where: { id, ...this.tenantWhere(user) } });
+    if (!kycCase) throw new NotFoundException('KYC case not found');
+    const activationStatuses: KycCaseStatus[] = [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING];
+    if (!activationStatuses.includes(kycCase.status)) {
+      throw new BadRequestException('The signed engagement letter can be uploaded here once the KYC has final approval and before the engagement decision.');
+    }
+
+    const caseDirectory = join(this.legalDocumentUploadRoot(), kycCase.tenantId, kycCase.id);
+    mkdirSync(caseDirectory, { recursive: true });
+    const documents = files.map((file, index) => {
+      const fileName = this.safeFileName(file.originalname);
+      const storedFileName = `${Date.now()}-${index}-${fileName}`;
+      writeFileSync(join(caseDirectory, storedFileName), file.buffer!);
+      return { fileName, storagePath: join(kycCase.tenantId, kycCase.id, storedFileName), mimeType: file.mimetype, size: file.size };
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      for (const document of documents) {
+        const created = await tx.legalDocument.create({
+          data: { tenantId: kycCase.tenantId, kycCaseId: id, documentType: 'Signed Engagement Letter', ...document, uploadedById: user.id }
+        });
+        await this.audit(tx, user, kycCase.tenantId, 'LegalDocument', created.id, { action: 'ENGAGEMENT_LETTER_UPLOADED', kycCaseId: id, fileName: document.fileName });
+      }
+      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     });
   }
 
@@ -1161,16 +1213,94 @@ export class KycService {
       : decision === 'ON_HOLD'
         ? KycCaseStatus.CLIENT_ON_HOLD
         : KycCaseStatus.CLIENT_REJECTED;
-    await this.prisma.client.update({
-      where: { id: kycCase.clientId },
-      data: { status: decision === 'CONVERT_TO_CLIENT' ? 'ACTIVE' : decision === 'ON_HOLD' ? 'ON_HOLD' : 'REJECTED' }
-    });
+    if (decision === 'CONVERT_TO_CLIENT') {
+      await this.activateComplianceClient(user, kycCase);
+    } else {
+      await this.prisma.client.update({
+        where: { id: kycCase.clientId },
+        data: { status: decision === 'ON_HOLD' ? 'ON_HOLD' : 'REJECTED' }
+      });
+    }
     const note = decision === 'CONVERT_TO_CLIENT'
       ? 'Signed engagement accepted; inquiry converted and client activated'
       : decision === 'ON_HOLD'
         ? `Signed engagement placed on hold: ${reason}`
         : `Signed engagement rejected: ${reason}`;
     return this.updateStatus(user, id, targetStatus, note);
+  }
+
+  // Activation fills the compliance register: client code, risk, CDD type, review schedule and the service engagement.
+  private async activateComplianceClient(
+    user: RequestUser,
+    kycCase: {
+      id: string; tenantId: string; clientId: string; title: string; kycNumber: string;
+      service?: { name: string } | null;
+      client: { contacts: Array<{ email: string | null; phone: string | null; isPrimary: boolean }> };
+    }
+  ) {
+    const primary = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          const client = await tx.client.findUniqueOrThrow({ where: { id: kycCase.clientId } });
+          const now = new Date();
+          const profile = await onboardingRiskProfile(tx, kycCase.id, kycCase.tenantId);
+          const riskLevel = profile.riskLevel || client.riskLevel;
+          // The register shows the client's CR / QFC number; take it from the approved KYC when none is recorded yet.
+          const generalCompany = await tx.kycSectionData.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId, sectionKey: KycFormSectionKey.GENERAL_COMPANY }, select: { data: true } });
+          const kycRegistrationNumber = this.text((generalCompany?.data as Record<string, unknown> | undefined)?.commercialRegistrationNo).trim() || null;
+          await tx.client.update({
+            where: { id: client.id },
+            data: {
+              status: 'ACTIVE',
+              statusReason: null,
+              clientCode: client.clientCode ?? (await nextClientCode(tx, kycCase.tenantId, now)),
+              activatedAt: client.activatedAt ?? now,
+              riskLevel,
+              cddType: profile.cddType || client.cddType,
+              email: client.email ?? primary?.email ?? null,
+              phone: client.phone ?? primary?.phone ?? null,
+              registrationNumber: client.registrationNumber?.trim() ? client.registrationNumber : kycRegistrationNumber,
+              // Completed onboarding counts as the client's latest review.
+              lastReviewDate: now,
+              nextReviewDate: nextReviewDateFor(riskLevel, now)
+            }
+          });
+          const existingEngagement = await tx.clientEngagement.findUnique({ where: { kycCaseId: kycCase.id } });
+          if (existingEngagement) {
+            await tx.clientEngagement.update({
+              where: { id: existingEngagement.id },
+              data: { status: 'IN_PROGRESS', startDate: existingEngagement.startDate ?? now }
+            });
+          } else {
+            await tx.clientEngagement.create({
+              data: {
+                tenantId: kycCase.tenantId,
+                clientId: client.id,
+                kycCaseId: kycCase.id,
+                engagementNumber: await nextEngagementNumber(tx, kycCase.tenantId, now),
+                serviceName: kycCase.service?.name || kycCase.title,
+                description: `Engagement accepted through KYC ${kycCase.kycNumber}`,
+                status: 'IN_PROGRESS',
+                startDate: now,
+                createdById: user.id
+              }
+            });
+          }
+          await this.audit(tx, user, kycCase.tenantId, 'Client', client.id, {
+            action: 'CLIENT_ACTIVATED_FOR_COMPLIANCE',
+            kycCaseId: kycCase.id,
+            riskLevel,
+            cddType: profile.cddType || client.cddType
+          });
+        });
+        return;
+      } catch (error) {
+        // Two activations in the same tenant can pick the same client code or engagement number; retry once more.
+        const conflict = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+        if (!conflict || attempt >= 3) throw error;
+      }
+    }
   }
 
   async completeFinalKycDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -1436,6 +1566,13 @@ export class KycService {
       },
       include: this.formInclude()
     });
+  }
+
+  // Read-only form snapshot for the compliance client profile. Unlike getForm it never creates a form or assigns a
+  // KYC number; the caller must already have scoped kycCaseId to the user's tenant.
+  async formSnapshot(kycCaseId: string) {
+    const form = await this.prisma.kycForm.findUnique({ where: { kycCaseId }, include: this.formInclude() });
+    return form ? this.serializeForm(form) : null;
   }
 
   async getForm(user: RequestUser, id: string) {
@@ -2735,6 +2872,24 @@ export class KycService {
     stage: ReviewStage,
     dto: Record<string, unknown>
   ) {
+    // Four-eyes rule: in the current approval round one person may submit only one review stage of a case,
+    // whatever roles they hold (Company Admin included). Earlier rounds (returned or amended) do not count.
+    const ownOtherStage = await tx.internalReviewSubmission.findFirst({
+      where: {
+        tenantId: kycCase.tenantId,
+        kycCaseId: kycCase.id,
+        stage: { not: stage },
+        status: ReviewSubmissionStatus.SUBMITTED,
+        submittedById: user.id
+      },
+      select: { stage: true }
+    });
+    if (ownOtherStage) {
+      throw new ForbiddenException(
+        `You already completed the ${this.stageLabel(ownOtherStage.stage)} review for this case. Another person must complete the ${this.stageLabel(stage)} review.`
+      );
+    }
+
     const version =
       (await tx.internalReviewVersion.count({
         where: { kycCaseId: kycCase.id, stage }

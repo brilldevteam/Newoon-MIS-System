@@ -37,6 +37,14 @@ model Tenant {
   clients       Client[]
   clientContacts ClientContact[]
   clientServices ClientService[]
+  clientEngagements ClientEngagement[]
+  clientDocumentSections ClientDocumentSection[]
+  clientDocuments ClientDocument[]
+  clientScreenings ClientScreening[]
+  clientRiskChanges ClientRiskChange[]
+  clientReviews ClientReview[]
+  clientExpiryItems ClientExpiryItem[]
+  complianceReminders ComplianceReminder[]
   kycCases      KycCase[]
   documents     Document[]
   legalDocuments LegalDocument[]
@@ -81,6 +89,11 @@ model User {
   firstName    String
   lastName     String
   status       UserStatus     @default(ACTIVE)
+  // Login protection: consecutive failed sign-ins, temporary lockout, and a version that ends all sessions when raised.
+  failedLoginCount           Int                        @default(0)
+  lockedUntil                DateTime?
+  sessionVersion             Int                        @default(0)
+  loginChallenges            LoginChallenge[]
   roles        UserRole[]
   auditLogs    AuditLog[]
   createdEnquiries Enquiry[] @relation("EnquiryCreator")
@@ -99,8 +112,23 @@ model User {
   reviewerComments ReviewerComment[] @relation("ReviewerCommentAuthor")
   uploadedSignedKycDocuments SignedKycDocument[] @relation("SignedKycDocumentUploader")
   riskReclassifications RiskReclassification[] @relation("RiskReclassificationUser")
+  createdClientEngagements ClientEngagement[] @relation("ClientEngagementCreator")
+  uploadedClientDocuments ClientDocument[] @relation("ClientDocumentUploader")
+  performedClientScreenings ClientScreening[] @relation("ClientScreeningPerformer")
+  requestedClientRiskChanges ClientRiskChange[] @relation("ClientRiskChangeRequester")
+  decidedClientRiskChanges ClientRiskChange[] @relation("ClientRiskChangeDecider")
+  startedClientReviews ClientReview[] @relation("ClientReviewStarter")
+  completedClientReviews ClientReview[] @relation("ClientReviewCompleter")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+}
+
+model UserProfile {
+  userId        String   @id
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio           String   @default("")
+  avatarDataUrl String?
+  updatedAt     DateTime @updatedAt
 }
 
 model Enquiry {
@@ -261,6 +289,11 @@ enum NotificationType {
   CLIENT_READY_FOR_ACTIVATION
   CLIENT_ACTIVATED
   GENERAL
+  COMPLIANCE_RISK_CHANGE_REQUESTED
+  COMPLIANCE_RISK_CHANGE_DECIDED
+  COMPLIANCE_REVIEW_DUE
+  COMPLIANCE_DOCUMENT_EXPIRING
+  COMPLIANCE_SCREENING_ALERT
 }
 
 enum EnquiryType {
@@ -490,14 +523,286 @@ model Client {
   industry           String?
   country            String?
   status             String          @default("PROSPECT")
+  // Compliance register fields, filled when a client is activated through the KYC engagement decision.
+  clientCode         String?
+  jurisdiction       ClientJurisdiction?
+  email              String?
+  phone              String?
+  address            String?
+  cddType            DueDiligenceType?
+  riskLevel          RiskClassification?
+  lastReviewDate     DateTime?
+  nextReviewDate     DateTime?
+  activatedAt        DateTime?
+  statusReason       String?
   contacts           ClientContact[]
   enquiries          Enquiry[]
   kycCases           KycCase[]
   screeningRecords   ScreeningRecord[]
+  engagements        ClientEngagement[]
+  documents          ClientDocument[]
+  screenings         ClientScreening[]
+  riskChanges        ClientRiskChange[]
+  reviews            ClientReview[]
+  expiryItems        ClientExpiryItem[]
+  notifications      Notification[]
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
+  @@unique([tenantId, clientCode])
   @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([nextReviewDate])
+}
+
+enum ClientJurisdiction {
+  QFC
+  MOCI
+  QFZ
+  OTHER
+}
+
+enum ClientEngagementStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ClientDocumentCategory {
+  CDD
+  MONITORING
+  COMPLIANCE
+  SCREENING
+}
+
+// Document folders shared by every client of a tenant (legacy CDD, Monitoring and Compliance Documentation sections).
+model ClientDocumentSection {
+  id          String                 @id @default(uuid())
+  tenantId    String
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String
+  title       String
+  description String?
+  category    ClientDocumentCategory @default(COMPLIANCE)
+  isSystem    Boolean                @default(false)
+  isActive    Boolean                @default(true)
+  sortOrder   Int                    @default(0)
+  createdById String?
+  documents   ClientDocument[]
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+// A file kept on a client's compliance record. Deletion is soft: the row and file stay as evidence.
+model ClientDocument {
+  id           String                @id @default(uuid())
+  tenantId     String
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId     String
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sectionId    String
+  section      ClientDocumentSection @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  title        String
+  notes        String?
+  fileName     String
+  storagePath  String
+  mimeType     String?
+  size         Int?
+  uploadedById String?
+  uploadedBy   User?                 @relation("ClientDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  screeningId  String?
+  screening    ClientScreening?      @relation(fields: [screeningId], references: [id], onDelete: SetNull)
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId, sectionId])
+  @@index([screeningId])
+}
+
+enum ClientScreeningResult {
+  PENDING
+  CLEAR
+  REVIEW
+  ALERT
+}
+
+// Ongoing (post-onboarding) screening of a client and its parties; evidence files are ClientDocuments in the
+// tenant's "screening" folder linked by screeningId.
+model ClientScreening {
+  id            String                @id @default(uuid())
+  tenantId      String
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  reviewId      String?
+  review        ClientReview?         @relation(fields: [reviewId], references: [id], onDelete: SetNull)
+  screenedAt    DateTime
+  scope         String?
+  listsChecked  String[]
+  result        ClientScreeningResult
+  summary       String
+  performedById String?
+  performedBy   User?                 @relation("ClientScreeningPerformer", fields: [performedById], references: [id], onDelete: SetNull)
+  documents     ClientDocument[]
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId, screenedAt])
+}
+
+enum ClientRiskChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// Risk/CDD change on an onboarded client. Applied only after a different DMLRO/MLRO approves it.
+model ClientRiskChange {
+  id             String                 @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  previousRisk   RiskClassification?
+  proposedRisk   RiskClassification
+  previousCdd    DueDiligenceType?
+  proposedCdd    DueDiligenceType?
+  reasonCategory RiskOverrideReason
+  explanation    String
+  status         ClientRiskChangeStatus @default(PENDING)
+  requestedById  String?
+  requestedBy    User?                  @relation("ClientRiskChangeRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  decidedById    String?
+  decidedBy      User?                  @relation("ClientRiskChangeDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decisionNote   String?
+  decidedAt      DateTime?
+  review         ClientReview?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([tenantId, status])
+  @@index([clientId])
+}
+
+enum ClientReviewStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ClientReviewOutcome {
+  NO_CHANGE
+  RISK_CHANGE_REQUESTED
+  EXIT_RECOMMENDED
+}
+
+// Periodic review of an onboarded client; completing it resets lastReviewDate and nextReviewDate.
+model ClientReview {
+  id            String               @id @default(uuid())
+  tenantId      String
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  status        ClientReviewStatus   @default(IN_PROGRESS)
+  dueDate       DateTime?
+  riskAtStart   RiskClassification?
+  outcome       ClientReviewOutcome?
+  findings      String?
+  riskChangeId  String?              @unique
+  riskChange    ClientRiskChange?    @relation(fields: [riskChangeId], references: [id], onDelete: SetNull)
+  startedById   String?
+  startedBy     User?                @relation("ClientReviewStarter", fields: [startedById], references: [id], onDelete: SetNull)
+  completedById String?
+  completedBy   User?                @relation("ClientReviewCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+  startedAt     DateTime             @default(now())
+  completedAt   DateTime?
+  screenings    ClientScreening[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([tenantId, status])
+  @@index([clientId])
+}
+
+enum ClientExpiryDocumentType {
+  PASSPORT
+  QID
+  CR
+  TRADE_LICENSE
+  COMPUTER_CARD
+  OTHER
+}
+
+// Identity and company documents whose expiry is tracked (the KYC form does not capture expiry dates).
+model ClientExpiryItem {
+  id             String                   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId       String
+  client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  documentType   ClientExpiryDocumentType
+  documentLabel  String?
+  holderName     String
+  holderRole     String?
+  documentNumber String?
+  expiryDate     DateTime
+  notes          String?
+  isActive       Boolean                  @default(true)
+  createdById    String?
+  updatedById    String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([tenantId, expiryDate])
+  @@index([clientId])
+}
+
+// One row per reminder milestone already notified, so repeated or parallel sweeps never notify twice.
+model ComplianceReminder {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind      String
+  entityId  String
+  milestone String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, kind, entityId, milestone])
+}
+
+// A service engagement for a client (the legacy system's "job").
+model ClientEngagement {
+  id               String                 @id @default(uuid())
+  tenantId         String
+  tenant           Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId         String
+  client           Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kycCaseId        String?                @unique
+  kycCase          KycCase?               @relation(fields: [kycCaseId], references: [id], onDelete: SetNull)
+  engagementNumber String
+  serviceName      String
+  description      String?
+  status           ClientEngagementStatus @default(PENDING)
+  startDate        DateTime?
+  endDate          DateTime?
+  createdById      String?
+  createdBy        User?                  @relation("ClientEngagementCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([tenantId, engagementNumber])
+  @@index([tenantId])
+  @@index([clientId])
 }
 
 model ClientContact {
@@ -573,16 +878,17 @@ model KycCase {
   screeningCaseChecks ScreeningCaseCheck[]
   screeningCaseDocuments ScreeningCaseDocument[]
   crrfRecord       CrrfRecord?
+  clientEngagement ClientEngagement?
   submittedToAmlAt  DateTime?
   amlReviewStartedAt DateTime?
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 
+  @@unique([tenantId, kycNumber])
   @@index([tenantId])
   @@index([clientId])
   @@index([sourceEnquiryId])
   @@index([status])
-  @@unique([tenantId, kycNumber])
 }
 
 model KycForm {
@@ -1048,6 +1354,8 @@ model Notification {
   kycCase     KycCase?         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
   enquiryId   String?
   enquiry     Enquiry?         @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  clientId    String?
+  client      Client?          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   recipientId String?
   recipient   User?            @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   type        NotificationType @default(GENERAL)
@@ -1060,6 +1368,7 @@ model Notification {
   @@index([tenantId])
   @@index([kycCaseId])
   @@index([enquiryId])
+  @@index([clientId])
 }
 
 model LegalDocument {
@@ -1264,10 +1573,19 @@ model AuditLog {
   createdAt  DateTime    @default(now())
 }
 
-model UserProfile {
-  userId String @id
+// Pending email one-time-code sign-ins. Only a keyed hash of the code is stored.
+model LoginChallenge {
+  id         String    @id @default(uuid())
+  userId     String
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bio String @default("")
-  avatarDataUrl String?
-  updatedAt DateTime @updatedAt
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  sendCount  Int       @default(1)
+  lastSentAt DateTime  @default(now())
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }

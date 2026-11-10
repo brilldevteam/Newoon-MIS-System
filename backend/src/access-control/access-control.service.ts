@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export const ACCESS_AREAS = [
   { key: 'enquiries', label: 'Enquiries', description: 'Enquiry register, details, and preliminary KYC intake.' },
   { key: 'clients', label: 'Clients', description: 'Client register and client records.' },
+  { key: 'compliance', label: 'Compliance Clients', description: 'Active client compliance register, risk, CDD type and review schedule.' },
   { key: 'kyc', label: 'KYC Workflow', description: 'KYC cases, KYC forms, legal documents, and review decisions.' },
   { key: 'screening', label: 'Screening', description: 'Screening checks, evidence, and conclusions.' },
   { key: 'crrf', label: 'CRRF', description: 'Client risk-rating records and CRRF files.' },
@@ -19,12 +20,12 @@ const managedPermissionKeys = ACCESS_AREAS.flatMap((area) => [`${area.key}.view`
 const defaults: Record<string, Partial<Record<(typeof ACCESS_AREAS)[number]['key'], AccessLevel>>> = {
   SUPER_ADMIN: Object.fromEntries(ACCESS_AREAS.map((area) => [area.key, 'EDIT'])) as Record<(typeof ACCESS_AREAS)[number]['key'], AccessLevel>,
   COMPANY_ADMIN: Object.fromEntries(ACCESS_AREAS.map((area) => [area.key, 'EDIT'])) as Record<(typeof ACCESS_AREAS)[number]['key'], AccessLevel>,
-  OPERATING_TEAM: { enquiries: 'EDIT', clients: 'EDIT', kyc: 'EDIT' },
-  AML_TEAM: { enquiries: 'EDIT', kyc: 'EDIT', screening: 'EDIT', crrf: 'EDIT' },
-  AML_SUPERVISOR: { enquiries: 'EDIT', kyc: 'EDIT', screening: 'EDIT', crrf: 'EDIT' },
-  DMLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT' },
-  MLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT' },
-  SEF: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'VIEW', approvals: 'EDIT' },
+  OPERATING_TEAM: { enquiries: 'EDIT', clients: 'EDIT', kyc: 'EDIT', compliance: 'VIEW' },
+  AML_TEAM: { enquiries: 'EDIT', kyc: 'EDIT', screening: 'EDIT', crrf: 'EDIT', compliance: 'EDIT' },
+  AML_SUPERVISOR: { enquiries: 'EDIT', kyc: 'EDIT', screening: 'EDIT', crrf: 'EDIT', compliance: 'EDIT' },
+  DMLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT', compliance: 'EDIT' },
+  MLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT', compliance: 'EDIT' },
+  SEF: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'VIEW', approvals: 'EDIT', compliance: 'VIEW' },
   ACCOUNTING_TEAM: { enquiries: 'VIEW' },
   HR_TEAM: { enquiries: 'VIEW' }
 };
@@ -108,6 +109,15 @@ export class AccessControlService {
       where: { role: { name: { in: roleNames } }, permission: { key: required } }
     });
     return Boolean(grant);
+  }
+
+  // Used while the matrix has never been saved: the same defaults the Access Control page shows.
+  allowsByDefault(roleNames: string[], area: string, write: boolean) {
+    if (roleNames.includes('SUPER_ADMIN')) return true;
+    return roleNames.some((role) => {
+      const level = defaults[role]?.[area as (typeof ACCESS_AREAS)[number]['key']];
+      return level === 'EDIT' || (level === 'VIEW' && !write);
+    });
   }
 
   private async ensureCatalog() {

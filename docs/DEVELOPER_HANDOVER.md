@@ -1,5 +1,157 @@
 # Newoon MIS Developer Handover
 
+## End-to-End Check and Activation Fixes (2026-11-10)
+
+- **Engagement letter at activation:** general KYC document uploads stay locked after submission, and Operations was never allowed to use them. The KYC page's **Submit decision** therefore failed when a letter was attached after final approval; activation only worked if the letter had been attached at the enquiry stage.
+  - New `POST /api/kyc/:id/engagement-letter/upload` (multipart `files`; PDF, Word or image) for Operations, Company Admin or Super Admin.
+  - It works only while the case is `KYC_FINAL_APPROVED` or `CLIENT_ACTIVATION_PENDING`, always stores the document as "Signed Engagement Letter", and audits `ENGAGEMENT_LETTER_UPLOADED`.
+  - `KycCaseDetailsPage` uses it. Every other upload stays locked.
+- **CR / QFC number on the register:** activation copies Section A `commercialRegistrationNo` into `Client.registrationNumber` (trimmed) when the client has none.
+  - `backend/scripts/backfill-compliance-clients.cjs` has a second, re-runnable pass that fills it for existing register clients. It was applied locally to 3 clients.
+- **End-to-end run (local, synthetic data):**
+  - Six demo staff accounts (`demo.*@demo.newoon.invalid`, company Newoon, one per role) drove two demo clients through the whole flow:
+    - enquiry → conversion → KYC form with shareholders, UBOs and officers
+    - screening of every party and all lists → CRRF
+    - Supervisor → DMLRO → MLRO, with four-eyes enforced → final KYC
+    - engagement letter → activation
+    - Compliance Clients: code, profile tabs, CRRF privacy, access rules, documents, review → risk change → DMLRO approval, screening alert open and close, expiry bands, export, notifications
+  - The second client used the post-approval letter upload. Every check passed except the pre-submission readiness item for Supervisor comments, which is expected because those comments are entered at submission.
+  - The demo clients `Demo Pearl Trading W.L.L.` (CL-2026-0006) and `Demo Lusail Logistics W.L.L.` (CL-2026-0007) and the demo accounts remain in the local database only.
+
+## Mobile Layout and Installable App (PWA) (2026-11-09)
+
+- **Mobile navigation:** below the `lg` breakpoint the sidebar is replaced by a header menu button that opens a slide-in drawer.
+  - The drawer is the same `NavItems` component as the desktop sidebar (same role filtering and Compliance group) and shows the user, an **Install app** button and **Log out**.
+  - It closes on navigation, Escape or a backdrop tap, and locks page scroll while open. Desktop is unchanged.
+  - Pages show an amber banner when the device is offline.
+- **PWA files** (in `frontend/public/`):
+  - `site.webmanifest`: standalone display, scope and start URL `/`, theme `#b81f23`, any/maskable icons, shortcuts to Compliance Clients and KYC Workflow.
+  - `icon-maskable-192.png` and `icon-maskable-512.png`.
+  - `sw.js`: the service worker.
+  - `index.html` adds iOS home-screen tags and `viewport-fit=cover`; layout padding includes `env(safe-area-inset-bottom)`.
+- **Service worker** (`sw.js`), registered by `src/pwa.ts` in production builds only:
+  - Navigation is network first, falling back to the cached app shell when offline.
+  - Hashed `/assets/*` files are cached at first use (cache-first, capped at 120 entries).
+  - Brand and icon files are served from cache and refreshed in the background.
+  - It **never handles `/api`**, non-GET or cross-origin requests, so no client or KYC data is stored on the device.
+  - Bump `CACHE_VERSION` to discard old caches.
+  - Make sure NGINX/Cloudflare do not cache `/sw.js` for long, or updates to it will be delayed.
+- **Install:** Chrome and Edge (Android/desktop) get an **Install app** button in the mobile drawer. On iPhone Safari the button explains Share → Add to Home Screen. HTTPS is required (`localhost` is exempt).
+- **Same-origin CORS fix:** Vite marks the bundle `<script>`/`<link>` as `crossorigin`, so the browser sends the page's own `Origin` even for same-site requests. Previously, when the backend served `frontend/dist` and that origin was missing from `FRONTEND_URL`, the CORS check answered asset requests with 500 and the page stayed blank.
+  - `main.ts` now also allows a request whose `Origin` host equals its `Host` header (`common/security/same-origin.ts`). Listed origins still work, and requests without an Origin are unchanged. Other origins, including lookalike hosts, are still refused before any handler runs.
+  - Behind NGINX, keep `proxy_set_header Host $host;` so the public host reaches the backend. Without it, list the public origin in `FRONTEND_URL` as before.
+  - Verify with `node backend/scripts/check-same-origin.cjs`. Locally, `http://localhost:5000` now renders, and the service worker registers there.
+- **Verification (local):**
+  - About 14 routes had no horizontal overflow at 375px.
+  - The drawer opened, navigated and closed (Escape, backdrop).
+  - Desktop sidebar unchanged.
+  - Production preview: the service worker registered and controlled the page; only shell and `/assets` files were cached; nothing under `/api`; with the server stopped, the app still opened from cache.
+  - All `frontend/scripts/check-*.cjs` passed.
+  - Not verified: installation on a real Android or iPhone device, and behaviour behind the production proxy.
+
+## Branding and Favicon (2026-11-09)
+
+- Newoon Global LTD. logos supplied by the client live in `frontend/public/brand/`: `newoon-logo.png` (full logo, trimmed) and `newoon-mark.png` (the "n" globe mark, cut from the full logo for resolution).
+  - The sidebar shows the full logo (the mark when the focused-workspace sidebar is collapsed).
+  - The login page shows the mark on the red panel and the full logo above the form.
+- Favicons and app icons in `frontend/public/` are generated from the same mark: `favicon.ico` (16/32/48), `favicon-32x32.png`, `apple-touch-icon.png`, `icon-192.png`, `icon-512.png`, with `site.webmanifest`. They are linked from `frontend/index.html`.
+- Nothing is loaded from the old app.newoon.com system. Replace the files in place to update the branding.
+- Scope: the client decided on 2026-11-09 not to import data from the old system, so the planned Phase 5 legacy import is dropped. `legacyClientCode` (`CL-LEG-NNNN`) is unused unless that changes.
+
+## Compliance Client Monitoring, Phase 4 (2026-11-09)
+
+- The client page gains three tabs:
+  - **Screening**: an ongoing screening log with date, scope, lists checked, result (Pending/Clear/Review/Alert), summary and evidence files.
+  - **Reviews & Risk**: periodic reviews and risk changes.
+  - **Expiry**: passports, QIDs, CR, trade licence, computer card and other documents with expiry dates.
+- **Header and register:** the header shows badges for a pending risk change, a review in progress and an open screening alert.
+  - The register adds a "Needs attention" strip (risk approvals, open screening alerts, documents expiring within 30 days, reviews in progress). Each count is also an `attention` filter.
+  - Rows show inline flags.
+  - The Excel export adds latest screening, screening date, nearest expiry and pending risk change columns.
+- **Risk changes** (`ClientRiskChange`):
+  - A compliance editor requests the change with a proposed risk, an optional CDD type, a `RiskOverrideReason` and an explanation. Only one can be pending per client.
+  - DMLRO, MLRO, Company Admin or Super Admin approve or reject it. This is checked in the service, not only by the matrix. The decider must be a different person from the requester, the row is locked during the decision, and a rejection needs a note.
+  - Approval sets risk and CDD and recalculates `nextReviewDate` from `lastReviewDate` under the new risk. The requester (or a decider) can withdraw a pending change.
+- **Periodic reviews** (`ClientReview`):
+  - Active clients only, and one in progress at a time.
+  - Completion requires a screening recorded since the review started, plus findings.
+  - Outcomes are No change, Risk change requested (creates a pending risk change) and Exit recommended. Exit only records the recommendation; marking the client inactive is still a separate register action.
+  - Completion sets `lastReviewDate` to now and `nextReviewDate` by the current risk. Clients with no risk level get no next review date.
+- **Screening** (`ClientScreening`): Review and Alert results notify immediately. A client counts as an open screening alert until a later screening is Clear or Pending. Evidence files are `ClientDocument` rows in the system "Screening Evidence" folder (`screeningId`), validated before the screening is saved. That folder is not offered for ordinary uploads.
+- **Reminders** (`ComplianceRemindersService`):
+  - Runs 60 seconds after start, then every `COMPLIANCE_REMINDER_INTERVAL_HOURS` (default 6). `COMPLIANCE_REMINDERS_ENABLED=false` turns it off.
+  - Notifies reviews due within 30 days or overdue, tracked documents at the 90/60/30-day and expired stages (the current stage only), and risk changes pending for more than 3 days.
+  - Each milestone is claimed in `ComplianceReminder` (unique per tenant/kind/entity/milestone) together with the notification, so repeated runs and several PM2 processes notify once.
+  - `POST /api/compliance/reminders/run` lets Company/Super Admin run it for their company.
+- **Notifications:** new types `COMPLIANCE_*` with an optional `Notification.clientId`. They go to AML Team/Supervisor, DMLRO and MLRO; risk approval requests go to DMLRO/MLRO; expiry also goes to Operations. Clicking one opens the matching client tab.
+- **API** (compliance area), all under `/api/compliance/clients/:clientId/`:
+  - `GET monitoring`
+  - `POST screenings` (multipart)
+  - `POST risk-changes`, `POST risk-changes/:id/decision`, `POST risk-changes/:id/cancel`
+  - `POST reviews`, `POST reviews/:id/complete`, `POST reviews/:id/cancel`
+  - `POST expiry-items`, `PATCH expiry-items/:id`
+  Every write is audited.
+- **Migration:** `20261110120000_compliance_monitoring` adds the tables, enum values and the notification client column. It is applied to the local development database only. It adds enum values with `ALTER TYPE … ADD VALUE`, which needs PostgreSQL 12 or newer.
+- **Verification:**
+  - `node backend/scripts/check-compliance-clients.cjs` (synthetic: four-eyes approval, approval effects, review rules, screening alert notification, expiry stages, one-time reminders).
+  - In the local app as Super Admin on client abc-new, I checked adding an expiry record, starting and completing a review (completion blocked until a screening was recorded), an Alert screening, requesting a risk change, the four-eyes message for the requester, the register attention strip and filter, an automatic reminder notification, and opening a notification to the right tab.
+  - Not exercised in the browser: approval by a second DMLRO/MLRO account (covered only by the synthetic check), and other roles.
+  - That test left a completed review, an Alert screening, a QID expiry record and a **pending** risk change on abc-new in the local database.
+
+## Compliance Client Documents, Phase 3 (2026-11-09)
+
+- The client page has three new tabs:
+  - **CDD**: customer due diligence evidence.
+  - **Monitoring**: ongoing monitoring evidence.
+  - **Compliance Docs**: Policy & Procedure Manual, Training Materials, Review Reports and Meeting Minutes, plus custom folders.
+- **Folders** (`ClientDocumentSection`) belong to a company and are shared by all its compliance clients. The six defaults are created on first use. Editors can add custom Compliance folders and archive them. Archived folders accept no uploads and stay visible only while they hold files. Default folders cannot be renamed or archived.
+- **Files** (`ClientDocument`) belong to one client.
+  - Uploads accept up to 20 files at once. Each has an optional document name (defaults to the file name) and notes.
+  - Files are checked with the shared upload rules: PDF, Word, Excel or image, 10 MB, matching extension, MIME type and file signature.
+  - Files are stored at `<CLIENT_DOCUMENT_UPLOAD_DIR>/<tenantId>/<clientId>/<random name>`. The default is `uploads/client-documents` under the backend working directory. Use an absolute persistent path in production and include it in backups.
+- **Removal is a soft delete.** The row and file are kept, an optional reason is stored, and the file is no longer listed or served. Uploads, removals and folder changes write audit entries (`ClientDocument`, `ClientDocumentSection`). Hard-deleting a client from the Clients register cascades the document rows, but the files stay on disk.
+- **API** (compliance area: view for GET, edit otherwise), all under `/api/compliance/clients/:clientId/`:
+  - `GET documents`
+  - `POST documents` (multipart `files`, `sectionId`, `title`, `notes`)
+  - `GET documents/:id/view`
+  - `POST documents/:id/delete` (`reason`)
+  - `POST document-sections`
+  - `PATCH document-sections/:id`
+- **Migration:** `20261110090000_client_documents`, applied to the local development database only.
+- **Verification:** `node backend/scripts/check-compliance-clients.cjs` (synthetic persistence: default folders, tenant/prospect scoping, upload validation, path-traversal refusal, soft delete, folder rules). In the local app against the local database, I checked upload with a generated test PDF, view, rejected HTML/fake-PDF/extra-field uploads, removal with a reason, and adding/archiving a folder. That test left one removed test document on client abc-new and one archived empty folder in the local database. The old system's Screening uploads (Clear/Review/Alert) are not included; ongoing screening is Phase 4.
+
+## Compliance Client Profile, Phase 2 (2026-11-09)
+
+- Sidebar: a collapsible **Compliance** group (`navItems` in `layouts/AppLayout.tsx`, `NavGroupItem`) holds **Compliance Clients**. It opens automatically on `/compliance/*` pages and is hidden when the user can see none of its items. Add later compliance pages (for example Compliance Staff) as children of that group. In the collapsed focused-workspace sidebar, children show as icons.
+- `/compliance/clients/:id` (linked from the register's client name and View button) replaces the legacy client detail page. Its header shows code, status, risk, CDD, review dates, engagements and contact details.
+- Tabs: Overview (register details, risk history, onboarding assessment, key contact), Company, Directors & Managers, Shareholders, Secretary, SEF, UBOs, KYC & Documents, CRRF and Engagements. The legacy "BRA Sheet" is the CRRF; there is no separate BRA category.
+- `GET /api/compliance/clients/:id` (compliance view) reads company and party details from the client's profile KYC case: the latest CLIENT_ACTIVE case with a form, else the latest case with a form. It uses the new read-only `KycService.formSnapshot`, which never creates a form or KYC number, and nothing is copied into client tables. Mapping lives in `compliance-clients/compliance-client-profile.ts`.
+  - UBOs use the same `beneficialOwners` merge as the KYC preview/exports.
+  - Officers are grouped by position text (Secretary, SEF / Senior Executive Function, Director, managers and signatories); one person can appear in several tabs.
+- CRRF rating and file names are returned only to roles with CRRF view access; CRRF reviewer comments are never returned. Document View and KYC links reuse the existing KYC endpoints, so they still require KYC access.
+- Overview lets compliance editors change jurisdiction, email, phone and address through the existing audited `PATCH`. KycModule now exports KycService.
+- Not yet: client-level document folders, ID expiry dates (the KYC form does not capture passport/QID expiry), editing parties, and the periodic-review workflow. These are Phases 3–4.
+- Verification: build plus `node backend/scripts/check-compliance-clients.cjs` (now also checks profile mapping, profile-case choice, CRRF restriction and tenant scoping). Each tab and the document viewer were checked in the local app against the local development database with the Super Admin account. Other roles were not exercised in the browser.
+
+## Compliance Clients Register, Phase 1 (2026-11-09)
+
+- Ports the register part of the legacy app.newoon.com Compliance → Compliance Client module. `/compliance/clients` lists onboarded clients (ACTIVE, INACTIVE, ON_HOLD) with client code, CR/QFC number, jurisdiction, CDD type (SDD/RDD/EDD = `DueDiligenceType`), risk, status, last/next review, latest engagement and KYC case. It has search, filters, pagination, stat cards and a real `.xlsx` export (`GET /api/compliance/clients/export/excel`, capped at 5,000 rows). Users with edit access can set the CDD type and mark a client inactive (reason required) or reactivate it. Every change writes an `AuditLog` entry (`entityType` `ComplianceClient`). Clients on hold are still released only through the KYC engagement decision.
+- **Schema** (`20261109100000_compliance_client_register`, then `20261109120000_client_code_format`, which turns `clientCode` into text): new nullable `Client` fields (`clientCode` unique per tenant, `jurisdiction`, `email`, `phone`, `address`, `cddType`, `riskLevel`, `lastReviewDate`, `nextReviewDate`, `activatedAt`, `statusReason`), plus a new `ClientEngagement` model (the legacy "job"), linked 1:1 to a KYC case where one exists. `Client.status` remains a string in this phase.
+- **Client code format:** `CL-<activation year>-<4 digits>` (for example `CL-2026-0001`), restarting each year like KYC (`KYC-2026-0007`) and engagement (`ENG-2026-0001`) numbers. Both client codes and engagement numbers are issued as the highest existing number + 1, so deleting a record never reissues a number. Clients imported from the legacy system will keep their old number as `CL-LEG-0263` (`legacyClientCode` in `common/client-compliance.ts`). The register sorts by activation date, not by code.
+- **Activation:** `CONVERT_TO_CLIENT` in `completeEngagementDecision` now also assigns the next client code (keeps an existing one), and copies risk (reclassification > internal review > CRRF) and CDD type from the case. It also sets `lastReviewDate` to now and `nextReviewDate` by risk (High 1 year, Medium 2 years, Low 3 years; `common/client-compliance.ts`), and creates an IN_PROGRESS engagement `ENG-<year>-NNNN`. Code/number conflicts retry up to three times. Clients activated before this release have no code, risk or review dates until they are imported or re-activated. The import of the 263 legacy clients is a later phase.
+- **Backfill for clients activated before this release:** `backend/scripts/backfill-compliance-clients.cjs`. It is a dry run by default; `--apply` writes. Run it from the repo root after `npm run build`: `node --env-file=backend/.env backend/scripts/backfill-compliance-clients.cjs [--apply]`. It applies only to Active/Inactive/On-hold clients without a code. In activation order it assigns `CL-<year>-NNNN`, risk and CDD from the latest KYC case, activation date (the case's CLIENT_ACTIVE history, else the client's last update), last review = activation, next review by risk, contact email/phone, and an engagement for the case. It never changes status. It writes one audit entry per client (`COMPLIANCE_REGISTER_BACKFILL`) and is safe to re-run (a second run finds nothing). Back up first on any shared server. It was applied to the local development database only (5 clients, CL-2026-0001 to 0005). Clients whose case has no risk rating remain "Pending" with no review date until risk is set.
+- **Manual clients:** clients created with Add Client now start as `PROSPECT` instead of `ACTIVE`. `GET /api/clients?status=ACTIVE|PROSPECT|ALL` (default ACTIVE). The Clients page has a status filter, and Create KYC Case lists all statuses so prospects can start KYC. Dashboard "Clients" still counts ACTIVE only.
+- **Access:** new matrix area `compliance`. Defaults: Company Admin, AML Team, AML Supervisor, DMLRO and MLRO edit; SEF and Operations view; others none. When the matrix has already been saved, the migration inserts those same grants; adjust them afterwards in Access Control. Frontend visibility is presentation only; `RolesGuard` maps `ComplianceClientsController` to the area.
+- **Dependency:** `exceljs@^4.4.0` (backend). `npm audit` reports one moderate advisory through its bundled `uuid`; the export only writes workbooks. Run `npm ci` on deploy.
+- **Deploy:** back up the database, then run `npm exec -w backend -- prisma migrate deploy` before restarting, and deploy both workspaces together. Both migrations have been applied only to the local development database (`localhost/newoon_mis`), not to staging or production.
+- **Verification:** run `node backend/scripts/check-compliance-clients.cjs` after building (synthetic persistence: review cycle, risk/CDD precedence, filters/tenant scoping, audited updates, xlsx round-trip, prospect intake, activation with code retry, access defaults vs migration grants). The page was also checked in a local Vite build against a synthetic mock API. Real-database behaviour, migration on staging data, concurrent activations and role access with staging accounts remain unverified.
+
+## Self-Service Password Change (2026-11-01)
+
+- Every authenticated role can open Change Password in the sidebar at `/account/password`. `POST /api/auth/change-password` derives the account only from its verified JWT; no target account ID is accepted. Current password, a different new password (16 characters minimum, 72 UTF-8 bytes maximum), and matching confirmation are required.
+- Uses existing login throttling/lockout and session-version security. Hash verification precedes an atomic compare-and-update, session-version increment, pending login-code removal and credential-free audit. Success signs the browser out and requires a fresh login. No role, tenant or workflow records are changed.
+- This feature relies on the existing uncommitted login-protection/sessionVersion work in this checkout, including its migration; it cannot be deployed independently to an older schema. Preserve and review those changes separately. Verify after build with `node backend/scripts/check-self-password.cjs`; synthetic tests do not replace staging verification.
+
 ## Dashboard Reporting Accuracy (2026-10-31)
 
 - Dashboard Clients counts ACTIVE records only, matching the existing Clients register. PROSPECT records created during intake are not activated or deleted by this fix. Tenant totals query stored tenants instead of assuming one; users without a tenant cannot request tenant-scoped metrics.
@@ -12,6 +164,7 @@
 - Login retains its original split branding/form layout, with equally sized input/button controls and responsive spacing. Fields start empty, with no default password or public demo-account shortcuts. Email whitespace/case is normalized; invalid credentials still fail bcrypt verification. This does not reset existing accounts or remove development seed data.
 - Users now supports tenant-scoped account creation, profile/role/status editing and admin password reset. Company Admin cannot assign/manage Super Admin, suspend itself, change its own roles or remove the last active company admin. Service-level role checks remain mandatory even when area permissions are configured. Writes and audits share transactions; company-admin edits lock the tenant for last-admin checks.
 - Assign existing workflow roles rather than inventing new role names. Global role/module permissions remain in the existing Super-Admin-only Access Control page. No schema migration, seed, invitation email or public registration was added. Password reset does not revoke existing JWTs; suspension is checked at subsequent requests. Do not claim full session revocation.
+- First Super Admin: `node --env-file=backend/.env backend/scripts/create-super-admin.cjs` from repo root in an interactive terminal. It works only when no active Super Admin exists and the email is unused. It prompts privately, creates one platform-level (no company) Super Admin and records an audit. It never touches other users; do not use the seed for this.
 - Operator recovery: `node --env-file=backend/.env backend/scripts/reset-admin-password.cjs` from repo root in an interactive terminal. It changes only an existing administrator password, prompts privately and records an audit. See [User Administration](USER_ADMINISTRATION.md) for procedures and verification commands. Deploy frontend and backend together; server credentials/data were not modified locally.
 
 ## Preliminary to Full KYC Preparation (2026-10-27)
@@ -155,6 +308,10 @@ Do not include real `.env` files in the handover or Git. Transfer secrets throug
 | `BODY_LIMIT` | JSON/urlencoded body limit; default `10mb` |
 | `CHROMIUM_PATH` | Chrome/Chromium executable for KYC PDF; auto-detected when unset |
 | `PDF_RENDER_CONCURRENCY` | Maximum simultaneous PDF renders; default `2` |
+| `TRUST_PROXY` | Set behind NGINX/Cloudflare (for example `loopback` or `1`) so sign-in throttling sees real client addresses; unset when the API is reached directly |
+| `LOGIN_OTP_ENABLED` | `true` requires a 6-digit email code after the password; leave `false` until SMTP works |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` | Outgoing email for sign-in codes; secrets go only in `backend/.env` |
+| `LOGIN_OTP_DEV_LOG` | Development only: print codes to the server log when SMTP is not configured; ignored in production |
 | `VITE_API_URL` | Public browser API base; `/api` for same-origin deployment |
 
 Vite variables are public build-time values; never store keys in `VITE_*`. Changing them requires rebuilding the frontend. Backend loads `backend/.env` from repo root or `.env` from backend working directory. Keep database backups, uploads, and secrets separate from code deployment.
@@ -163,7 +320,7 @@ Vite variables are public build-time values; never store keys in `VITE_*`. Chang
 
 Roles include Super Admin, Company Admin, Operating Team, AML Team/Supervisor, DMLRO, MLRO, SEF, Accounting Team, and HR Team. Matrix levels are `NONE`, `VIEW`, and `EDIT` across enquiries, clients, KYC, screening, CRRF, approvals, and administration. Preserve Super Admin access and configured/fallback role behavior.
 
-Tenant scoping, confidential review visibility, audits, notifications, and authorization must remain enforced on backend queries and actions. Frontend route/sidebar visibility does not secure the API. Do not rewrite applied migrations or use reset/db-push commands on shared databases without explicit authorization.
+The Access Control matrix decides what each role can view or edit per area (`common/guards/roles.guard.ts`); once saved it replaces an endpoint's `@Roles` list, so actions that must never be grantable (user management, review-stage decisions) also check roles in their services. Platform-wide endpoints (tenants, tenant modules, modules, permissions) are not part of the matrix and stay Super Admin only. Review approvals follow a four-eyes rule enforced in `lockReviewSubmission`: one person can submit only one stage of a case per approval round. Never include a User relation with `true` in a Prisma query that reaches an API response; use `userSummarySelect` (`common/user-summary.ts`). Tenant scoping, confidential review visibility, audits, notifications, and authorization must remain enforced on backend queries and actions. Frontend route/sidebar visibility does not secure the API. Do not rewrite applied migrations or use reset/db-push commands on shared databases without explicit authorization.
 
 ## Export Pipeline and Verification
 

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -15,7 +15,8 @@ export class ClientsService {
       data: {
         tenantId,
         name: dto.name,
-        status: 'ACTIVE',
+        // Manually added clients are prospects until a KYC engagement decision activates them.
+        status: 'PROSPECT',
         registrationNumber: dto.registrationNumber,
         industry: dto.industry,
         country: dto.country,
@@ -35,9 +36,14 @@ export class ClientsService {
     });
   }
 
-  findAll(user: RequestUser) {
+  findAll(user: RequestUser, status?: string) {
+    // The register shows active clients by default; intake screens ask for prospects or every status.
+    const filter = String(status || 'ACTIVE').trim().toUpperCase();
+    if (!['ACTIVE', 'PROSPECT', 'ALL'].includes(filter)) {
+      throw new BadRequestException('Invalid client status filter.');
+    }
     return this.prisma.client.findMany({
-      where: { ...this.tenantWhere(user), status: 'ACTIVE' },
+      where: { ...this.tenantWhere(user), ...(filter === 'ALL' ? {} : { status: filter }) },
       orderBy: { createdAt: 'desc' },
       include: {
         contacts: true,
@@ -251,9 +257,19 @@ export class ClientsService {
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
 
-    await this.prisma.client.delete({
-      where: { id: existing.id }
-    });
+    await this.prisma.$transaction([
+      this.prisma.auditLog.create({
+        data: {
+          tenantId: existing.tenantId,
+          actorId: user.id,
+          action: 'DELETE',
+          entityType: 'Client',
+          entityId: existing.id,
+          metadata: { name: existing.name, status: existing.status }
+        }
+      }),
+      this.prisma.client.delete({ where: { id: existing.id } })
+    ]);
 
     return { id: existing.id };
   }

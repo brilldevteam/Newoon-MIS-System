@@ -386,6 +386,17 @@ export class KycController {
   }
 
   @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/engagement-letter/upload')
+  @UseInterceptors(FilesInterceptor('files', 5, uploadInterceptorOptions()))
+  uploadEngagementLetter(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer?: Buffer }>
+  ) {
+    return this.kycService.uploadEngagementLetter(user, id, files || []);
+  }
+
+  @Roles('OPERATING_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/engagement-decision')
   completeEngagementDecision(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: Record<string, unknown>) {
     return this.kycService.completeEngagementDecision(user, id, dto);

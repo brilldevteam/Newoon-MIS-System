@@ -12,7 +12,8 @@ export class NotificationsService {
       where: this.notificationWhere(user),
       include: {
         kycCase: { include: { client: true, service: true } },
-        enquiry: { select: { id: true, status: true } }
+        enquiry: { select: { id: true, status: true } },
+        client: { select: { id: true, name: true, clientCode: true } }
       },
       orderBy: { createdAt: 'desc' },
       take: 20
@@ -33,7 +34,8 @@ export class NotificationsService {
       data: { isRead: true },
       include: {
         kycCase: { include: { client: true, service: true } },
-        enquiry: { select: { id: true, status: true } }
+        enquiry: { select: { id: true, status: true } },
+        client: { select: { id: true, name: true, clientCode: true } }
       }
     });
   }
@@ -66,7 +68,19 @@ export class NotificationsService {
 
     const types = new Set<NotificationType>([NotificationType.GENERAL]);
 
+    // Compliance client monitoring (reviews, expiry, screening, risk changes).
+    if (this.hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'])) {
+      types.add(NotificationType.COMPLIANCE_REVIEW_DUE);
+      types.add(NotificationType.COMPLIANCE_DOCUMENT_EXPIRING);
+      types.add(NotificationType.COMPLIANCE_SCREENING_ALERT);
+      types.add(NotificationType.COMPLIANCE_RISK_CHANGE_DECIDED);
+    }
+    if (this.hasAnyRole(user, ['DMLRO', 'MLRO'])) {
+      types.add(NotificationType.COMPLIANCE_RISK_CHANGE_REQUESTED);
+    }
+
     if (this.hasAnyRole(user, ['OPERATING_TEAM'])) {
+      types.add(NotificationType.COMPLIANCE_DOCUMENT_EXPIRING);
       types.add(NotificationType.ADDITIONAL_INFORMATION_REQUESTED);
       types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);
       types.add(NotificationType.CLIENT_ACTIVATED);

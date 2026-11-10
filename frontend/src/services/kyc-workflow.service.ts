@@ -381,6 +381,7 @@ export type AppNotification = {
   createdAt: string;
   kycCase?: KycCase | null;
   enquiry?: { id: string; status?: string } | null;
+  client?: { id: string; name: string; clientCode?: string | null } | null;
 };
 
 export type ReviewTask = {
@@ -448,8 +449,9 @@ export type InternalReviewWorkspace = {
   };
 };
 
-export function listClients() {
-  return api.get<Client[]>('/clients').then((response) => response.data);
+// The API returns ACTIVE clients unless a status is given; KYC case creation also needs prospects.
+export function listClients(status: 'ACTIVE' | 'PROSPECT' | 'ALL' = 'ACTIVE') {
+  return api.get<Client[]>('/clients', { params: status === 'ACTIVE' ? undefined : { status } }).then((response) => response.data);
 }
 
 export function createClient(payload: {
@@ -656,6 +658,13 @@ export function startKycAmendment(id: string, payload: { sections: string[]; rea
 
 export function completeFinalKycDecision(id: string, payload: { decision: 'SAME_KYC_FINAL' | 'AMENDMENT_REQUIRED'; sections?: string[]; reason?: string }) {
   return api.post<KycCase>(`/kyc/${id}/final-kyc-decision`, payload).then((response) => response.data);
+}
+
+// Signed engagement letter at the activation stage (general uploads are locked after final KYC approval).
+export function uploadEngagementLetter(id: string, file: File) {
+  const data = new FormData();
+  data.append('files', file);
+  return api.post<KycCase>(`/kyc/${id}/engagement-letter/upload`, data, { headers: { 'Content-Type': 'multipart/form-data' } }).then((response) => response.data);
 }
 
 export function uploadLegalDocumentFiles(id: string, payload: { documentType: string; files: File[] }) {

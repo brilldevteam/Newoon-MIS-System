@@ -36,7 +36,7 @@ export function CreateKycCasePage() {
   });
 
   useEffect(() => {
-    Promise.all([listClients(), id ? getKycCase(id) : Promise.resolve(null)])
+    Promise.all([listClients('ALL'), id ? getKycCase(id) : Promise.resolve(null)])
       .then(([items, kycCase]) => {
         setClients(items);
         if (kycCase) {
