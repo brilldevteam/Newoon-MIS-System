@@ -53,6 +53,23 @@ const REQUIRED_DOCUMENT_TYPES = [
   'Tax Card'
 ];
 
+const SCREENING_LIST_NAMES: Record<string, string> = {
+  NCTC: 'NCTC', UN: 'UN', OFAC: 'OFAC', EU: 'EU', PPO_LIST: 'PPO list', WORLD_CHECK: 'World-Check', GOOGLE: 'Google (adverse media)'
+};
+
+function screeningListName(type: string) {
+  return SCREENING_LIST_NAMES[type] || type;
+}
+
+// "A, B and C" - at most `limit` names, then "and N more", so messages stay readable.
+function namesList(names: string[], limit = 6) {
+  const unique = [...new Set(names.filter(Boolean))];
+  const shown = unique.slice(0, limit);
+  const extra = unique.length - shown.length;
+  if (extra > 0) return `${shown.join(', ')} and ${extra} more`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0] || '';
+}
+
 @Injectable()
 export class KycService {
   private readonly logger = new Logger(KycService.name);
@@ -563,22 +580,23 @@ export class KycService {
   async submissionReadiness(user: RequestUser, id: string) {
     const kycCase = await this.requireWritableCase(user, id);
     return this.prisma.$transaction(async (tx) => {
-      const checks: Array<{ label: string; complete: boolean; message: string }> = [];
-      const addCheck = async (label: string, check: () => Promise<void>) => {
-        try { await check(); checks.push({ label, complete: true, message: '' }); }
+      // `key` lets the screens link each item to the page where it is fixed; the order is the order to work in.
+      const checks: Array<{ key: string; label: string; complete: boolean; message: string }> = [];
+      const addCheck = async (key: string, label: string, check: () => Promise<void>) => {
+        try { await check(); checks.push({ key, label, complete: true, message: '' }); }
         catch (error) {
           if (!(error instanceof BadRequestException)) throw error;
-          checks.push({ label, complete: false, message: error.message });
+          checks.push({ key, label, complete: false, message: error.message });
         }
       };
-      await addCheck('Screening', () => this.assertScreeningReady(tx, kycCase));
-      await addCheck('CRRF', () => this.assertCrrfReady(tx, kycCase));
-      await addCheck('Full KYC compliance and risk', () => this.assertComplianceReady(tx, kycCase));
       const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
-      checks.push({ label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'Upload at least one document required for KYC preparation.' });
+      checks.push({ key: 'documents', label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'No documents uploaded yet. Use Upload in "Documents Required for KYC Preparation" and add at least one document (for example the CR, QID or passport copies).' });
+      await addCheck('form', 'KYC form - D. Compliance and Risk', () => this.assertComplianceReady(tx, kycCase));
+      await addCheck('screening', 'Screening', () => this.assertScreeningReady(tx, kycCase));
+      await addCheck('crrf', 'CRRF', () => this.assertCrrfReady(tx, kycCase));
       const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       const comments = hasComment(review?.amlClarificationFindings);
-      checks.push({ label: 'AML Supervisor comments', complete: comments, message: comments ? '' : 'Enter AML Supervisor comments below before submitting.' });
+      checks.push({ key: 'comments', label: 'AML Supervisor comments', complete: comments, message: comments ? '' : 'Write the AML Supervisor comments on the Submit to DMLRO page.' });
       return { ready: checks.every((check) => check.complete), checks, supervisorComments: safeComment(review?.amlClarificationFindings) };
     });
   }
@@ -2803,8 +2821,10 @@ export class KycService {
           const evidence = await tx.screeningCaseDocument.findMany({ where });
           const resultTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST', 'WORLD_CHECK', 'GOOGLE'];
           const evidenceTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST'];
-          const missingCommonChecks = resultTypes.some((type) => !commonChecks.some((check) => check.checkType === type && check.resultStatus !== 'NOT_CHECKED' && (!['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) || hasComment(check.notes))));
-          const missingEvidence = evidenceTypes.some((type) => !evidence.some((document) => document.checkType === type && document.storagePath));
+          const isMatch = (status: string) => ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(status);
+          const listsWithoutResult = resultTypes.filter((type) => !commonChecks.some((check) => check.checkType === type && check.resultStatus !== 'NOT_CHECKED'));
+          const matchesWithoutComment = resultTypes.filter((type) => commonChecks.some((check) => check.checkType === type && isMatch(check.resultStatus) && !hasComment(check.notes)));
+          const listsWithoutEvidence = evidenceTypes.filter((type) => !evidence.some((document) => document.checkType === type && document.storagePath));
           const form = await tx.kycForm.findFirst({ where, include: this.formInclude() });
           const current = form ? this.serializeForm(form) : null;
           const company: Record<string, unknown> = current?.sectionA || {};
@@ -2814,21 +2834,45 @@ export class KycService {
             ...this.asArray<RowPayload>(current?.sectionB.ubos),
             ...this.asArray<RowPayload>(current?.sectionC.managers)
           ].filter((row) => this.text(row.fullName).trim());
-          const missingParty = requiredParties.some((row) => !screening.some((record) =>
+          const unscreened = requiredParties.filter((row) => !screening.some((record) =>
             record.status === 'COMPLETED' && (this.text(row.identityNumber).trim()
               ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
               : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase())));
-          if (!screening.length || missingParty) throw new BadRequestException('Complete Screening for the client and every current shareholder, beneficial owner and manager before submitting to DMLRO.');
-          if (missingCommonChecks || missingEvidence) throw new BadRequestException('Complete Screening common-list results and upload the NCTC, UN, OFAC, EU and PPO evidence before submitting to DMLRO.');
-          if (screening.some((record) => record.status !== 'COMPLETED' || !record.conclusionStatus || !hasComment(record.remarks) || record.checks.some((check) => check.isSelected && (check.resultStatus === 'NOT_CHECKED' || ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) && !hasComment(check.notes))))) {
-            throw new BadRequestException('Complete Screening records with final results, remarks and comments for any matches before submitting to DMLRO.');
+          // Each problem is reported by name so the AML team knows exactly what to fix (one sentence per line).
+          const issues: string[] = [];
+          if (!screening.length) {
+            issues.push('No screening has been done yet. Open Screening and screen the company and every shareholder, beneficial owner and manager.');
+          } else if (unscreened.length) {
+            issues.push(`These names still need a completed screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. If a name is already screened, check its ID / CR number matches the KYC form.`);
           }
+          if (listsWithoutResult.length) issues.push(`Record a result for these screening lists: ${namesList(listsWithoutResult.map(screeningListName), 10)}.`);
+          if (matchesWithoutComment.length) issues.push(`Add a comment explaining the match on: ${namesList(matchesWithoutComment.map(screeningListName), 10)}.`);
+          if (listsWithoutEvidence.length) issues.push(`Upload the screening evidence (screenshot or PDF) for: ${namesList(listsWithoutEvidence.map(screeningListName), 10)}.`);
+          const incomplete = screening
+            .map((record) => {
+              const missing: string[] = [];
+              if (record.status !== 'COMPLETED') missing.push('mark it completed');
+              if (!record.conclusionStatus) missing.push('choose the conclusion');
+              if (!hasComment(record.remarks)) missing.push('add remarks');
+              if (record.checks.some((check) => check.isSelected && check.resultStatus === 'NOT_CHECKED')) missing.push('record a result for every selected list');
+              if (record.checks.some((check) => check.isSelected && isMatch(check.resultStatus) && !hasComment(check.notes))) missing.push('comment on each match');
+              return missing.length ? `${record.entityName}: ${missing.join(', ')}` : '';
+            })
+            .filter(Boolean);
+          if (incomplete.length) issues.push(`Finish these screening records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
+          if (issues.length) throw new BadRequestException(issues.join('\n'));
   }
 
   private async assertCrrfReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
           const crrf = await tx.crrfRecord.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, include: { documents: true } });
-          if (!crrf?.riskRating || !crrf.documents.some((document) => document.storagePath)) {
-            throw new BadRequestException('Complete the CRRF risk rating and upload the CRRF document before submitting to DMLRO.');
+          const issues: string[] = [];
+          if (!crrf) issues.push('The CRRF has not been started. Open CRRF, choose the risk rating and upload the signed CRRF document.');
+          else {
+            if (!crrf.riskRating) issues.push('Choose the CRRF risk rating and save it.');
+            if (!crrf.documents.some((document) => document.storagePath)) issues.push('Upload the CRRF document on the CRRF page.');
+          }
+          if (issues.length) {
+            throw new BadRequestException(issues.join('\n'));
           }
   }
 

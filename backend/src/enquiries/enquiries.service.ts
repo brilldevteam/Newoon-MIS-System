@@ -54,7 +54,9 @@ export class EnquiriesService {
       await this.assertClientTenant(user, dto.clientId);
 
       const enquiryId = await this.prisma.$transaction(async (prisma) => {
+        // nextEnquiryCode holds the register lock, so two quick clicks cannot both pass the duplicate check.
         const enquiryCode = await this.nextEnquiryCode(prisma, tenantId);
+        await this.assertNoOpenDuplicate(prisma, tenantId, dto);
         const enquiry = await prisma.enquiry.create({
           data: {
             tenantId,
@@ -192,6 +194,13 @@ export class EnquiriesService {
           : dto.clientId || null;
 
     await this.prisma.$transaction(async (prisma) => {
+      await this.lockEnquiryRegister(prisma, existing.tenantId);
+      await this.assertNoOpenDuplicate(prisma, existing.tenantId, {
+        enquiryType: dto.enquiryType ?? existing.enquiryType,
+        companyName: dto.companyName === undefined ? existing.companyName : dto.companyName,
+        proposedCompanyName: dto.proposedCompanyName === undefined ? existing.proposedCompanyName : dto.proposedCompanyName,
+        clientId: nextClientId === undefined ? existing.clientId : nextClientId
+      }, existing.id);
       if (dto.attachments) {
         await prisma.enquiryAttachment.deleteMany({
           where: { enquiryId: existing.id, tenantId: existing.tenantId }
@@ -815,11 +824,86 @@ export class EnquiriesService {
     return { id: existing.id };
   }
 
+  // Duplicate check for the enquiry form: is there already an open enquiry for this company / client?
+  async findOpenDuplicate(user: RequestUser, query: { enquiryType?: string; name?: string; clientId?: string; excludeId?: string }) {
+    const tenantId = this.getTenantId(user);
+    const enquiryType = Object.values(EnquiryType).includes(query.enquiryType as EnquiryType) ? (query.enquiryType as EnquiryType) : undefined;
+    if (!enquiryType) return { duplicate: null };
+    const duplicate = await this.openDuplicate(this.prisma, tenantId, {
+      enquiryType,
+      companyName: query.name,
+      proposedCompanyName: query.name,
+      clientId: query.clientId
+    }, query.excludeId);
+    return { duplicate: duplicate ? { id: duplicate.id, enquiryCode: duplicate.enquiryCode, stage: duplicate.stage, message: this.duplicateMessage(duplicate) } : null };
+  }
+
+  private async assertNoOpenDuplicate(
+    prisma: Prisma.TransactionClient, tenantId: string,
+    candidate: { enquiryType?: EnquiryType | null; companyName?: string | null; proposedCompanyName?: string | null; clientId?: string | null },
+    excludeId?: string
+  ) {
+    const duplicate = await this.openDuplicate(prisma, tenantId, candidate, excludeId);
+    if (duplicate) throw new ConflictException(this.duplicateMessage(duplicate));
+  }
+
+  // One open enquiry per company (or per client for new services). An enquiry stays "open" until it is closed,
+  // or until its KYC case finishes (client active or rejected). Names match ignoring case, spaces and punctuation,
+  // and across the existing-company and proposed-company types (the same name is the same company).
+  private async openDuplicate(
+    prisma: Prisma.TransactionClient | PrismaService, tenantId: string,
+    candidate: { enquiryType?: EnquiryType | null; companyName?: string | null; proposedCompanyName?: string | null; clientId?: string | null },
+    excludeId?: string
+  ) {
+    const type = candidate.enquiryType;
+    if (!type) return null;
+    const byClient = type === EnquiryType.CURRENT_CLIENT_NEW_SERVICES;
+    const rawName = type === EnquiryType.PROPOSED_COMPANY ? candidate.proposedCompanyName : candidate.companyName;
+    const key = enquiryNameKey(rawName);
+    if (byClient ? !candidate.clientId : !key) return null;
+    const rows = await prisma.enquiry.findMany({
+      where: {
+        tenantId,
+        enquiryType: byClient ? type : { in: [EnquiryType.EXISTING_LEGAL_ENTITY, EnquiryType.PROPOSED_COMPANY] },
+        status: { not: EnquiryStatus.CLOSED },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        ...(byClient ? { clientId: candidate.clientId } : {})
+      },
+      select: {
+        id: true, enquiryCode: true, enquiryType: true, status: true, companyName: true, proposedCompanyName: true,
+        generatedKycCases: { select: { status: true }, orderBy: { createdAt: 'desc' }, take: 1 }
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+    const finishedKyc: KycCaseStatus[] = [KycCaseStatus.CLIENT_ACTIVE, KycCaseStatus.CLIENT_REJECTED, KycCaseStatus.MLRO_REJECTED, KycCaseStatus.SEF_REJECTED];
+    for (const row of rows) {
+      const rowName = row.enquiryType === EnquiryType.PROPOSED_COMPANY ? row.proposedCompanyName : row.companyName;
+      if (!byClient && enquiryNameKey(rowName) !== key) continue;
+      const kycStatus = row.generatedKycCases[0]?.status;
+      if (row.status === EnquiryStatus.CONVERTED_TO_KYC && kycStatus && finishedKyc.includes(kycStatus)) continue;
+      const stage = row.status === EnquiryStatus.CONVERTED_TO_KYC
+        ? 'its KYC is in progress'
+        : { DRAFT: 'it is a draft', SUBMITTED_TO_AML_SUPERVISOR: 'it is with the AML Supervisor', RETURNED_TO_BD: 'it was returned to BD for correction', READY_FOR_KYC: 'it is ready for KYC' }[row.status as string] || 'it is still open';
+      return { id: row.id, enquiryCode: row.enquiryCode, name: rowName || '', stage };
+    }
+    return null;
+  }
+
+  private duplicateMessage(duplicate: { enquiryCode: string; name: string; stage: string }) {
+    const subject = duplicate.name ? `"${duplicate.name}"` : 'this client';
+    return `An enquiry for ${subject} already exists: ${duplicate.enquiryCode} (${duplicate.stage}). Open ${duplicate.enquiryCode} and continue there instead of creating a new one.`;
+  }
+
+  private lockEnquiryRegister(prisma: Prisma.TransactionClient, tenantId: string) {
+    const year = new Date().getFullYear();
+    return prisma.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), CAST(${year} AS INTEGER))`;
+  }
+
   private async nextEnquiryCode(prisma: Prisma.TransactionClient, tenantId: string) {
     const year = new Date().getFullYear();
     const prefix = `ENQ-${year}-`;
 
-    await prisma.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${tenantId}), CAST(${year} AS INTEGER))`;
+    await this.lockEnquiryRegister(prisma, tenantId);
     const latest = await prisma.enquiry.findFirst({
       where: {
         tenantId,
@@ -1201,4 +1285,9 @@ export class EnquiriesService {
 
     rmSync(enquiryDirectory, { recursive: true, force: true });
   }
+}
+
+// "Nuclei W.L.L." and " nuclei wll " are the same company for the duplicate check.
+function enquiryNameKey(value?: string | null) {
+  return (value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }

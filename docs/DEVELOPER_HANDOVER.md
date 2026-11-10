@@ -1,5 +1,49 @@
 # Newoon MIS Developer Handover
 
+## Duplicate Enquiry Prevention (2026-11-10)
+
+- **Server rule** (`backend/src/enquiries/enquiries.service.ts`): one open enquiry per company.
+  - Names are compared ignoring case, spaces and punctuation, so "Nuclei W.L.L." and "nuclei wll" match.
+  - Existing-company and proposed-company enquiries are checked against each other.
+  - New-services enquiries are matched per client instead of by name.
+  - An enquiry stays open until it is closed, or until its KYC case finishes (`CLIENT_ACTIVE`, `CLIENT_REJECTED`, `MLRO_REJECTED`, `SEF_REJECTED`).
+  - Create and update both enforce it and return `409` with a plain message, for example: `An enquiry for "Nuclei" already exists: ENQ-2026-0011 (its KYC is in progress). Open ENQ-2026-0011 and continue there…`.
+  - The check runs inside the enquiry-numbering advisory lock, so a double click cannot slip two copies through.
+- **Live check:** `GET /api/enquiries/duplicate-check?enquiryType=&name=&clientId=&excludeId=` lets the form warn while typing. It is declared before `:id`.
+- **Form** (`AddEnquiryPage.tsx`):
+  - A "Possible duplicate" warning with an "Open ENQ-…" link appears, and Save/Create stay disabled while it shows.
+  - A double click is ignored.
+  - Once an enquiry is created, retrying after a failed attachment upload updates that same enquiry instead of creating a new one, and the error says the enquiry was saved.
+  - The likely cause of the old duplicates was this case: a failed attachment upload left the form on "New Enquiry", and pressing the button again created another enquiry each time.
+- **Existing duplicates** are not removed automatically. A Super Admin can delete the extra drafts from the Enquiries list (the delete is audited). Editing a remaining duplicate draft now shows the warning that names the enquiry to continue.
+- **Checks:** `node backend/scripts/check-enquiry-duplicates.cjs` (mocked persistence). No migration is needed.
+- **Local verification:**
+  - The API refused a duplicate (`409`).
+  - The form showed the warning and disabled Save for a duplicate name, and cleared it for a new name.
+  - A test enquiry created before the cross-type fix was deleted from the local database.
+
+## Step-by-Step Guidance and Plain-English Errors (2026-11-10)
+
+- **KYC case page** (`frontend/src/components/KycCaseGuide.tsx`):
+  - It replaces the one-line "Next step" banner with a progress bar: KYC preparation → DMLRO review → MLRO / SEF approval → Final KYC → Convert to client → Client active.
+  - Below the bar is a "Your next step" box written for the signed-in role. The role that holds the case gets numbered steps and a button to the right page or section (`#final-kyc-decision`, `#client-activation`). Every other role sees "Nothing for you to do right now. This case is with …".
+  - During AML preparation the box is a live checklist from `GET /kyc/:id/submission-readiness`, in work order: documents, KYC form Section D, screening, CRRF, then AML Supervisor comments. Each unfinished item says what is missing and links to where it is fixed.
+  - "Submit to DMLRO" now always shows during preparation. It stays greyed out until everything except the comments is done. Before, it was hidden until a document was uploaded.
+- **Readiness checks** (`kyc.service.ts`):
+  - Each item now returns a `key` alongside its `label`.
+  - Screening messages name exactly what is missing: people or companies not screened, screening lists without a result, matches without a comment, lists without evidence, and unfinished records with what each one lacks.
+  - CRRF says separately whether the rating or the document is missing.
+  - Section D messages say where in the form to answer.
+  - Pass/fail logic is unchanged; only the messages changed.
+  - Multi-issue messages are separated by newlines and rendered with `whitespace-pre-line`.
+- **Submit to DMLRO page:** each checklist item has a "fix it" link and a done/needed state. The duplicate static rows were removed.
+- **Enquiry page:**
+  - A "Your next step" / "Where it is now" box covers draft, returned to BD, with the AML Supervisor, ready for KYC and converted.
+  - "Return to BD" now needs a written reason in the status note, so Operations knows what to fix.
+- **Final engagement form:** it now says whether the signed engagement letter is still required or already uploaded.
+- **Checks:** `check-ownership-review.cjs` and `check-kyc-compliance.cjs` were updated for the new wording. No migration is needed.
+- **Local verification:** the guide was checked in the browser at every stage, from AML preparation through Client active, as AML Supervisor and Operations, including phone width. The DMLRO, MLRO and SEF "your turn" views were not opened as those roles; they use the same code path as the views that were checked.
+
 ## Preliminary KYC Final Decision in One Step (2026-11-10)
 
 - Before this change, **Final KYC Decision → Use Preliminary KYC as final** on an approved Preliminary (proposed-company) KYC sent the case back for a second DMLRO and MLRO approval. It also locked the form (`KycForm.status = PRELIMINARY_FINAL_REVIEW`). That lock disabled Section H for the reviewers, so those cases could not move on.

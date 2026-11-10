@@ -1,4 +1,4 @@
-import { ArrowLeft, ClipboardCheck, Download, Edit3, Eye, FilePlus2, MessageSquare, Send } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ClipboardCheck, Clock, Download, Edit3, Eye, FilePlus2, MessageSquare, Send } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -217,6 +217,15 @@ export function EnquiryDetailsPage() {
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
+      <EnquiryNextStep
+        status={enquiry.status}
+        canOperate={canSubmitToAmlSupervisor}
+        canAml={canAmlManageStatus}
+        canEdit={canEditEnquiry}
+        editUrl={`/enquiries/${enquiry.id}/edit`}
+        kycCase={generatedKycCase ? { id: generatedKycCase.id, label: kycStatusLabel(generatedKycCase.status), owner: kycStatusOwner(generatedKycCase.status) } : null}
+      />
+
       <section className="grid gap-4 md:grid-cols-3">
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</p>
@@ -328,9 +337,10 @@ export function EnquiryDetailsPage() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
+      <section id="status-actions" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
         <h2 className="text-base font-semibold text-slate-950">Status Actions</h2>
-        <textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} placeholder="Optional status note" className="mt-4 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        <textarea value={statusNote} onChange={(event) => setStatusNote(event.target.value)} placeholder={canAmlManageStatus && enquiry.status === 'SUBMITTED_TO_AML_SUPERVISOR' ? 'Status note - required when returning to BD: say what Operations must correct' : 'Optional status note'} className="mt-4 min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        {canAmlManageStatus && enquiry.status === 'SUBMITTED_TO_AML_SUPERVISOR' && !statusNote.trim() ? <p className="mt-1 text-xs text-slate-500">To return this enquiry to BD, first write the reason above so Operations knows what to fix.</p> : null}
         <div className="mt-3 flex flex-wrap gap-2">
           {enquiry.enquiryType === 'PROPOSED_COMPANY' && preliminaryKyc ? (
             <>
@@ -351,7 +361,7 @@ export function EnquiryDetailsPage() {
           ) : null}
           {canAmlManageStatus && enquiry.status === 'SUBMITTED_TO_AML_SUPERVISOR' ? (
             <>
-              <button type="button" disabled={saving} onClick={() => setStatus('RETURNED_TO_BD')} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+              <button type="button" disabled={saving || !statusNote.trim()} title={statusNote.trim() ? undefined : 'Write the reason in the status note first'} onClick={() => setStatus('RETURNED_TO_BD')} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">
                 Return to BD
               </button>
               <button type="button" disabled={saving} onClick={() => setStatus('READY_FOR_KYC')} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
@@ -425,5 +435,75 @@ function Info({ label, value, wide = false }: { label: string; value?: string | 
       <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
       <dd className="mt-1 whitespace-pre-wrap text-sm text-slate-950">{value}</dd>
     </div>
+  );
+}
+
+// Plain-English "what happens next" for the enquiry, so Operations and AML always know their next click.
+function EnquiryNextStep({ status, canOperate, canAml, canEdit, editUrl, kycCase }: {
+  status: string;
+  canOperate: boolean;
+  canAml: boolean;
+  canEdit: boolean;
+  editUrl: string;
+  kycCase: { id: string; label: string; owner: string | null } | null;
+}) {
+  const jump = () => document.getElementById('status-actions')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  let mine = false;
+  let info = false;
+  let text = '';
+  let action: { label: string; to?: string; onClick?: () => void } | null = null;
+
+  if (status === 'DRAFT' || status === 'RETURNED_TO_BD') {
+    const returned = status === 'RETURNED_TO_BD';
+    if (canOperate) {
+      mine = true;
+      text = returned
+        ? 'AML returned this enquiry for correction. Read the reason in the Timeline below, fix it with "Edit Enquiry", then press "Submit to AML Supervisor" in Status Actions.'
+        : 'Check the details and attachments are complete, then press "Submit to AML Supervisor" in Status Actions.';
+      action = returned && canEdit ? { label: 'Edit Enquiry', to: editUrl } : { label: 'Go to Status Actions', onClick: jump };
+    } else {
+      text = returned ? 'Returned to Operations for correction. Operations will resubmit it to the AML Supervisor.' : 'Operations is still preparing this enquiry. It comes to AML once they submit it.';
+    }
+  } else if (status === 'SUBMITTED_TO_AML_SUPERVISOR') {
+    if (canAml) {
+      mine = true;
+      text = 'Review the enquiry. If it is complete, press "Mark Ready for KYC" and then "Create KYC Case". If something is missing, write the reason in the status note and press "Return to BD".';
+      action = { label: 'Go to Status Actions', onClick: jump };
+    } else {
+      text = 'Submitted. The AML Supervisor is reviewing it and will either create the KYC case or return it to you with a reason.';
+    }
+  } else if (status === 'READY_FOR_KYC') {
+    if (canAml) {
+      mine = true;
+      text = 'The enquiry is approved. Press "Create KYC Case" in Status Actions to start the KYC.';
+      action = { label: 'Go to Status Actions', onClick: jump };
+    } else {
+      text = 'Approved by AML. The AML Supervisor will create the KYC case next.';
+    }
+  } else if (kycCase || status === 'CONVERTED_TO_KYC') {
+    info = true;
+    text = kycCase ? `This enquiry is now a KYC case: ${kycCase.label}${kycCase.owner ? `, with ${kycCase.owner}` : ''}. The KYC case page shows who acts next and what is left.` : 'This enquiry has been converted to a KYC case.';
+    action = kycCase ? { label: 'Open the KYC case', to: `/kyc/${kycCase.id}` } : null;
+  } else if (status === 'CLOSED') {
+    info = true;
+    text = 'This enquiry is closed. Nothing more to do.';
+  }
+  if (!text) return null;
+
+  const box = mine || info ? 'border-sky-200 bg-sky-50/60' : 'border-slate-200 bg-slate-50';
+  return (
+    <section aria-label="Next step" className={`flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-start sm:justify-between ${box}`}>
+      <div className="flex min-w-0 items-start gap-2">
+        {mine || info ? null : <Clock className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />}
+        <p className="text-sm text-slate-700"><span className="font-semibold text-slate-950">{mine ? 'Your next step: ' : info ? 'Where it is now: ' : 'Nothing for you to do right now. '}</span>{text}</p>
+      </div>
+      {action ? (
+        action.to ? (
+          <Link to={action.to} className="inline-flex shrink-0 items-center gap-2 self-start rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">{action.label}<ArrowRight className="h-4 w-4" /></Link>
+        ) : (
+          <button type="button" onClick={action.onClick} className="inline-flex shrink-0 items-center gap-2 self-start rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">{action.label}<ArrowRight className="h-4 w-4" /></button>
+        )
+      ) : null}
+    </section>
   );
 }

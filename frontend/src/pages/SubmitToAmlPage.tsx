@@ -1,4 +1,4 @@
-import { Send } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Circle, Send } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getKycCase, getSubmissionReadiness, KycCase, SubmissionReadiness, submitToAml } from '../services/kyc-workflow.service';
@@ -46,7 +46,14 @@ export function SubmitToAmlPage() {
   }
 
   const hasComments = Boolean(new DOMParser().parseFromString(safeCommentHtml(comments), 'text/html').body.textContent?.trim());
-  const checks = readiness?.checks.map((check) => check.label === 'AML Supervisor comments' ? { ...check, complete: hasComments, message: hasComments ? '' : 'Enter AML Supervisor comments below before submitting.' } : check);
+  const checks = readiness?.checks.map((check) => check.label === 'AML Supervisor comments' ? { ...check, complete: hasComments, message: hasComments ? '' : 'Write the AML Supervisor comments in the box below.' } : check);
+  const fixLinks: Record<string, { label: string; to: string }> = {
+    documents: { label: 'Upload documents', to: `/kyc/${kycCase.id}/documents` },
+    form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form` },
+    screening: { label: 'Open Screening', to: `/kyc/${kycCase.id}/screening` },
+    crrf: { label: 'Open CRRF', to: `/kyc/${kycCase.id}/crrf` }
+  };
+  const remaining = checks?.filter((check) => !check.complete).length || 0;
   const canSubmit = Boolean(checks?.length && checks.every((check) => check.complete));
   const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
 
@@ -59,25 +66,35 @@ export function SubmitToAmlPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         <h2 className="text-base font-semibold text-slate-950">Submission Checklist</h2>
-        <div className="mt-4 space-y-3 text-sm">
-          {checks?.map((check) => <div key={check.label} className="border-b border-slate-200 py-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium text-slate-700">{check.label}</span><span className={check.complete ? 'font-semibold text-emerald-700' : 'font-semibold text-red-700'}>{check.complete ? 'Complete' : 'Required'}</span></div>{!check.complete && <p className="mt-1 text-red-700">{check.message}</p>}</div>)}
-          <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-            <span className="text-slate-700">Client inquiry recorded</span>
-            <span className="font-semibold text-emerald-700">Complete</span>
-          </div>
-          <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-            <span className="text-slate-700">Requested service selected</span>
-            <span className={kycCase.service ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
-              {kycCase.service ? 'Complete' : 'Pending'}
-            </span>
-          </div>
-          <div className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2">
-            <span className="text-slate-700">Documents required for KYC preparation uploaded</span>
-            <span className={kycCase.legalDocuments.length ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
-              {kycCase.legalDocuments.length} document{kycCase.legalDocuments.length === 1 ? '' : 's'}
-            </span>
-          </div>
-        </div>
+        <p className="mt-1 text-sm text-slate-500">
+          {!checks ? 'Checking what is left…' : remaining ? `${remaining} item${remaining === 1 ? '' : 's'} left before you can submit. Fix each one using its button, then come back here.` : 'Everything is ready. Press the submit button below.'}
+        </p>
+        <ul className="mt-3 divide-y divide-slate-200 text-sm">
+          {checks?.map((check) => {
+            const fix = check.key ? fixLinks[check.key] : undefined;
+            return (
+              <li key={check.label} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start gap-2">
+                  {check.complete ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />}
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-800">{check.label} <span className={check.complete ? 'font-semibold text-emerald-700' : 'font-semibold text-red-700'}>{check.complete ? '- done' : '- needed'}</span></p>
+                    {!check.complete && check.message ? <p className="mt-1 whitespace-pre-line text-red-700">{check.message}</p> : null}
+                  </div>
+                </div>
+                {!check.complete && fix ? (
+                  <Link to={fix.to} className="inline-flex shrink-0 items-center gap-1 self-start rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    {fix.label}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                ) : null}
+              </li>
+            );
+          })}
+          <li className="flex items-center gap-2 py-3">
+            {kycCase.service ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : <Circle className="h-4 w-4 shrink-0 text-amber-500" />}
+            <span className="font-medium text-slate-800">Requested service {kycCase.service ? <span className="font-semibold text-emerald-700">- {kycCase.service.name}</span> : <span className="font-normal text-amber-700">- not selected yet (optional; set it in Service &amp; Proposal on the case page)</span>}</span>
+          </li>
+        </ul>
       </section>
 
       <section className="space-y-3">

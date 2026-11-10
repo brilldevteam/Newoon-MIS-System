@@ -1,6 +1,7 @@
 import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { KycCaseGuide, SUBMITTABLE_STATUSES } from '../components/KycCaseGuide';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
 import { safeCommentHtml } from '../components/RichTextEditor';
 import { useAuth } from '../hooks/useAuth';
@@ -16,16 +17,18 @@ import {
   downloadLegalDocumentGroup,
   generateKycDocument,
   getKycCase,
+  getSubmissionReadiness,
   KycCase,
   ProposalStatus,
   KycCaseStatus,
+  SubmissionReadiness,
   returnKycToBusinessDevelopment,
   updateProposalStatus,
   uploadEngagementLetter,
   uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
-import { kycNextStep, kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
 import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 
@@ -72,6 +75,8 @@ export function KycCaseDetailsPage() {
   const [workflowActionMessage, setWorkflowActionMessage] = useState('');
   const [workflowActionError, setWorkflowActionError] = useState('');
   const [returnToBdReason, setReturnToBdReason] = useState('');
+  const [readiness, setReadiness] = useState<SubmissionReadiness | null>(null);
+  const [readinessError, setReadinessError] = useState('');
 
   useEffect(() => {
     setReviewFeedback([]);
@@ -84,6 +89,25 @@ export function KycCaseDetailsPage() {
       });
     }
   }, [id]);
+
+  // The AML to-do list: what is still missing before the case can go to DMLRO (re-checked when the case changes).
+  const readinessStatus = kycCase?.status;
+  const readinessDocuments = kycCase?.legalDocuments.length;
+  const canSeeReadiness = hasAnyRole(user, workflowRoles.kycPreparation);
+  useEffect(() => {
+    let active = true;
+    setReadiness(null);
+    setReadinessError('');
+    if (!id || !readinessStatus || !canSeeReadiness || !SUBMITTABLE_STATUSES.includes(readinessStatus)) return;
+    getSubmissionReadiness(id)
+      .then((result) => { if (active) setReadiness(result); })
+      .catch((failure) => { if (active) setReadinessError(getApiErrorMessage(failure, 'Could not check what is left before submitting to DMLRO. Reload the page to try again.')); });
+    return () => { active = false; };
+  }, [id, readinessStatus, readinessDocuments, canSeeReadiness]);
+
+  function jumpTo(sectionId: string) {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   async function saveService(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -269,10 +293,6 @@ export function KycCaseDetailsPage() {
   const canOpenKycForm = hasAnyRole(user, workflowRoles.kycFormBuilder);
   const canOpenScreening = hasAnyRole(user, workflowRoles.screening);
   const canOpenCrrf = hasAnyRole(user, workflowRoles.crrf);
-  const canSubmitToAml =
-    canPrepareKyc &&
-    kycCase.legalDocuments.length > 0 &&
-    ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
   const isPreliminaryProposedCompany = kycCase.sourceEnquiry?.enquiryType === 'PROPOSED_COMPANY';
@@ -336,11 +356,7 @@ export function KycCaseDetailsPage() {
           {kycStatusOwner(kycCase.status) ? <span className="text-xs font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</span> : null}
         </div>
       </div>
-      {kycNextStep(kycCase.status) ? (
-        <p role="status" className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
-          <span className="font-semibold">Next step:</span> {kycNextStep(kycCase.status)}
-        </p>
-      ) : null}
+      <KycCaseGuide kycCase={kycCase} user={user} readiness={readiness} readinessError={readinessError} isPreliminary={isPreliminaryProposedCompany} onJump={jumpTo} />
       <div className="flex flex-wrap gap-2">
         {hasAnyRole(user, workflowRoles.kycFormBuilder) ? <Link to={`/kyc/${kycCase.id}/revisions`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"><FileText className="h-4 w-4" />Form history &amp; compare</Link> : null}
         {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (
@@ -395,15 +411,6 @@ export function KycCaseDetailsPage() {
           >
             <FileSpreadsheet className="h-4 w-4" />
             CRRF
-          </Link>
-        ) : null}
-        {canSubmitToAml ? (
-          <Link
-            to={`/kyc/${kycCase.id}/submit`}
-            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <Send className="h-4 w-4" />
-            {['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ? 'Resubmit to DMLRO' : 'Submit to DMLRO'}
           </Link>
         ) : null}
       </div>
@@ -481,11 +488,11 @@ export function KycCaseDetailsPage() {
       {workflowActionError ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{workflowActionError}</p> : null}
 
       {canCompleteEngagement ? (
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <section id="client-activation" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Signed Engagement and Client Activation</h2>
           <p className="mt-1 text-sm text-slate-500">Upload the signed engagement letter, then convert and activate the client or reject the engagement.</p>
           <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_240px_1fr_auto] lg:items-end">
-            <label className="text-sm font-medium text-slate-700">Signed engagement letter
+            <label className="text-sm font-medium text-slate-700">Signed engagement letter {kycCase.legalDocuments.some((item) => item.documentType === 'Signed Engagement Letter' && item.storagePath) ? <span className="font-normal text-emerald-700">(already uploaded - add a file only to replace it)</span> : <span className="text-red-600">* required, PDF or Word</span>}
               <input type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setEngagementFile(event.target.files?.[0] || null)} className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
             </label>
             <label className="text-sm font-medium text-slate-700">Decision
@@ -504,7 +511,7 @@ export function KycCaseDetailsPage() {
       ) : null}
 
       {canCompleteFinalKycDecision ? (
-        <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <section id="final-kyc-decision" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Final KYC Decision</h2>
           <p className="mt-1 text-sm text-slate-500">{isPreliminaryProposedCompany ? 'Confirm the approved Preliminary KYC as final, or open the same populated full KYC form for completion.' : 'Confirm the approved KYC as final or reopen the same populated form as an amendment.'}</p>
           <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr_1fr_auto] lg:items-end">
