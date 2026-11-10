@@ -19,6 +19,7 @@ import { KycPdfRenderer } from '../kyc/export/kyc-pdf-renderer';
 import { preliminaryPdfHtml } from './preliminary-pdf';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
+import { userSummarySelect } from '../common/user-summary';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
@@ -150,8 +151,8 @@ export class EnquiriesService {
         client: true,
         generatedKycCases: { select: { id: true, kycNumber: true, title: true, status: true }, orderBy: { createdAt: 'desc' }, take: 1 },
         attachments: true,
-        comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
-        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } }
+        comments: { orderBy: { createdAt: 'desc' }, include: { author: { select: userSummarySelect } } },
+        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: { select: userSummarySelect } } }
       }
     });
   }
@@ -163,9 +164,9 @@ export class EnquiriesService {
         client: { include: { contacts: true, kycCases: true } },
         generatedKycCases: { select: { id: true, kycNumber: true, title: true, status: true }, orderBy: { createdAt: 'asc' } },
         attachments: { orderBy: { createdAt: 'desc' } },
-        comments: { orderBy: { createdAt: 'desc' }, include: { author: true } },
-        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: true } },
-        createdBy: true
+        comments: { orderBy: { createdAt: 'desc' }, include: { author: { select: userSummarySelect } } },
+        statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: { select: userSummarySelect } } },
+        createdBy: { select: userSummarySelect }
       }
     });
 
@@ -634,7 +635,7 @@ export class EnquiriesService {
           client: { include: { contacts: true } },
           service: true,
           legalDocuments: { orderBy: { createdAt: 'desc' } },
-          comments: { include: { author: true }, orderBy: { createdAt: 'desc' } },
+          comments: { include: { author: { select: userSummarySelect } }, orderBy: { createdAt: 'desc' } },
           statusHistory: { orderBy: { createdAt: 'asc' } },
           notifications: { orderBy: { createdAt: 'desc' } }
         }
@@ -794,9 +795,20 @@ export class EnquiriesService {
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
 
-    await this.prisma.enquiry.delete({
-      where: { id: existing.id }
-    });
+    // Record the deletion in the same transaction, so a delete never happens without an audit entry.
+    await this.prisma.$transaction([
+      this.prisma.auditLog.create({
+        data: {
+          tenantId: existing.tenantId,
+          actorId: user.id,
+          action: 'DELETE',
+          entityType: 'Enquiry',
+          entityId: existing.id,
+          metadata: { enquiryCode: existing.enquiryCode, companyName: existing.companyName, status: existing.status }
+        }
+      }),
+      this.prisma.enquiry.delete({ where: { id: existing.id } })
+    ]);
 
     this.removeEnquiryAttachmentDirectory(existing.tenantId, existing.id);
 

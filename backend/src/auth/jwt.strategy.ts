@@ -23,6 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     email: string;
     tenantId: string | null;
     roles: string[];
+    sv?: number;
   }): Promise<RequestUser> {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
@@ -31,6 +32,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     if (!user || user.status === 'SUSPENDED') {
       throw new UnauthorizedException('Invalid session');
+    }
+
+    // Tokens issued before a password reset or suspension carry an older session version and stop working.
+    // Tokens from before this check existed have no `sv` and count as version 0.
+    if ((payload.sv ?? 0) !== user.sessionVersion) {
+      throw new UnauthorizedException('Your session has ended. Sign in again.');
     }
 
     return {

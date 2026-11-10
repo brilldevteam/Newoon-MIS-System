@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Practical AML Compass guides covering enquiries, KYC, screening, CRRF, reviews, approvals, and client activation." />
+  <title>AML Compass Knowledge Base</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="index.html" aria-label="AML Compass Knowledge Base home">
+      <span class="brand-mark">A</span>
+      <span class="brand-name">AML Compass</span>
+    </a>
+    <nav class="header-nav" aria-label="Primary navigation">
+      <a href="#topics">Browse topics</a>
+      <a href="article.html?id=roles-access">Role guide</a>
+      <a class="support-button" href="mailto:support@newoon.com?subject=AML%20Compass%20Support">Get support</a>
+    </nav>
+  </header>
+
+  <main id="main-content">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-rings" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <p class="eyebrow light"><span></span>AML, KYC &amp; COMPLIANCE HELP CENTER</p>
+        <h1 id="hero-title">How can we help?</h1>
+        <p class="hero-copy">Clear, practical guidance for managing enquiries, preparing KYC files, completing screening and CRRF, and routing approvals with confidence.</p>
+        <div class="search-shell">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="guide-search" type="search" placeholder="Search enquiries, KYC, screening, approvals..." aria-label="Search the knowledge base" autocomplete="off" />
+          <kbd>Press /</kbd>
+        </div>
+        <div class="popular-searches" aria-label="Popular searches">
+          <strong>POPULAR</strong>
+          <a href="article.html?id=enquiry-to-kyc">Convert an enquiry <span>→</span></a>
+          <a href="article.html?id=screening">Complete screening <span>→</span></a>
+          <a href="article.html?id=review-package">Review a KYC package <span>→</span></a>
+          <a href="article.html?id=troubleshooting">Fix an issue <span>→</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section start-section" aria-labelledby="start-title">
+      <div class="section-heading">
+        <p class="eyebrow"><span></span>START HERE</p>
+        <h2 id="start-title">Complete a KYC in three stages</h2>
+        <p>New to AML Compass? Follow the core path from client enquiry to final activation.</p>
+      </div>
+      <div class="step-grid">
+        <a class="step-card" href="article.html?id=enquiries"><span class="step-number">1</span><h3>Capture the enquiry</h3><p>Record the company, contact, requested services, and preparation documents.</p><strong>Start the enquiry →</strong></a>
+        <a class="step-card" href="article.html?id=kyc-preparation"><span class="step-number">2</span><h3>Prepare the KYC package</h3><p>Complete the KYC form, Screening, CRRF, and supporting evidence.</p><strong>Prepare the file →</strong></a>
+        <a class="step-card" href="article.html?id=approvals"><span class="step-number">3</span><h3>Review and activate</h3><p>Route DMLRO, MLRO, and SEF decisions, then confirm the final KYC.</p><strong>Follow approvals →</strong></a>
+      </div>
+    </section>
+
+    <section id="topics" class="section topic-section" aria-labelledby="topics-title">
+      <div class="section-heading row-heading">
+        <div><p class="eyebrow"><span></span>EXPLORE AML COMPASS</p><h2 id="topics-title">Browse by topic</h2><p>Choose an area to filter the published guides below.</p></div>
+        <button id="clear-filter" class="text-button" type="button" hidden>Show all guides</button>
+      </div>
+      <div id="topic-grid" class="topic-grid" aria-label="Knowledge base topics"></div>
+    </section>
+
+    <section class="section guides-section" aria-labelledby="guides-title">
+      <div class="section-heading row-heading">
+        <div><p class="eyebrow"><span></span>KNOWLEDGE BASE</p><h2 id="guides-title">Popular guides</h2><p>Step-by-step help for the workflows teams use most often.</p></div>
+        <p id="result-count" class="result-count" aria-live="polite"></p>
+      </div>
+      <div id="guide-grid" class="guide-grid"></div>
+      <div id="empty-state" class="empty-state" hidden><h3>No matching guides</h3><p>Try another keyword or show all topics.</p><button id="reset-search" type="button">Reset search</button></div>
+    </section>
+
+    <section class="support-section" aria-labelledby="support-title">
+      <div class="support-band">
+        <div><h2 id="support-title">Still need help?</h2><p>Tell our support team what you were trying to do, what happened, and include a screenshot of any error message.</p></div>
+        <a href="mailto:support@newoon.com?subject=AML%20Compass%20Support">Contact support</a>
+      </div>
+    </section>
+  </main>
+
+  <footer><p>&copy; 2026 AML Compass. AML, KYC &amp; Compliance Knowledge Base.</p><nav><a href="index.html">Help Center</a><a href="article.html?id=roles-access">Roles</a><a href="mailto:support@newoon.com">Support</a></nav></footer>
+  <script src="content.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

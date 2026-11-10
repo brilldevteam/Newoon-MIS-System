@@ -41,6 +41,78 @@ Deployment Notes:
 - Server commands, migration requirement, or `None`
 ```
 
+## 2026-11-01 - Login Protection and Email Sign-In Codes
+
+Module:
+- Authentication, User administration
+
+Summary:
+- Accounts lock for 15 minutes after 5 consecutive failed sign-ins (password or code); the lock is audited and an administrator password reset clears it.
+- Optional email one-time codes (`LOGIN_OTP_ENABLED=true`): after the password, a 6-digit code is emailed; it expires in 10 minutes, allows 5 attempts, is single-use and is stored only as a keyed hash. Resend has a 60-second cooldown and a limit of 5 sends.
+- If codes are enabled but email cannot be sent, sign-in fails safely with a clear message.
+- Tokens carry a session version: an administrator password reset, the operator reset script or suspending a user ends that user's sessions. Existing tokens remain valid until then.
+- Per-network sign-in throttling when `TRUST_PROXY` is set. Unknown emails take the same time as wrong passwords.
+- The login page has a code step (digit-only input, resend countdown, back to password).
+
+Changed Files:
+- backend/prisma/schema.prisma, backend/prisma/migrations/20261101100000_login_protection_and_email_otp/migration.sql
+- backend/src/auth/ (auth.service.ts, auth.controller.ts, auth.module.ts, jwt.strategy.ts, mail.service.ts, login-rate-limiter.ts, dto/login-otp.dto.ts)
+- backend/src/users/users.service.ts, backend/src/main.ts, backend/scripts/reset-admin-password.cjs, backend/.env.example, backend/package.json, package-lock.json
+- frontend/src/pages/LoginPage.tsx, frontend/src/services/auth.service.ts, frontend/src/services/api.ts
+- backend/scripts/check-login-protection.cjs, backend/scripts/check-user-administration.cjs, frontend/scripts/check-login-otp-ui.cjs
+
+Database Changes:
+- Migration `20261101100000_login_protection_and_email_otp`: adds `User.failedLoginCount`, `User.lockedUntil`, `User.sessionVersion` (with defaults) and the `LoginChallenge` table. Additive only.
+
+Verification:
+- Backend and frontend builds passed; all 18 check scripts passed (synthetic data, run from the repository root), including new login protection and login-code UI checks on desktop and mobile.
+- Not verified: real SMTP delivery, live database migration, deployed server.
+
+Git:
+- Branch: feature/user-administration/2026-10-29
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Back up the database, then `npm ci`, `npm exec -w backend -- prisma migrate deploy`, `npm run build`, restart.
+- Set `TRUST_PROXY` behind NGINX/Cloudflare. Enable `LOGIN_OTP_ENABLED` only after the SMTP settings are in `backend/.env` and a test sign-in succeeds.
+
+## 2026-11-01 - Access Hardening (Security Review Fixes 1-4)
+
+Module:
+- Authorization, Enquiries, KYC, Clients, Administration
+
+Summary:
+- API responses no longer embed full user records: comment authors, status changers, creators, tenant users and audit-log actors return only id, name and email (password hashes were previously included).
+- The Access Control matrix remains the authority for what each role can view or edit. While the matrix has never been saved, enquiry, KYC, screening, CRRF and approval endpoints without their own role list follow the matrix defaults instead of being open to every signed-in user.
+- Tenants, tenant modules, modules and permissions are platform-wide and stay Super Admin only; they are no longer reachable through the Administration grant. The sidebar and routes match.
+- Audit logs follow the matrix but show only the caller's company (Super Admin sees all).
+- The KYC form's corporate client lookup follows KYC access, so AML users keep it under any matrix.
+- Deleting an enquiry, KYC case or client now writes a DELETE audit entry in the same transaction.
+- Four-eyes rule: in the current approval round one person may submit only one review stage (AML Supervisor, DMLRO, MLRO, SEF) of a case, whatever roles they hold. Company Admin can still act at any stage under the same rule. Stages reopened by a return or amendment do not count; DMLRO final approval during MLRO absence is unaffected.
+
+Changed Files:
+- backend/src/common/guards/roles.guard.ts, backend/src/common/decorators/access-area.decorator.ts, backend/src/common/user-summary.ts
+- backend/src/access-control/access-control.service.ts
+- backend/src/audit-logs/audit-logs.controller.ts, backend/src/audit-logs/audit-logs.service.ts
+- backend/src/tenants/tenants.service.ts, backend/src/clients/clients.controller.ts, backend/src/clients/clients.service.ts
+- backend/src/enquiries/enquiries.service.ts, backend/src/kyc/kyc.service.ts
+- frontend/src/layouts/AppLayout.tsx, frontend/src/routes/router.tsx
+- backend/scripts/check-access-hardening.cjs
+
+Database Changes:
+- None
+
+Verification:
+- Backend and frontend builds passed. `node backend/scripts/check-access-hardening.cjs` and all existing check scripts passed (synthetic data, run from the repository root).
+- Not verified against a live database or deployed server.
+
+Git:
+- Branch: feature/user-administration/2026-10-29
+- Commit: Not pushed yet
+
+Deployment Notes:
+- Pull, build and restart. No migration required.
+
 ## 2026-10-05 - Multi-Select Nationality
 
 Module:
