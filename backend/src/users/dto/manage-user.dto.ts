@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
-import { ArrayNotEmpty, ArrayUnique, IsArray, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { ArrayNotEmpty, ArrayUnique, IsArray, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength, Matches } from 'class-validator';
+import { PASSWORD_MAX_BYTES, PASSWORD_PATTERN, PASSWORD_RULE_MESSAGE } from '../../common/security/password-policy';
 
 export const MANAGED_ROLES = ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM'];
 
@@ -30,8 +31,8 @@ export class UserProfileDto {
 
 export class CreateUserDto extends UserProfileDto {
   @IsString()
-  @MinLength(16)
-  @MaxLength(72)
+  @MaxLength(PASSWORD_MAX_BYTES, { message: PASSWORD_RULE_MESSAGE })
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_RULE_MESSAGE })
   password!: string;
 
   @IsOptional()
@@ -46,7 +47,7 @@ export class UpdateUserDto extends UserProfileDto {
 
 export class ResetUserPasswordDto {
   @IsString()
-  @MinLength(16)
-  @MaxLength(72)
+  @MaxLength(PASSWORD_MAX_BYTES, { message: PASSWORD_RULE_MESSAGE })
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_RULE_MESSAGE })
   password!: string;
 }

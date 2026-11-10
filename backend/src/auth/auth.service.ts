@@ -11,6 +11,7 @@ import { ResendLoginCodeDto, VerifyLoginCodeDto } from './dto/login-otp.dto';
 import { AccessControlService } from '../access-control/access-control.service';
 import { LoginRateLimiter } from './login-rate-limiter';
 import { MailService, maskEmail } from './mail.service';
+import { passwordPolicyError } from '../common/security/password-policy';
 
 // Login protection settings.
 export const LOGIN_POLICY = {
@@ -138,8 +139,9 @@ export class AuthService {
   async changePassword(id: string, dto: ChangePasswordDto, ip?: string) {
     this.throttle(ip);
     if (dto.newPassword !== dto.confirmPassword) throw new BadRequestException('New passwords do not match.');
-    if (dto.newPassword.length < 16 || Buffer.byteLength(dto.newPassword, 'utf8') > 72) {
-      throw new BadRequestException('Use at least 16 characters and no more than 72 UTF-8 bytes.');
+    const policyError = passwordPolicyError(dto.newPassword);
+    if (policyError) {
+      throw new BadRequestException(policyError);
     }
     const user = await this.prisma.user.findUnique({ where: { id }, include: userInclude });
     if (!user || user.status === 'SUSPENDED') throw new UnauthorizedException('Invalid session');

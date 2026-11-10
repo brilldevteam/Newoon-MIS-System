@@ -4,6 +4,7 @@ import * as bcrypt from 'bcrypt';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, MANAGED_ROLES, ResetUserPasswordDto, UpdateUserDto } from './dto/manage-user.dto';
+import { passwordPolicyError } from '../common/security/password-policy';
 
 const publicUser = {
   id: true, tenantId: true, email: true, firstName: true, lastName: true, status: true, createdAt: true,
@@ -50,7 +51,8 @@ export class UsersService {
   }
 
   private async passwordHash(password: string) {
-    if (password.length < 16 || Buffer.byteLength(password, 'utf8') > 72) throw new BadRequestException('Passwords must contain at least 16 characters and no more than 72 UTF-8 bytes.');
+    const policyError = passwordPolicyError(password);
+    if (policyError) throw new BadRequestException(policyError);
     return bcrypt.hash(password, 12);
   }
 

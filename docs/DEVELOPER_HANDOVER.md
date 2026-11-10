@@ -148,7 +148,7 @@
 
 ## Self-Service Password Change (2026-11-01)
 
-- Every authenticated role can open Change Password in the sidebar at `/account/password`. `POST /api/auth/change-password` derives the account only from its verified JWT; no target account ID is accepted. Current password, a different new password (16 characters minimum, 72 UTF-8 bytes maximum), and matching confirmation are required.
+- Every authenticated role can open Change Password in the sidebar at `/account/password`. `POST /api/auth/change-password` derives the account only from its verified JWT; no target account ID is accepted. Current password, a different new password (at least 8 characters with a capital letter, a number and a symbol (maximum 72 UTF-8 bytes)), and matching confirmation are required.
 - Uses existing login throttling/lockout and session-version security. Hash verification precedes an atomic compare-and-update, session-version increment, pending login-code removal and credential-free audit. Success signs the browser out and requires a fresh login. No role, tenant or workflow records are changed.
 - This feature relies on the existing uncommitted login-protection/sessionVersion work in this checkout, including its migration; it cannot be deployed independently to an older schema. Preserve and review those changes separately. Verify after build with `node backend/scripts/check-self-password.cjs`; synthetic tests do not replace staging verification.
 

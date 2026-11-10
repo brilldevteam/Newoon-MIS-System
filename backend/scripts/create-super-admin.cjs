@@ -5,12 +5,19 @@ const bcrypt = require('bcrypt');
 const readline = require('node:readline');
 const { Writable } = require('node:stream');
 
+// Keep in sync with backend/src/common/security/password-policy.ts (this script runs without the app).
+function passwordPolicyError(password) {
+  const ok = typeof password === 'string' && password.length >= 8 && Buffer.byteLength(password, 'utf8') <= 72 && /^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).+$/s.test(password);
+  return ok ? null : 'Password must be at least 8 characters and include a capital letter, a number and a symbol (maximum 72 bytes).';
+}
+
 async function createSuperAdmin(prisma, { email, firstName, lastName, password }) {
   const normalized = email.trim().toLowerCase();
   const first = firstName.trim(); const last = lastName.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) || normalized.length > 254) throw new Error('Enter a valid email address.');
   if (!first || !last || first.length > 100 || last.length > 100) throw new Error('First and last name are required (up to 100 characters).');
-  if (password.length < 16 || Buffer.byteLength(password, 'utf8') > 72) throw new Error('Use at least 16 characters and no more than 72 UTF-8 bytes.');
+  const policyError = passwordPolicyError(password);
+  if (policyError) throw new Error(policyError);
   const passwordHash = await bcrypt.hash(password, 12);
   return prisma.$transaction(async (tx) => {
     const existing = await tx.user.count({ where: { status: 'ACTIVE', roles: { some: { role: { name: 'SUPER_ADMIN' } } } } });
@@ -49,7 +56,7 @@ async function main() {
     const email = await ask('Super Admin email: ');
     const firstName = await ask('First name: ');
     const lastName = await ask('Last name: ');
-    const password = await ask('Password, at least 16 characters (hidden): ', true);
+    const password = await ask('Password, 8+ characters with a capital letter, a number and a symbol (hidden): ', true);
     const confirmation = await ask('Confirm password (hidden): ', true);
     if (password !== confirmation) throw new Error('Passwords do not match. Nothing changed.');
     if (await ask('Type CREATE to confirm: ') !== 'CREATE') throw new Error('Cancelled. Nothing changed.');

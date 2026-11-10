@@ -5,6 +5,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { passwordPolicyError } from '../common/security/password-policy';
 
 @Injectable()
 export class SelfPasswordService {
@@ -15,7 +16,8 @@ export class SelfPasswordService {
     const attempt = this.failures.get(id);
     if (attempt && attempt.expires > Date.now() && attempt.count >= 5) throw new BadRequestException('Too many attempts. Try again in 15 minutes.');
     if (dto.newPassword !== dto.confirmPassword) throw new BadRequestException('New passwords do not match.');
-    if (dto.newPassword.length < 16 || Buffer.byteLength(dto.newPassword, 'utf8') > 72) throw new BadRequestException('Use at least 16 characters and no more than 72 UTF-8 bytes.');
+    const policyError = passwordPolicyError(dto.newPassword);
+    if (policyError) throw new BadRequestException(policyError);
     const user = await this.prisma.user.findUnique({ where: { id }, select: { id: true, tenantId: true, status: true, passwordHash: true } });
     if (!user || user.status !== 'ACTIVE') throw new UnauthorizedException('Invalid session');
     if (!(await bcrypt.compare(dto.currentPassword, user.passwordHash))) {
