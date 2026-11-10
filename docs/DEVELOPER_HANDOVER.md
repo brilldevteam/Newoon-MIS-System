@@ -1,5 +1,13 @@
 # Newoon MIS Developer Handover
 
+## Clients Menu Removed (2026-11-10)
+
+- **Sidebar:** the separate **Clients** item is gone. Onboarded clients are managed under **Compliance → Compliance Clients**, and new clients come in through **Enquiries**.
+- **Old links:** `/clients` now redirects to `/compliance/clients`, so bookmarks keep working.
+- **Still reachable but unlinked:** the client detail and edit pages (`/clients/:id`, `/clients/new`, `/clients/:id/edit`) still work, but the menu no longer links to them. The manual "Add client" form is therefore no longer in the menu.
+- **Dashboard:** the "Clients" card is now "Compliance clients" (active onboarded clients). It opens Compliance Clients for every role that can see it. Its count already used `status = ACTIVE`, which matches the register's Active total.
+- **Not affected:** backend endpoints, permissions and the `clients` access-control area.
+
 ## Resuming an Engagement on Hold (2026-11-10)
 
 - **The problem:** an engagement put on hold (`CLIENT_ON_HOLD`) could not be resumed. The activation section and `completeEngagementDecision` / `uploadEngagementLetter` only accepted `KYC_FINAL_APPROVED` and `CLIENT_ACTIVATION_PENDING`.
