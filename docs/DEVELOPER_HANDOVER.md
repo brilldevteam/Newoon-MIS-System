@@ -1,10 +1,21 @@
 # Newoon MIS Developer Handover
 
+## Date Picker and Required Markers (2026-11-12)
+
+- **Date picker:** `components/DatePickerPopover.tsx` replaces the browser's native date picker inside `TypedDateInput`, so every date field in the app uses it.
+  - It has month and year lists (1900 to +20 years), brand-coloured selected day, outlined today, and Clear / Today buttons.
+  - Keyboard: arrows move by day or week, PageUp/PageDown change month, Escape closes.
+  - It closes on an outside click.
+  - It renders on `<body>` and is positioned next to the field, so scrolling form panels don't clip it.
+  - Typing DD/MM/YYYY still works as before.
+- **Red `*`:** in `KycFormEditorPage`, any label ending in ` *` is drawn with a red star (`labelText`), matching the enquiry form.
+- **Related Industry** is now required in section A (form marker and `kyc-form-completeness.ts`).
+
 ## Required KYC Form Details (2026-11-12)
 
 - **Where it is enforced:** `backend/src/common/kyc-form-completeness.ts` lists the details a KYC form must have before the AML Supervisor can submit it to DMLRO. `assertReviewPackageReady` enforces it, so it covers both submit paths. Drafts can still be saved with gaps.
 - **Required fields:**
-  - A: Legal name, CR No., Date of incorporation, Country of incorporation, Legal form, Registered office address, Telephone (more than the dial code), a valid Email, Main purpose / nature of business, Nature of prospective service.
+  - A: Legal name, CR No., Date of incorporation, Country of incorporation, Legal form, Registered office address, Telephone (more than the dial code), a valid Email, Main purpose / nature of business, Related Industry, Nature of prospective service.
   - B Managers: at least one person, each with full name, position, nationality and QID/Passport No.; at least one authorized signatory.
   - C Shareholders: at least one row, each with full name, nationality/country, QID/Passport or CR number, and shareholder %. Direct shareholders must total 100%. At least one beneficial owner (UBO).
   - D: the existing PEP / sanction / dual-citizenship answers.

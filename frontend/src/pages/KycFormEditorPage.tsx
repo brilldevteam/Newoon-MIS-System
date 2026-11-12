@@ -970,6 +970,11 @@ function filledRows<T>(rows: Array<[string, T]>) {
   return rows.filter(([, value]) => typeof value !== 'string' ? Boolean(value) : value.trim() !== '' && value.trim() !== '-');
 }
 
+// A label ending in " *" is a required field: the star is drawn in red, as on the enquiry form.
+function labelText(label: string) {
+  return label.endsWith(' *') ? <>{label.slice(0, -2)}<span className="text-red-600" aria-hidden="true"> *</span></> : label;
+}
+
 const DMLRO_STAGE_STATUSES = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'];
 
 export function KycFormEditorPage() {
@@ -1589,7 +1594,7 @@ function SectionAForm({ data, onChange }: FormProps) {
       <Field label="Registered Office Address *" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
       <Select label="Main purpose / nature of business *" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
-      <Select label="Related Industry" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
+      <Select label="Related Industry *" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
       <MultiSelect label="Nature of prospective service from Newoon *" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
     </FormGrid>
   );
@@ -1791,7 +1796,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                   <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
-                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID / Passport number *'}</span>
+                    <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID / Passport number *')}</span>
                     <div className="mt-1 flex gap-2">
                       <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
                       <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -2042,7 +2047,7 @@ function SectionDSupportingDocuments({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <div className="mt-1">
         <MultiFileUploadControl
           names={names}
@@ -2451,7 +2456,7 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
   const className = `${wide ? 'md:col-span-2' : ''} min-w-0 text-sm font-medium text-slate-700`;
   return (
     <label className={className}>
-      {label}
+      {labelText(label)}
       {textarea && /comment/i.test(label) ? <RichTextEditor label={label} value={value || ''} onChange={onChange} /> : textarea ? (
         <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : type === 'date' ? (
@@ -2533,7 +2538,7 @@ function OldSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <button
         ref={triggerRef}
         type="button"
@@ -2671,7 +2676,7 @@ function OldMultiSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <button
         ref={triggerRef}
         type="button"
@@ -2753,7 +2758,7 @@ function OldMultiSelect({
 }
 
 function Choice({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <div><p className="text-sm font-medium text-slate-700">{label}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
+  return <div><p className="text-sm font-medium text-slate-700">{labelText(label)}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
 }
 
 function UploadField({ label, fileName, imageDataUrl, onChange }: { label: string; fileName?: string; imageDataUrl?: string; onChange: (file: File, dataUrl?: string) => void }) {
@@ -2768,7 +2773,7 @@ function UploadField({ label, fileName, imageDataUrl, onChange }: { label: strin
 
   return (
     <div className="text-sm font-medium text-slate-700">
-      {label}
+      {labelText(label)}
       <div className="mt-1 grid items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
         <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
           <Upload className="h-4 w-4" />
@@ -2852,7 +2857,7 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
           <div className="grid gap-3 md:grid-cols-2">
             {fields.map(([key, label, type, options]) => {
               if (type === 'checkbox') {
-                return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {label}</label>;
+                return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {labelText(label)}</label>;
               }
 
               if (type === 'select') {

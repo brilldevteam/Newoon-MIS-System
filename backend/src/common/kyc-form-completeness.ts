@@ -53,6 +53,7 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
     !phone(a.telephone) && 'Telephone',
     !email(a.email) && 'Email (a valid address)',
     !choice(a, 'businessNature') && 'Main purpose / nature of business',
+    !choice(a, 'relatedIndustry') && 'Related Industry',
     !choice(a, 'prospectiveService') && 'Nature of prospective service from Newoon'
   ].filter(Boolean) as string[]);
 

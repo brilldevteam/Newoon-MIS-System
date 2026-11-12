@@ -8,7 +8,7 @@ const complete = () => ({
   sectionA: {
     legalName: 'Synthetic Co', commercialRegistrationNo: '12345', dateOfIncorporation: '2020-01-01', countryOfIncorporation: 'Qatar',
     legalForm: 'LLC', registeredOfficeAddress: 'Doha', telephone: '+974 5555 1234', email: 'info@example.invalid',
-    businessNature: 'Trading', prospectiveService: ['N001 - Secretary']
+    businessNature: 'Trading', relatedIndustry: 'Finance', prospectiveService: ['N001 - Secretary']
   },
   sectionB: { shareholders: [
     { id: 'p1', fullName: 'Holding Co', shareholderType: 'Corporate Entity', nationality: ['Qatar'], identityNumber: 'CR1', shareholderPercentage: '60' },
@@ -27,9 +27,9 @@ async function main() {
 
   // Each section reports its own gaps, by name.
   let form = complete();
-  form.sectionA = { ...form.sectionA, email: 'not-an-email', telephone: '+974 ', commercialRegistrationNo: '' };
+  form.sectionA = { ...form.sectionA, email: 'not-an-email', telephone: '+974 ', commercialRegistrationNo: '', relatedIndustry: '' };
   let issues = kycFormCompletenessIssues(form);
-  assert.deepEqual(issues[0].missing, ['Commercial Registration No.', 'Telephone', 'Email (a valid address)']);
+  assert.deepEqual(issues[0].missing, ['Commercial Registration No.', 'Telephone', 'Email (a valid address)', 'Related Industry']);
 
   form = complete();
   form.sectionC.managers = [{ fullName: 'No Details', isAuthorizedSignatory: false }];
