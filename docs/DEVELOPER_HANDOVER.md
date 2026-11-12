@@ -1,5 +1,24 @@
 # Newoon MIS Developer Handover
 
+## Required KYC Form Details (2026-11-12)
+
+- **Where it is enforced:** `backend/src/common/kyc-form-completeness.ts` lists the details a KYC form must have before the AML Supervisor can submit it to DMLRO. `assertReviewPackageReady` enforces it, so it covers both submit paths. Drafts can still be saved with gaps.
+- **Required fields:**
+  - A: Legal name, CR No., Date of incorporation, Country of incorporation, Legal form, Registered office address, Telephone (more than the dial code), a valid Email, Main purpose / nature of business, Nature of prospective service.
+  - B Managers: at least one person, each with full name, position, nationality and QID/Passport No.; at least one authorized signatory.
+  - C Shareholders: at least one row, each with full name, nationality/country, QID/Passport or CR number, and shareholder %. Direct shareholders must total 100%. At least one beneficial owner (UBO).
+  - D: the existing PEP / sanction / dual-citizenship answers.
+  - E: Full name, Position, Mobile, a valid Email.
+  - G: Full name, Position, Date, Authorized signature.
+  - H: the AML Supervisor's risk classification and due diligence type (added earlier).
+- **Not covered:** preliminary (proposed-company) forms keep their own rules until the full KYC is started.
+- **In the app:**
+  - The checklist item "KYC form - required details" lists every gap by section and row in plain English. Long tables are capped at six rows plus "and N more".
+  - Its button opens the first section with gaps (`section` on the readiness check).
+  - The editor marks these fields with `*` and says they are required before submitting to DMLRO.
+- **Checks:** `node backend/scripts/check-kyc-form-required.cjs`. `check-ownership-review.cjs` was updated. No migration is needed.
+- **Local verification:** the readiness check was run against two local cases. The browser view was not re-checked, because the pane was signed in with the user's own account.
+
 ## Download Progress, User Delete and Enquiry Delete (2026-11-12)
 
 - **Download progress:** `utils/download-progress.ts` (`trackDownload`) and `components/DownloadToast.tsx` (mounted in `AppLayout`) show a bottom-right "Preparing the KYC PDF… / Downloading …" notice, then "… downloaded". The download service functions are wrapped, so every caller gets it: `generateKycDocument`, `downloadGeneratedKycDocument`, `downloadPreliminaryKycPdf`, `exportCrrf` and `downloadKycFormRevision`. The KYC form editor's DOCX/PDF buttons and the enquiry page's Preliminary KYC PDF button also show "Preparing…" and are disabled while they work.

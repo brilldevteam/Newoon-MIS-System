@@ -134,8 +134,8 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
     const resubmit = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(status);
     const links: Record<string, Action> = {
       documents: { label: 'Upload documents', to: `${caseUrl}/documents` },
-      // Only fails for a full KYC (Section D answers), which is edited in the KYC form.
-      form: { label: 'Open KYC Form', to: `${caseUrl}/form?section=sectionD` },
+      // Opens the first section with missing required details (the check carries that section).
+      form: { label: 'Open KYC Form', to: `${caseUrl}/form` },
       internal: { label: 'Open Section H', to: `${caseUrl}/form?section=sectionH` },
       screening: { label: 'Open Screening', to: `${caseUrl}/screening` },
       crrf: { label: 'Open CRRF', to: `${caseUrl}/crrf` },
@@ -161,7 +161,8 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
         {checks.length ? (
           <ul className="mt-3 divide-y divide-sky-100 rounded-md border border-sky-100 bg-white">
             {checks.map((check) => {
-              const action = check.key ? links[check.key] : undefined;
+              const base = check.key ? links[check.key] : undefined;
+              const action = base && check.section ? { ...base, to: `${caseUrl}/form?section=${check.section}` } : base;
               return (
                 <li key={check.key || check.label} className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 items-start gap-2">

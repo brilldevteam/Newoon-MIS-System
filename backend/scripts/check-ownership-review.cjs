@@ -67,6 +67,8 @@ async function main() {
     kycInternalReview: { findFirst: async () => reviewed }
   };
   service.prisma = { $transaction: async (callback) => callback(tx) };
+  // The required-form-details rule is covered in check-kyc-form-required.cjs; this check focuses on screening and CRRF.
+  service.formCompletenessIssues = async () => [];
   const route = () => service.submitReviewAndRoute({}, 'case', 'SUPERVISOR', { formalComments: 'Reviewed' }, 'DMLRO');
   await assert.rejects(route, /No screening has been done yet/);
   tx.screeningRecord.findMany = async () => [{ identifier: '001', entityName: 'Example', status: 'COMPLETED', conclusionStatus: 'CLEAR', remarks: 'Reviewed', checks: [] }];
@@ -110,6 +112,8 @@ async function main() {
   assert.equal(internal.complete, false);
   assert.match(internal.message, /H\. Internal Use Only and choose the Due diligence type/);
   await assert.rejects(legacy, /H\. Internal Use Only/);
+  service.formCompletenessIssues = async () => [{ section: 'sectionA', title: 'A. General Company Information', missing: ['Email (a valid address)'] }];
+  await assert.rejects(legacy, /Complete the required KYC form details[\s\S]*A\. General Company Information: Email/);
   console.log('Ownership, safe formatting, empty comments, Screening and CRRF regression checks passed.');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

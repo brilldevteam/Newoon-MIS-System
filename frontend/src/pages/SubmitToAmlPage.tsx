@@ -49,7 +49,7 @@ export function SubmitToAmlPage() {
   const checks = readiness?.checks.map((check) => check.label === 'AML Supervisor comments' ? { ...check, complete: hasComments, message: hasComments ? '' : 'Write the AML Supervisor comments in the box below.' } : check);
   const fixLinks: Record<string, { label: string; to: string }> = {
     documents: { label: 'Upload documents', to: `/kyc/${kycCase.id}/documents` },
-    form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form?section=sectionD` },
+    form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form` },
     internal: { label: 'Open Section H', to: `/kyc/${kycCase.id}/form?section=sectionH` },
     screening: { label: 'Open Screening', to: `/kyc/${kycCase.id}/screening` },
     crrf: { label: 'Open CRRF', to: `/kyc/${kycCase.id}/crrf` }
@@ -72,7 +72,8 @@ export function SubmitToAmlPage() {
         </p>
         <ul className="mt-3 divide-y divide-slate-200 text-sm">
           {checks?.map((check) => {
-            const fix = check.key ? fixLinks[check.key] : undefined;
+            const base = check.key ? fixLinks[check.key] : undefined;
+            const fix = base && check.section ? { ...base, to: `/kyc/${kycCase.id}/form?section=${check.section}` } : base;
             return (
               <li key={check.label} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 items-start gap-2">

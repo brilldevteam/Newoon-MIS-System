@@ -897,7 +897,7 @@ export function submitToAml(id: string, formalComments?: string) {
   return api.post<KycCase>(`/kyc/${id}/submit-to-aml`, formalComments === undefined ? undefined : { formalComments }, { timeout: 30000 }).then((response) => response.data);
 }
 
-export type SubmissionReadiness = { ready: boolean; supervisorComments?: string; checks: Array<{ key?: string; label: string; complete: boolean; message: string }> };
+export type SubmissionReadiness = { ready: boolean; supervisorComments?: string; checks: Array<{ key?: string; label: string; complete: boolean; message: string; section?: string }> };
 export function getSubmissionReadiness(id: string) {
   return api.get<SubmissionReadiness>(`/kyc/${id}/submission-readiness`, { timeout: 30000 }).then((response) => response.data);
 }

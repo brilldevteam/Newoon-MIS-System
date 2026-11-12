@@ -3,6 +3,7 @@ import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
 import { complianceValidationError } from '../common/kyc-compliance';
+import { kycFormCompletenessIssues, kycFormCompletenessMessage } from '../common/kyc-form-completeness';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
 import { sharedReviewFeedback } from '../common/shared-review-feedback';
 import { preliminaryPdfHtml } from '../enquiries/preliminary-pdf';
@@ -582,7 +583,7 @@ export class KycService {
     const kycCase = await this.requireWritableCase(user, id);
     return this.prisma.$transaction(async (tx) => {
       // `key` lets the screens link each item to the page where it is fixed; the order is the order to work in.
-      const checks: Array<{ key: string; label: string; complete: boolean; message: string }> = [];
+      const checks: Array<{ key: string; label: string; complete: boolean; message: string; section?: string }> = [];
       const addCheck = async (key: string, label: string, check: () => Promise<void>) => {
         try { await check(); checks.push({ key, label, complete: true, message: '' }); }
         catch (error) {
@@ -592,7 +593,16 @@ export class KycService {
       };
       const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       checks.push({ key: 'documents', label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'No documents uploaded yet. Use Upload in "Documents Required for KYC Preparation" and add at least one document (for example the CR, QID or passport copies).' });
-      await addCheck('form', 'KYC form - D. Compliance and Risk', () => this.assertComplianceReady(tx, kycCase));
+      // Required KYC form details (A, B managers, C shareholders, E, G) and the D compliance answers.
+      const formIssues = await this.formCompletenessIssues(tx, kycCase);
+      let complianceError = '';
+      try { await this.assertComplianceReady(tx, kycCase); } catch (error) { if (!(error instanceof BadRequestException)) throw error; complianceError = error.message; }
+      const formMessage = [kycFormCompletenessMessage(formIssues.filter((issue) => issue.section !== 'sectionE' && issue.section !== 'sectionG')), complianceError,
+        kycFormCompletenessMessage(formIssues.filter((issue) => issue.section === 'sectionE' || issue.section === 'sectionG'))].filter(Boolean).join('\n');
+      checks.push({
+        key: 'form', label: 'KYC form - required details', complete: !formMessage, message: formMessage,
+        section: formIssues[0]?.section || (complianceError ? 'sectionD' : undefined)
+      });
       await addCheck('internal', 'KYC form - H. Internal Use Only', () => this.assertInternalUseReady(tx, kycCase));
       await addCheck('screening', 'Screening', () => this.assertScreeningReady(tx, kycCase));
       await addCheck('crrf', 'CRRF', () => this.assertCrrfReady(tx, kycCase));
@@ -2853,10 +2863,17 @@ export class KycService {
   }
 
   private async assertReviewPackageReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
+    const formIssues = await this.formCompletenessIssues(tx, kycCase);
+    if (formIssues.length) throw new BadRequestException(`Complete the required KYC form details before submitting to DMLRO.\n${kycFormCompletenessMessage(formIssues)}`);
     await this.assertComplianceReady(tx, kycCase);
     await this.assertInternalUseReady(tx, kycCase);
     await this.assertScreeningReady(tx, kycCase);
     await this.assertCrrfReady(tx, kycCase);
+  }
+
+  private async formCompletenessIssues(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
+    const form = await tx.kycForm.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId }, include: this.formInclude() });
+    return form ? kycFormCompletenessIssues(this.serializeForm(form)) : [];
   }
 
   // H. Internal Use Only: the AML Supervisor's risk classification and due diligence type print on the KYC, so they

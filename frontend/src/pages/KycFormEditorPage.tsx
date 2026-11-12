@@ -1511,7 +1511,7 @@ export function KycFormEditorPage() {
           <section className="min-w-0 rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
               <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
-      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready.'}</p>
+      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
@@ -1577,20 +1577,20 @@ function SectionAForm({ data, onChange }: FormProps) {
     <FormGrid>
       <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
       <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
-      <Field label="Legal Name of Company" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
-      <Field label="Commercial Registration No." value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
+      <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
+      <Field label="Commercial Registration No. *" value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
       <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
-      <Field label="Date of Incorporation" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
-      <Select label="Country of Incorporation" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
-      <Select label="Legal Form" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
-      <Field label="Telephone" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
-      <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+      <Field label="Date of Incorporation *" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
+      <Select label="Country of Incorporation *" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
+      <Select label="Legal Form *" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
+      <Field label="Telephone *" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
+      <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
       <Field label="Website" value={data.website} onChange={(value) => update(data, onChange, 'website', value)} />
-      <Field label="Registered Office Address" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
-      <Select label="Main purpose / nature of business" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
+      <Field label="Registered Office Address *" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
+      <Select label="Main purpose / nature of business *" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
       <Select label="Related Industry" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
-      <MultiSelect label="Nature of prospective service from Newoon" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
+      <MultiSelect label="Nature of prospective service from Newoon *" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
     </FormGrid>
   );
 }
@@ -1787,11 +1787,11 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                         })}
                     </select>
                   </label>
-                  <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
-                  <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                  <Field label="Full name *" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+                  <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
-                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
+                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID / Passport number *'}</span>
                     <div className="mt-1 flex gap-2">
                       <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
                       <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -1809,7 +1809,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
                   </div>
-                  <Field label="Shareholder %" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
+                  <Field label="Shareholder % *" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
                   <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
                   <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked, uboInterestPercentage: event.target.checked && !row.uboInterestPercentage ? (row.shareholderPercentage ?? row.ownershipPercentage) : row.uboInterestPercentage })} />
@@ -1945,7 +1945,7 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No. *'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory (at least one) *', 'checkbox']
   ]} />;
 }
 
@@ -2074,12 +2074,12 @@ function SectionEContactForm({ data, onChange }: FormProps) {
   }
 
   return <FormGrid>
-    <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
+    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
+    <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
-    <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
-    <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+    <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
+    <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
   </FormGrid>;
 }
 
@@ -2271,10 +2271,10 @@ function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; em
 
 function SectionGDeclarationForm({ data, onChange }: FormProps) {
   return <FormGrid>
-    <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
-    <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-    <UploadField label="Authorized signature" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
+    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
+    <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
+    <UploadField label="Authorized signature *" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
     <UploadField label="Company stamp" fileName={data.stampFileName} imageDataUrl={data.stampDataUrl} onChange={(file, dataUrl) => onChange({ ...data, stampFileName: file.name, stampDataUrl: dataUrl })} />
   </FormGrid>;
 }
@@ -2301,8 +2301,8 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   return <FormGrid>
     {showAml ? (
       <>
-        <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
-        <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
+        <Select label="Risk classification *" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
+        <Select label="Due diligence type *" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
         <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
         <Field label="AML Supervisor comments" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
       </>
