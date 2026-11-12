@@ -87,6 +87,9 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
     }
 
     if (stage === 1) {
+      if (hasAnyRole(user, ['MLRO']) && !hasAnyRole(user, ['DMLRO', ...ADMIN])) {
+        return <Todo title="Waiting for DMLRO - you can decide it as MLRO" intro="This case is waiting for the DMLRO review. If DMLRO is not available (for example on leave), you can decide it yourself: open the review, complete your part of Section H, explain in your comments, and submit. The DMLRO task is then closed." action={{ label: 'Decide as MLRO', to: `${caseUrl}/form?section=sectionH` }} />;
+      }
       if (!hasAnyRole(user, ['DMLRO', ...ADMIN])) return <Waiting owner="DMLRO" text={kycNextStep(status)} />;
       return <Todo title="Your next step (DMLRO)" steps={['Check the KYC form, Screening and CRRF using the Review Package tabs.', 'In Section H, enter your name, date, signature, risk classification and comments.', 'Choose the decision: send to MLRO, or return to AML with the reason, then press Submit.']} action={{ label: 'Open DMLRO review', to: `${caseUrl}/form` }} />;
     }
@@ -132,7 +135,8 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
     const links: Record<string, Action> = {
       documents: { label: 'Upload documents', to: `${caseUrl}/documents` },
       // Only fails for a full KYC (Section D answers), which is edited in the KYC form.
-      form: { label: 'Open KYC Form', to: `${caseUrl}/form` },
+      form: { label: 'Open KYC Form', to: `${caseUrl}/form?section=sectionD` },
+      internal: { label: 'Open Section H', to: `${caseUrl}/form?section=sectionH` },
       screening: { label: 'Open Screening', to: `${caseUrl}/screening` },
       crrf: { label: 'Open CRRF', to: `${caseUrl}/crrf` },
       comments: { label: 'Write comments', to: `${caseUrl}/submit` }

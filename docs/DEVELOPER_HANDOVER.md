@@ -1,5 +1,50 @@
 # Newoon MIS Developer Handover
 
+## Download Progress, User Delete and Enquiry Delete (2026-11-12)
+
+- **Download progress:** `utils/download-progress.ts` (`trackDownload`) and `components/DownloadToast.tsx` (mounted in `AppLayout`) show a bottom-right "Preparing the KYC PDF… / Downloading …" notice, then "… downloaded". The download service functions are wrapped, so every caller gets it: `generateKycDocument`, `downloadGeneratedKycDocument`, `downloadPreliminaryKycPdf`, `exportCrrf` and `downloadKycFormRevision`. The KYC form editor's DOCX/PDF buttons and the enquiry page's Preliminary KYC PDF button also show "Preparing…" and are disabled while they work.
+- **User delete:** `DELETE /api/users/:id` (Super Admin, Company Admin).
+  - Only accounts with no recorded workflow work can be deleted (none of the user's enquiry/KYC/review/compliance relations).
+  - Anyone with work gets a plain message to suspend the account instead, which keeps the audit trail.
+  - Self, platform administrators, other companies' users and the last active Company Admin are protected.
+  - The delete is audited.
+  - The Users page has a red delete button with a confirmation.
+- **Enquiry delete:** `DELETE /api/enquiries/:id` now also allows Operations and Company Admin. Because the access matrix can open the endpoint, the rules are enforced in `EnquiriesService.remove`:
+  - Operations and Company Admin can delete only `DRAFT` or `RETURNED_TO_BD` enquiries that never produced a KYC case.
+  - Super Admin can delete any enquiry, as before.
+  - The list page shows the delete button only where allowed.
+- **Checks:** `node backend/scripts/check-deletes.cjs` (mocked persistence). No migration is needed.
+
+## Client Issues and KYC Format (2026-11-12)
+
+From the client's "Issues identified" and "Format" documents.
+
+- **MLRO can decide while the case waits for DMLRO** (for example when DMLRO is on leave).
+  - `decideMlroReview` accepts a decision while the case is in `SUPERVISOR_REVIEW_COMPLETED` or `DMLRO_REVIEW_PENDING`/`IN_PROGRESS`, and re-checks that status inside the transaction.
+  - It closes the open DMLRO task (`CANCELLED`), records a status-history note, and flags the MLRO submission `bypassedDmlro`. The audit entry gets `decidedWithoutDmlro`.
+  - The MLRO comments count as the reason. `RETURN_TO_DMLRO` is refused in this state.
+  - The MLRO may also edit their part of Section H in that state.
+  - The activation checklist counts the bypass as the DMLRO step.
+  - MLRO users now also receive `DMLRO_TASK_ASSIGNED` notifications.
+  - Case page and guide show "MLRO Review: Decide without DMLRO"; the editor shows an explanation banner.
+- **Blank H values in the download.**
+  - The AML Supervisor's risk classification and due diligence type are now required before Submit to DMLRO (readiness item `internal`; `assertInternalUseReady` in `assertReviewPackageReady`).
+  - The AML Supervisor date defaults to the submission date.
+  - Submitted DMLRO/MLRO/SEF decisions are copied into Section H by `lockReviewSubmission`. The form's decision dropdown showed a default ("Send to MLRO") that was never saved, which printed "Decision: -".
+  - Existing cases: `generateDocument` passes `reviewFallbacks` (CRRF rating, AML submission values and date, submitted decisions, whether the case went to SEF, DMLRO bypass) used only when a Section H field is empty.
+- **Download layout** (`kyc-document-model.ts`):
+  - Order is A → B Manager / Authorized Signatory / Directors / Secretary → C Shareholders (table, totals, **UBO List**, then **Control Structure**) → D–H.
+  - Empty optional rows (DMLRO conditions/reason; MLRO risk reason category, explanation and conditions; SEF conditions) are not printed.
+  - SEF prints only when the file went to SEF.
+  - DMLRO decisions use the form wording ("Send to MLRO").
+  - H. Internal Use Only starts on a new page (`newPage` on the section: DOCX page break, PDF `break-before: page`).
+- **App:** the editor steps and live preview use the same order and letters (B = Managers, C = Shareholders). Data keys and endpoints are unchanged (`sectionB` = ownership, `sectionC` = managers). `/kyc/:id/form?section=sectionH` opens a section directly. The preliminary (proposed-company) document keeps its own layout.
+- **Checks:** `node backend/scripts/check-kyc-format.cjs`. `check-ownership-review.cjs` and `check-export-shareholder-total.cjs` were updated. No migration is needed.
+- **Local verification:**
+  - Word-rendered and Chromium PDF samples (standard and complex) were inspected page by page.
+  - A live MLRO decision on a local case waiting for DMLRO succeeded: DMLRO task `CANCELLED`, submission flagged, timeline note recorded.
+  - The MLRO and AML Supervisor screens were checked in the browser.
+
 ## Clients Menu Removed (2026-11-10)
 
 - **Sidebar:** the separate **Clients** item is gone. Onboarded clients are managed under **Compliance → Compliance Clients**, and new clients come in through **Enquiries**.

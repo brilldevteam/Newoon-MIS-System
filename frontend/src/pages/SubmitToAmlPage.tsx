@@ -49,7 +49,8 @@ export function SubmitToAmlPage() {
   const checks = readiness?.checks.map((check) => check.label === 'AML Supervisor comments' ? { ...check, complete: hasComments, message: hasComments ? '' : 'Write the AML Supervisor comments in the box below.' } : check);
   const fixLinks: Record<string, { label: string; to: string }> = {
     documents: { label: 'Upload documents', to: `/kyc/${kycCase.id}/documents` },
-    form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form` },
+    form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form?section=sectionD` },
+    internal: { label: 'Open Section H', to: `/kyc/${kycCase.id}/form?section=sectionH` },
     screening: { label: 'Open Screening', to: `/kyc/${kycCase.id}/screening` },
     crrf: { label: 'Open CRRF', to: `/kyc/${kycCase.id}/crrf` }
   };

@@ -105,6 +105,8 @@ export class NotificationsService {
 
     if (this.hasAnyRole(user, ['MLRO'])) {
       types.add(NotificationType.MLRO_TASK_ASSIGNED);
+      // The MLRO may decide a case while DMLRO is unavailable, so they also see cases arriving at DMLRO.
+      types.add(NotificationType.DMLRO_TASK_ASSIGNED);
       types.add(NotificationType.DMLRO_REVIEW_COMPLETED);
       types.add(NotificationType.SEF_DECISION_COMPLETED);
       types.add(NotificationType.CLIENT_READY_FOR_ACTIVATION);

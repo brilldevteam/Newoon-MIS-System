@@ -2,7 +2,7 @@ import { KycImage, normalizeImage } from './kyc-export-assets';
 import { beneficialOwners } from '../../common/ownership';
 import { uboCompanyName } from '../../common/ubo-display-name';
 import { commentLines } from '../../common/review-comments';
-import { decisionText, enumText, optionText, text } from './kyc-export-format';
+import { decisionText, dmlroDecisionText, enumText, optionText, text } from './kyc-export-format';
 import { OwnershipDiagram, OwnershipParty, renderOwnershipDiagram } from './ownership-diagram';
 
 // Format-neutral description of the KYC download. It mirrors the in-app "Know Your Customer Form" live preview
@@ -25,7 +25,7 @@ export type Block =
   | { kind: 'para'; line: Line }
   | { kind: 'title'; text: string }
   | { kind: 'subheading'; text: string }
-  | { kind: 'section'; title: string; blocks: Block[] }
+  | { kind: 'section'; title: string; blocks: Block[]; newPage?: boolean }
   | { kind: 'table'; weights: number[]; rows: Row[]; style: TableStyle }
   | { kind: 'diagram'; title: string; diagram: OwnershipDiagram | null; emptyText: string };
 
@@ -49,6 +49,18 @@ export type KycExportPayload = {
   sectionG: unknown;
   sectionH: unknown;
   amlComments?: string | null;
+  // Values recorded elsewhere in the workflow, used when the matching Section H field was left empty (older cases,
+  // or a dropdown left on its displayed default): CRRF rating, the AML submission and each reviewer's submitted decision.
+  reviewFallbacks?: {
+    riskClassification?: string | null;
+    dueDiligenceType?: string | null;
+    amlDate?: string | null;
+    dmlroDecision?: string | null;
+    mlroDecision?: string | null;
+    sentToSef?: boolean;
+    // The MLRO decided while the DMLRO review was pending (DMLRO unavailable).
+    dmlroSkipped?: boolean;
+  };
 };
 
 type Rec = Record<string, unknown>;
@@ -117,7 +129,10 @@ function data(headers: Array<[string, number]>, body: string[][]): Block {
   };
 }
 
-const section = (title: string, blocks: Block[]): Block => ({ kind: 'section', title, blocks });
+const section = (title: string, blocks: Block[], newPage = false): Block => ({ kind: 'section', title, blocks, ...(newPage ? { newPage } : {}) });
+// Optional review rows (conditions, reasons, risk reason) are printed only when they were filled in.
+const optional = (items: Array<[string, FieldValue]>): Array<[string, FieldValue]> =>
+  items.filter(([, value]) => typeof value !== 'string' || value.trim() !== '');
 const subheading = (title: string): Block => ({ kind: 'subheading', text: title });
 
 export async function buildKycDocumentModel(payload: KycExportPayload, documentVersion: number, generatedAt = new Date()): Promise<KycDocumentModel> {
@@ -129,6 +144,13 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
   const f = record(payload.sectionF);
   const g = record(payload.sectionG);
   const h = record(payload.sectionH);
+  const fallback = payload.reviewFallbacks || {};
+  const amlDate = date(h.amlDate) || date(fallback.amlDate);
+  const dmlroDecision = text(h.dmlroDecision) || text(fallback.dmlroDecision);
+  const mlroDecision = text(h.mlroDecision) || text(fallback.mlroDecision);
+  // SEF is printed only when the file was sent to SEF (or SEF already recorded something).
+  const sefUsed = mlroDecision === 'SEND_TO_SEF' || Boolean(fallback.sentToSef) ||
+    [h.sefName, h.sefDate, h.sefDecision, h.sefComments, h.sefConditions, h.sefSignatureDataUrl].some((value) => text(value).trim());
 
   const companyName = text(a.legalName);
   const parties = rows(b.shareholders).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `party-${index + 1}` }));
@@ -187,7 +209,16 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       ['Nature of prospective service from Newoon', optionText(a.prospectiveService, a.prospectiveServiceOther)]
     ])]),
 
-    section('B. Control / Interest Details', [
+    // Client's KYC format (2026-11): managers come straight after A, then shareholders, the UBO list and the chart.
+    section('B. Manager / Authorized Signatory / Directors / Secretary', [data(
+      [['Full name', 15], ['Position', 13], ['Entity', 14], ['Nationality', 11], ['Address', 15], ['DOB', 10], ['ID No.', 12], ['Signatory', 10]],
+      managers.map((row) => [
+        text(row.fullName), optionText(row.position, row.positionOther), text(row.entityName), optionText(row.nationality) || text(row.nationalityAndAddress),
+        text(row.address), date(row.dateOfBirth), text(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'
+      ])
+    )]),
+
+    section('C. Shareholders', [
       data(
         [['Type', 9], ['Full name', 13], ['Nationality / country', 11], ['DOB / Incorporation', 12], ['QID / Passport / CR', 12], ['Shareholder %', 11], ['Address', 13], ['Linked client', 9], ['Beneficial person', 10]],
         parties.map((row) => [
@@ -198,20 +229,13 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       para([t(`Total shareholder %: ${Number(shareholderTotal.toFixed(2))}% | Total UBO %: ${text(b.totalUboPercentage) || '0'}%`, true)], { spaceBefore: 4, spaceAfter: 1 }),
       para(`Beneficial person different from listed parties: ${text(b.uboDifferentFromShareholders) || 'No'}`, { spaceAfter: 1 }),
       para(`Beneficial structure notes: ${dash(text(b.uboGroupStructureNotes))}`, { spaceAfter: 4 }),
-      { kind: 'diagram', title: 'Control Structure', diagram, emptyText: 'No control structure generated.' },
+      subheading('UBO List'),
       data(
         [['Beneficial person', 17], ['Company', 22], ['Nationality', 10], ['DOB', 10], ['Identity No.', 14], ['UBO %', 8], ['Address', 19]],
         beneficial.map((row) => [text(row.fullName), uboCompanyName(row, parties), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth), text(row.identityNumber), text(row.uboInterestPercentage ?? row.ownershipPercentage), text(row.residenceAddress)])
-      )
+      ),
+      { kind: 'diagram', title: 'Control Structure', diagram, emptyText: 'No control structure generated.' }
     ]),
-
-    section('C. Manager / Authorized Signatory / Directors / Secretary', [data(
-      [['Full name', 15], ['Position', 13], ['Entity', 14], ['Nationality', 11], ['Address', 15], ['DOB', 10], ['ID No.', 12], ['Signatory', 10]],
-      managers.map((row) => [
-        text(row.fullName), optionText(row.position, row.positionOther), text(row.entityName), optionText(row.nationality) || text(row.nationalityAndAddress),
-        text(row.address), date(row.dateOfBirth), text(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'
-      ])
-    )]),
 
     ...(a.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !payload.fullKycStarted ? [] : [section('D. Compliance and Risk Information', [fields([
       ['Any PEP exposure?', text(d.pepQuestion)],
@@ -245,26 +269,26 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       ['Company stamp', signature(companyStamp)]
     ])]),
 
+    // Internal use always starts on its own page, apart from the client declaration.
     section('H. Internal Use Only', [
       fields([
-        ['Risk classification', enumText(h.riskClassification)],
-        ['Due diligence type', enumText(h.dueDiligenceType)]
+        ['Risk classification', enumText(h.riskClassification || fallback.riskClassification)],
+        ['Due diligence type', enumText(h.dueDiligenceType || fallback.dueDiligenceType)]
       ]),
       subheading('AML Supervisor'),
       // The AML Supervisor name and signature are no longer captured in the KYC form.
       fields([
-        ['Date', date(h.amlDate)],
-      ['Comments', text(payload.amlComments || h.amlClarificationFindings)]
+        ['Date', amlDate],
+        ['Comments', text(payload.amlComments || h.amlClarificationFindings)]
       ]),
       subheading('DMLRO'),
-      fields([
+      fallback.dmlroSkipped && !text(h.dmlroName) ? fields([['Status', 'Not reviewed - the MLRO decided while DMLRO was unavailable']]) : fields([
         ['Name', text(h.dmlroName)],
         ['Date', date(h.dmlroDate)],
         ['Signature', signature(dmlroSignature)],
         ['Risk classification', enumText(h.dmlroRiskClassification)],
-        ['Decision', decisionText(h.dmlroDecision)],
-        ['Conditions', text(h.dmlroConditions)],
-        ['Reason', text(h.dmlroReason)],
+        ['Decision', dmlroDecisionText(dmlroDecision)],
+        ...optional([['Conditions', text(h.dmlroConditions)], ['Reason', text(h.dmlroReason)]]),
         ['Comments', text(h.dmlroComments)]
       ]),
       subheading('MLRO'),
@@ -272,23 +296,23 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
         ['Name', text(h.mlroName)],
         ['Date', date(h.mlroDate)],
         ['Signature', signature(mlroSignature)],
-        ['Final decision', decisionText(h.mlroDecision)],
-        ['Final risk classification', enumText(h.mlroFinalRiskClassification || h.riskClassification)],
-        ['Risk reason category', enumText(h.mlroRiskReasonCategory)],
-        ['Risk explanation', text(h.mlroRiskExplanation)],
-        ['Conditions', text(h.mlroConditions)],
+        ['Final decision', decisionText(mlroDecision)],
+        ['Final risk classification', enumText(h.mlroFinalRiskClassification || h.riskClassification || fallback.riskClassification)],
+        ...optional([['Risk reason category', enumText(h.mlroRiskReasonCategory)], ['Risk explanation', text(h.mlroRiskExplanation)], ['Conditions', text(h.mlroConditions)]]),
         ['Comments', text(h.mlroComments)]
       ]),
-      subheading('SEF'),
-      fields([
-        ['Name', text(h.sefName)],
-        ['Date', date(h.sefDate)],
-        ['Signature', signature(sefSignature)],
-        ['Management decision', decisionText(h.sefDecision)],
-        ['Conditions', text(h.sefConditions)],
-        ['Comments', text(h.sefComments)]
-      ])
-    ])
+      ...(sefUsed ? [
+        subheading('SEF'),
+        fields([
+          ['Name', text(h.sefName)],
+          ['Date', date(h.sefDate)],
+          ['Signature', signature(sefSignature)],
+          ['Management decision', decisionText(h.sefDecision)],
+          ...optional([['Conditions', text(h.sefConditions)]]),
+          ['Comments', text(h.sefComments)]
+        ])
+      ] : [])
+    ], true)
   ];
 
   return {

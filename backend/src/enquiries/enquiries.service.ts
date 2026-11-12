@@ -801,8 +801,20 @@ export class EnquiriesService {
     };
   }
 
+  // Who may delete an enquiry:
+  // - Super Admin: any enquiry (unchanged).
+  // - Operations and Company Admin: only an enquiry that never became a KYC case and is still with Operations
+  //   (draft or returned to BD). Once AML has it, or a KYC case exists, it stays for the audit trail.
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
+    if (!this.hasAnyRole(user, ['SUPER_ADMIN'])) {
+      if (!this.hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN'])) throw new ForbiddenException('Only Operations or an administrator can delete enquiries.');
+      const deletable: EnquiryStatus[] = [EnquiryStatus.DRAFT, EnquiryStatus.RETURNED_TO_BD];
+      const kycCases = await this.prisma.kycCase.count({ where: { sourceEnquiryId: existing.id, tenantId: existing.tenantId } });
+      if (kycCases || !deletable.includes(existing.status)) {
+        throw new BadRequestException(`${existing.enquiryCode} cannot be deleted: it has already been sent to AML${kycCases ? ' and has a KYC case' : ''}. Only draft or returned enquiries can be deleted.`);
+      }
+    }
 
     // Record the deletion in the same transaction, so a delete never happens without an audit entry.
     await this.prisma.$transaction([

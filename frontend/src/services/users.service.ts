@@ -12,4 +12,5 @@ export async function listUsers() { return (await api.get<ManagedUser[]>('/users
 export async function getUserOptions() { return (await api.get<UserOptions>('/users/options')).data; }
 export async function createUser(data: UserProfile & { password: string; tenantId?: string }) { return (await api.post<ManagedUser>('/users', data)).data; }
 export async function updateUser(id: string, data: UserProfile & { status: 'ACTIVE' | 'SUSPENDED' }) { return (await api.patch<ManagedUser>(`/users/${id}`, data)).data; }
+export async function deleteUser(id: string) { return (await api.delete<{ id: string }>(`/users/${id}`)).data; }
 export async function resetUserPassword(id: string, password: string) { return (await api.post(`/users/${id}/reset-password`, { password })).data; }

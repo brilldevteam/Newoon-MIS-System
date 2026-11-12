@@ -58,7 +58,7 @@ function blockHtml(item: Block): string {
     case 'table':
       return tableHtml(item.weights, item.rows, item.style);
     case 'section':
-      return `<section><div class="bar">${escape(item.title)}</div><div class="box">${item.blocks.map(blockHtml).join('')}</div></section>`;
+      return `<section${item.newPage ? ' class="new-page"' : ''}><div class="bar">${escape(item.title)}</div><div class="box">${item.blocks.map(blockHtml).join('')}</div></section>`;
     case 'diagram': {
       const content = item.diagram
         ? `<div class="chart">${item.diagram.svg}</div>${item.diagram.condensed ? '<div class="note">Structure condensed to fit the page; the tables list every party.</div>' : ''}`
@@ -78,6 +78,7 @@ html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body { margin: 0; color: #${COLORS.ink}; font-family: ${fonts}; font-size: 8.5pt; line-height: 1.4; }
 h1 { margin: 6pt 0 3pt; text-align: center; font-size: 12pt; font-weight: 700; color: #020617; }
 section { margin-top: 10pt; }
+section.new-page { break-before: page; page-break-before: always; margin-top: 0; }
 .bar { background: #${COLORS.bar}; color: #fff; font-weight: 700; text-transform: uppercase; padding: 2pt 5.75pt; break-after: avoid; }
 .box { border: 0.5pt solid #${COLORS.border}; border-top: 0; padding: 5.75pt; }
 .box > table + table, .box > .diagram + table, .box > table + .diagram { margin-top: 6pt; }

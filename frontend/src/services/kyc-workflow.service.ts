@@ -1,3 +1,4 @@
+import { trackDownload } from '../utils/download-progress';
 import { api } from './api';
 
 export type KycCaseStatus =
@@ -511,9 +512,11 @@ export function getEnquiry(id: string) {
 }
 
 export async function downloadPreliminaryKycPdf(id: string) {
-  const response = await api.get(`/enquiries/${id}/preliminary-kyc/pdf`, { responseType: 'blob', timeout: 60000 });
-  const url = window.URL.createObjectURL(response.data);
-  try { downloadBlob(url, `preliminary-kyc-${id}.pdf`); } finally { window.URL.revokeObjectURL(url); }
+  return trackDownload('Preparing the Preliminary KYC PDF…', async () => {
+    const response = await api.get(`/enquiries/${id}/preliminary-kyc/pdf`, { responseType: 'blob', timeout: 60000 });
+    const url = window.URL.createObjectURL(response.data);
+    try { downloadBlob(url, `preliminary-kyc-${id}.pdf`); } finally { window.URL.revokeObjectURL(url); }
+  }, 'Preliminary KYC PDF downloaded');
 }
 
 export function updateEnquiry(id: string, payload: EnquiryPayload) {
@@ -874,6 +877,11 @@ export function deleteCrrfDocument(caseId: string, documentId: string) {
 }
 
 export async function exportCrrf(caseId: string, type: 'excel' | 'pdf') {
+  const kind = type === 'excel' ? 'Excel' : 'PDF';
+  return trackDownload(`Preparing the CRRF ${kind}…`, () => exportCrrfFile(caseId, type), `CRRF ${kind} downloaded`);
+}
+
+async function exportCrrfFile(caseId: string, type: 'excel' | 'pdf') {
   const response = await api.get(`/kyc/${caseId}/crrf/export/${type}`, {
     responseType: 'blob'
   });
@@ -983,9 +991,11 @@ export function getKycFormRevision(caseId: string, revisionId: string) {
 }
 
 export async function downloadKycFormRevision(caseId: string, revisionId: string, type: 'PDF' | 'DOCX') {
-  const response = await api.get(`/kyc/${caseId}/form/revisions/${revisionId}/download`, { params: { type }, responseType: 'blob', timeout: 60000 });
-  const url = window.URL.createObjectURL(response.data);
-  try { downloadBlob(url, `KYC-${revisionId}.${type.toLowerCase()}`); } finally { window.URL.revokeObjectURL(url); }
+  return trackDownload(`Preparing the KYC revision ${type}…`, async () => {
+    const response = await api.get(`/kyc/${caseId}/form/revisions/${revisionId}/download`, { params: { type }, responseType: 'blob', timeout: 60000 });
+    const url = window.URL.createObjectURL(response.data);
+    try { downloadBlob(url, `KYC-${revisionId}.${type.toLowerCase()}`); } finally { window.URL.revokeObjectURL(url); }
+  }, `KYC revision ${type} downloaded`);
 }
 
 export async function downloadKycRevisionFile(caseId: string, revisionId: string, fileId: string, fileName: string) {
@@ -1007,10 +1017,14 @@ export function saveKycFormSection(caseId: string, section: string, payload: Rec
 }
 
 export function generateKycDocument(caseId: string, type: 'docx' | 'pdf') {
-  return api.post<KycGeneratedDocument>(`/kyc/${caseId}/form/generate-${type}`).then((response) => response.data);
+  return trackDownload(`Preparing the KYC ${type.toUpperCase()}…`, () => api.post<KycGeneratedDocument>(`/kyc/${caseId}/form/generate-${type}`).then((response) => response.data));
 }
 
 export async function downloadGeneratedKycDocument(caseId: string, documentId: string, fileName: string) {
+  return trackDownload(`Downloading ${fileName}…`, () => downloadGeneratedFile(caseId, documentId, fileName), `${fileName} downloaded`);
+}
+
+async function downloadGeneratedFile(caseId: string, documentId: string, fileName: string) {
   const response = await api.get(`/kyc/${caseId}/form/generated-documents/${documentId}/download`, {
     responseType: 'blob'
   });

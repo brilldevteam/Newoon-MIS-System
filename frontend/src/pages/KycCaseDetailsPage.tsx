@@ -300,12 +300,14 @@ export function KycCaseDetailsPage() {
     hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']) ||
     (hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR']) && preparationEditable) ||
     (hasAnyRole(user, ['DMLRO']) && ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
-    (hasAnyRole(user, ['MLRO']) && ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
+    (hasAnyRole(user, ['MLRO']) && ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
     (hasAnyRole(user, ['SEF']) && ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status));
   const reviewerAction =
     canOpenKycForm && canOpenKycFormForActiveStage
       ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
         ? 'DMLRO Review: Send to MLRO or Return to AML'
+        : ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO'])
+          ? 'MLRO Review: Decide without DMLRO'
         : ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['MLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
           ? 'MLRO Review: Send to SEF or Return to DMLRO'
           : ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['SEF', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
@@ -528,7 +530,7 @@ export function KycCaseDetailsPage() {
             </label>
             {finalKycDecision === 'AMENDMENT_REQUIRED' ? <label className="text-sm font-medium text-slate-700">Sections to amend
               <select multiple value={amendmentSections} onChange={(event) => setAmendmentSections(Array.from(event.target.selectedOptions, (option) => option.value))} className="mt-1 h-32 w-full rounded-md border border-slate-300 px-3 py-2 text-sm">
-                {['A. General Company Information', 'B. Control / Interest Details', 'C. Managers / Signatories', 'D. Compliance and Risk', 'E. Key Communication Person', 'F. Required Documents', 'G. Client Declaration', 'H. Internal Review'].map((section) => <option key={section} value={section}>{section}</option>)}
+                {['A. General Company Information', 'B. Managers / Signatories', 'C. Shareholders', 'D. Compliance and Risk', 'E. Key Communication Person', 'F. Required Documents', 'G. Client Declaration', 'H. Internal Review'].map((section) => <option key={section} value={section}>{section}</option>)}
               </select>
             </label> : <div />}
             {finalKycDecision === 'AMENDMENT_REQUIRED' ? <label className="text-sm font-medium text-slate-700">Amendment reason *

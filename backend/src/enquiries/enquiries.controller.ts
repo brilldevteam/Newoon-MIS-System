@@ -149,7 +149,8 @@ export class EnquiriesController {
     response.send(archive.content);
   }
 
-  @Roles('SUPER_ADMIN')
+  // The service limits Operations / Company Admin to draft or returned enquiries that never became a KYC case.
+  @Roles('SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM')
   @Delete(':id')
   remove(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.enquiriesService.remove(user, id);
