@@ -1,5 +1,16 @@
 # Newoon MIS Developer Handover
 
+## Amendment Drafts Use the Same Submission Checks (2026-11-12)
+
+- **The gap:** a full-KYC amendment draft (`AML_REVIEW_STARTED`, form `AMENDMENT_DRAFT`, `fullKycStarted`, unlocked; for example "Open amendment" on a Preliminary-to-full KYC) could be edited by AML. However:
+  - the case page showed only a generic "complete screening and CRRF" line, with no checklist;
+  - `submitToAml` refused the status, so the required-details check was never reached.
+- **The fix:**
+  - `submitToAml` now accepts this state (`isLegacyFullKycDraft`), so it goes through the same checks: documents, required form details, Section H, screening, CRRF and comments.
+  - The case page loads the checklist and shows "complete the amendment, then resubmit it to DMLRO" (`isAmlAmendmentDraft` / `canSubmitToDmlro` in `KycCaseGuide`). The Submit page labels it as a resubmission.
+- **Unchanged:** normal (non-full-KYC) amendments remain unavailable to AML, as before.
+- **Checks:** `check-kyc-form-required.cjs` was extended.
+
 ## Date Picker and Required Markers (2026-11-12)
 
 - **Date picker:** `components/DatePickerPopover.tsx` replaces the browser's native date picker inside `TypedDateInput`, so every date field in the app uses it.

@@ -623,7 +623,9 @@ export class KycService {
         KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
         KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
     ];
-    if (!submittableStatuses.includes(kycCase.status)) {
+    // A full-KYC amendment draft (AML_REVIEW_STARTED) is prepared by AML and goes to DMLRO the same way, through
+    // the same checks (documents, required form details, screening, CRRF, comments).
+    if (!submittableStatuses.includes(kycCase.status) && !(await this.isLegacyFullKycDraft(id, kycCase.status, user))) {
       throw new BadRequestException('This case has already been submitted. It can be resubmitted only after DMLRO returns it to the AML Supervisor.');
     }
 

@@ -1,7 +1,7 @@
 import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { KycCaseGuide, SUBMITTABLE_STATUSES } from '../components/KycCaseGuide';
+import { canSubmitToDmlro, KycCaseGuide } from '../components/KycCaseGuide';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
 import { safeCommentHtml } from '../components/RichTextEditor';
 import { useAuth } from '../hooks/useAuth';
@@ -92,18 +92,20 @@ export function KycCaseDetailsPage() {
 
   // The AML to-do list: what is still missing before the case can go to DMLRO (re-checked when the case changes).
   const readinessStatus = kycCase?.status;
+  const readinessOpen = kycCase ? canSubmitToDmlro(kycCase) : false;
+  const readinessFormVersion = kycCase?.kycForm?.status;
   const readinessDocuments = kycCase?.legalDocuments.length;
   const canSeeReadiness = hasAnyRole(user, workflowRoles.kycPreparation);
   useEffect(() => {
     let active = true;
     setReadiness(null);
     setReadinessError('');
-    if (!id || !readinessStatus || !canSeeReadiness || !SUBMITTABLE_STATUSES.includes(readinessStatus)) return;
+    if (!id || !readinessStatus || !canSeeReadiness || !readinessOpen) return;
     getSubmissionReadiness(id)
       .then((result) => { if (active) setReadiness(result); })
       .catch((failure) => { if (active) setReadinessError(getApiErrorMessage(failure, 'Could not check what is left before submitting to DMLRO. Reload the page to try again.')); });
     return () => { active = false; };
-  }, [id, readinessStatus, readinessDocuments, canSeeReadiness]);
+  }, [id, readinessStatus, readinessDocuments, canSeeReadiness, readinessOpen, readinessFormVersion]);
 
   function jumpTo(sectionId: string) {
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });

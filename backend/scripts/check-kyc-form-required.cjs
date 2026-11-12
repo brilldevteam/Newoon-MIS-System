@@ -2,6 +2,7 @@
 // Build first (npm run build), then: node backend/scripts/check-kyc-form-required.cjs
 const assert = require('node:assert/strict');
 const { kycFormCompletenessIssues, kycFormCompletenessMessage } = require('../dist/common/kyc-form-completeness');
+const { KycService } = require('../dist/kyc/kyc.service');
 
 const complete = () => ({
   fullKycStarted: false,
@@ -67,6 +68,17 @@ async function main() {
   assert.ok(kycFormCompletenessIssues({ ...form, fullKycStarted: true }).length > 0);
 
   assert.match(kycFormCompletenessMessage(kycFormCompletenessIssues({ ...complete(), sectionE: {} })), /^E\. Key Communication Person: Full name; Position \/ Job title; Mobile Number; Email \(a valid address\)\.$/);
-  console.log('KYC required-details checks passed: A company details, B managers and signatory, C shareholders / 100% / UBO, E contact, G declaration, preliminary exemption and plain messages.');
+  // A full-KYC amendment draft (AML_REVIEW_STARTED) can be submitted to DMLRO, through the same checks.
+  const service = Object.create(KycService.prototype);
+  let amendment = true;
+  service.requireWritableCase = async () => ({ id: 'c', tenantId: 't', clientId: 'cl', status: 'AML_REVIEW_STARTED' });
+  service.isLegacyFullKycDraft = async () => amendment;
+  service.prisma = { legalDocument: { count: async () => 1 }, $transaction: async (fn) => fn({}) };
+  service.assertReviewPackageReady = async () => { throw new Error('REVIEW_PACKAGE_CHECKED'); };
+  await assert.rejects(service.submitToAml({ id: 'u', roles: ['AML_SUPERVISOR'] }, 'c', {}), /REVIEW_PACKAGE_CHECKED/);
+  amendment = false;
+  await assert.rejects(service.submitToAml({ id: 'u', roles: ['AML_SUPERVISOR'] }, 'c', {}), /already been submitted/);
+
+  console.log('KYC required-details checks passed: A company details, B managers and signatory, C shareholders / 100% / UBO, E contact, G declaration, preliminary exemption, plain messages, and amendment drafts go through the same submission checks.');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

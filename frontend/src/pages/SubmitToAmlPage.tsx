@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getKycCase, getSubmissionReadiness, KycCase, SubmissionReadiness, submitToAml } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
+import { isAmlAmendmentDraft } from '../components/KycCaseGuide';
 
 export function SubmitToAmlPage() {
   const { id } = useParams();
@@ -56,7 +57,7 @@ export function SubmitToAmlPage() {
   };
   const remaining = checks?.filter((check) => !check.complete).length || 0;
   const canSubmit = Boolean(checks?.length && checks.every((check) => check.complete));
-  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) || isAmlAmendmentDraft(kycCase);
 
   return (
     <div className="space-y-6">
