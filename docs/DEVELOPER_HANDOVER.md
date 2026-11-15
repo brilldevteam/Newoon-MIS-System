@@ -1,5 +1,15 @@
 # Newoon MIS Developer Handover
 
+## Country of Incorporation on Proposed-Company Enquiries (2026-11-15)
+
+- **Before:** line 4 of the Preliminary KYC ("Country of incorporation") was fixed text that always printed "-". There was no field for it.
+- **Now:** proposed-company enquiries have a required **Country of incorporation** field on the Details step, defaulting to Qatar because QFC, MOCI and free zones are in Qatar.
+  - It is saved to `details.countryOfIncorporation` and `details.preliminaryKyc.countryOfIncorporation`.
+  - It prints on line 4 in the form preview, `PreliminaryKycDocument` and `preliminary-pdf.ts`.
+  - It becomes Section A `countryOfIncorporation` when the KYC case is created. Older enquiries fall back to the previous jurisdiction / head office value.
+- **Older enquiries:** opening one shows Qatar when a jurisdiction is set; saving stores it.
+- **Other:** no migration is needed.
+
 ## Screening Finalize Guidance and Client Declaration Text (2026-11-15)
 
 - **Reported:** "Screening can't be closed" on Arabic Game Partners LLC (test site).

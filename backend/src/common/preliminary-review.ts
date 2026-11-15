@@ -29,7 +29,7 @@ export function amendedPreliminaryDocument(source: Record<string, unknown>, sect
   return {
     ...source,
     companyName: sectionA.legalName, proposedLegalForm: sectionA.legalForm,
-    jurisdiction: sectionA.countryOfIncorporation, registeredOfficeAddress: sectionA.registeredOfficeAddress,
+    jurisdiction: sectionA.countryOfIncorporation, countryOfIncorporation: sectionA.countryOfIncorporation, registeredOfficeAddress: sectionA.registeredOfficeAddress,
     businessActivity: sectionA.businessNature, expectedBusiness: sectionA.prospectiveService,
     shareholders: shareholders.map((row) => ({ ...row, address: row.residenceAddress, ownershipPercentage: row.shareholderPercentage ?? row.ownershipPercentage })),
     ubos: ubos.map((row) => ({ ...row, address: row.residenceAddress, ownershipPercentage: row.uboInterestPercentage ?? row.ownershipPercentage, uboPercentage: row.uboInterestPercentage ?? row.ownershipPercentage })),

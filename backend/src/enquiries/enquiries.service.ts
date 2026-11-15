@@ -1015,6 +1015,7 @@ export class EnquiriesService {
       companyName: this.optionalText(dto.companyName) || enquiry.proposedCompanyName || '',
       proposedLegalForm: this.optionalText(dto.proposedLegalForm),
       jurisdiction: this.optionalText(dto.jurisdiction),
+      countryOfIncorporation: dto.countryOfIncorporation === undefined ? this.optionalText(existing.countryOfIncorporation) : this.optionalText(dto.countryOfIncorporation),
       businessActivity: this.optionalText(dto.businessActivity),
       registeredOfficeAddress: this.optionalText(dto.registeredOfficeAddress),
       sourceOfFunds: this.optionalText(dto.sourceOfFunds),
@@ -1143,7 +1144,8 @@ export class EnquiriesService {
     const preliminary = this.objectValue(details.preliminaryKyc);
     return {
       legalName: this.optionalText(preliminary.companyName) || enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
-      countryOfIncorporation: this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
+      // Prefer the country captured on the enquiry; older enquiries fall back to the previous behaviour.
+      countryOfIncorporation: this.optionalText(preliminary.countryOfIncorporation) || this.optionalText(details.countryOfIncorporation) || this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
       legalForm: this.optionalText(preliminary.proposedLegalForm) || '',
       registeredOfficeAddress: this.optionalText(preliminary.registeredOfficeAddress) || this.optionalText(details.proposedRegisteredOfficeAddress) || '',
       telephone: enquiry.keyContactPhone || '',

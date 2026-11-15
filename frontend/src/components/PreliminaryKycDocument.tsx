@@ -16,7 +16,7 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
       <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity.</p>
       <PreliminaryTable title="Section A: Basic Client Details" headers={['No.', 'Details']} rows={[
         ['1', `Proposed Company Name: ${value(data.companyName)}`], ['2', `Proposed Legal Form: ${value(data.proposedLegalForm)}`],
-        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', 'Country of incorporation: -'],
+        ['3', `Jurisdiction of Registration: ${value(data.jurisdiction)}`], ['4', `Country of incorporation: ${value(data.countryOfIncorporation)}`],
         ['5', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`], ['6', `Proposed Business Activity: ${value(data.businessActivity)}`],
         ['7', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`], ['8', `Expected Business from Newoon: ${value(expectedBusiness)}`]
       ]} />
