@@ -1,5 +1,22 @@
 # Newoon MIS Developer Handover
 
+## Screening Finalize Guidance and Client Declaration Text (2026-11-15)
+
+- **Reported:** "Screening can't be closed" on Arabic Game Partners LLC (test site).
+- **Cause, from the case's screening context on mis-test:**
+  - All three records were fully screened (every list Clear, evidence attached, result set), but **Observation / remarks were empty and none had been finalized**; all were `DRAFT`.
+  - Remarks are mandatory and the box sits at the bottom of each record. The Finalize error appeared at the top of the page.
+  - ID numbers matched the KYC form.
+  - No data was changed on the server.
+- **Screening page** (`KycScreeningPage.tsx`):
+  - Records show a "Not finalized" badge.
+  - A page banner lists records still to finalize, with what to do.
+  - Each open record shows a live "Before you can finalize this record" list right under its buttons, or "Everything is filled in. Click Finalize".
+- **KYC checklist wording:**
+  - Names with no screening record are listed separately from records that exist but are not finalized, which now read "…: add Observation / remarks, click Finalize".
+  - The pass/fail rule is unchanged.
+- **Client declaration:** section G of the full KYC (download, live preview, form) now opens with the client's wording: "By signing this document, I hereby confirm … on behalf of the entity set out in section A:" (`CLIENT_DECLARATION_TEXT`). The Preliminary KYC already had its own version.
+
 ## Amendment Drafts Use the Same Submission Checks (2026-11-12)
 
 - **The gap:** a full-KYC amendment draft (`AML_REVIEW_STARTED`, form `AMENDMENT_DRAFT`, `fullKycStarted`, unlocked; for example "Open amendment" on a Preliminary-to-full KYC) could be edited by AML. However:

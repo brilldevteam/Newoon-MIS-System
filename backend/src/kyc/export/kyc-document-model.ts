@@ -129,6 +129,7 @@ function data(headers: Array<[string, number]>, body: string[][]): Block {
   };
 }
 
+export const CLIENT_DECLARATION_TEXT = 'By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorized to represent and sign this document on behalf of the entity set out in section A:';
 const section = (title: string, blocks: Block[], newPage = false): Block => ({ kind: 'section', title, blocks, ...(newPage ? { newPage } : {}) });
 // Optional review rows (conditions, reasons, risk reason) are printed only when they were filled in.
 const optional = (items: Array<[string, FieldValue]>): Array<[string, FieldValue]> =>
@@ -261,7 +262,8 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       fields([['Additional notes for KYC preparation documents', text(f.uploadedFilesNote)]])
     ]),
 
-    section('G. Client Declaration', [fields([
+    // Client's declaration wording (2026-11), printed above the signatory details.
+    section('G. Client Declaration', [para(CLIENT_DECLARATION_TEXT, { align: 'justify', spaceAfter: 4 }), fields([
       ['Full name', text(g.fullName)],
       ['Position', optionText(g.position, g.positionOther)],
       ['Date', date(g.date)],

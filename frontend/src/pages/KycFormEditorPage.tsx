@@ -975,6 +975,9 @@ function labelText(label: string) {
   return label.endsWith(' *') ? <>{label.slice(0, -2)}<span className="text-red-600" aria-hidden="true"> *</span></> : label;
 }
 
+// Client's declaration wording shown above the signatory details (same text as the downloaded KYC).
+const CLIENT_DECLARATION_TEXT = 'By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorized to represent and sign this document on behalf of the entity set out in section A:';
+
 const DMLRO_STAGE_STATUSES = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'];
 
 export function KycFormEditorPage() {
@@ -2276,6 +2279,7 @@ function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; em
 
 function SectionGDeclarationForm({ data, onChange }: FormProps) {
   return <FormGrid>
+    <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">{CLIENT_DECLARATION_TEXT}</p>
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
     <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
@@ -2420,6 +2424,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Additional notes for KYC preparation documents', form.sectionF.uploadedFilesNote || '-']]} />
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
+          <p className="mb-2 text-justify">{CLIENT_DECLARATION_TEXT}</p>
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         </> : null}

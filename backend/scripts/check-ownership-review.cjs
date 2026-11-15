@@ -77,7 +77,7 @@ async function main() {
   await assert.rejects(route, /VALID_PACKAGE_REACHED_LOCK/);
   service.serializeForm = () => ({ sectionA: {}, sectionB: { shareholders: [{ fullName: 'Missing Owner', identityNumber: '999' }], ubos: [] }, sectionC: { managers: [] } });
   tx.kycForm.findFirst = async () => ({ sections: [{ sectionKey: 'COMPLIANCE_RISK', data: { pepQuestion: 'No', sanctionQuestion: 'No', dualCitizenshipQuestion: 'No' } }] });
-  await assert.rejects(route, /still need a completed screening.*Missing Owner/);
+  await assert.rejects(route, /have no screening record.*Missing Owner/);
   tx.kycForm.findFirst = async () => null;
   tx.screeningCaseDocument.findMany = async () => [];
   await assert.rejects(route, /Upload the screening evidence.*NCTC, UN, OFAC, EU and PPO list/);

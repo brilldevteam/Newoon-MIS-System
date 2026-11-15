@@ -2917,16 +2917,20 @@ export class KycService {
             ...this.asArray<RowPayload>(current?.sectionB.ubos),
             ...this.asArray<RowPayload>(current?.sectionC.managers)
           ].filter((row) => this.text(row.fullName).trim());
-          const unscreened = requiredParties.filter((row) => !screening.some((record) =>
-            record.status === 'COMPLETED' && (this.text(row.identityNumber).trim()
-              ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
-              : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase())));
+          const matches = (row: RowPayload, record: (typeof screening)[number]) => (this.text(row.identityNumber).trim()
+            ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
+            : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase());
+          const unscreened = requiredParties.filter((row) => !screening.some((record) => record.status === 'COMPLETED' && matches(row, record)));
+          // Names with a record that is not finalized yet are reported once, in the "finish these records" line below.
+          const withoutRecord = unscreened.filter((row) => !screening.some((record) => matches(row, record)));
           // Each problem is reported by name so the AML team knows exactly what to fix (one sentence per line).
           const issues: string[] = [];
           if (!screening.length) {
             issues.push('No screening has been done yet. Open Screening and screen the company and every shareholder, beneficial owner and manager.');
-          } else if (unscreened.length) {
-            issues.push(`These names still need a completed screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. If a name is already screened, check its ID / CR number matches the KYC form.`);
+          } else if (withoutRecord.length) {
+            issues.push(`These names have no screening record: ${namesList(withoutRecord.map((row) => this.text(row.fullName).trim()))}. Add a record for each on the Screening page (if a name is already screened, check its ID / CR number matches the KYC form).`);
+          } else if (unscreened.length && !screening.some((record) => record.status !== 'COMPLETED')) {
+            issues.push(`These names are not covered by a finalized screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. Check the ID / CR number on their screening record matches the KYC form.`);
           }
           if (listsWithoutResult.length) issues.push(`Record a result for these screening lists: ${namesList(listsWithoutResult.map(screeningListName), 10)}.`);
           if (matchesWithoutComment.length) issues.push(`Add a comment explaining the match on: ${namesList(matchesWithoutComment.map(screeningListName), 10)}.`);
@@ -2934,15 +2938,16 @@ export class KycService {
           const incomplete = screening
             .map((record) => {
               const missing: string[] = [];
-              if (record.status !== 'COMPLETED') missing.push('mark it completed');
               if (!record.conclusionStatus) missing.push('choose the conclusion');
-              if (!hasComment(record.remarks)) missing.push('add remarks');
+              if (!hasComment(record.remarks)) missing.push('add Observation / remarks');
               if (record.checks.some((check) => check.isSelected && check.resultStatus === 'NOT_CHECKED')) missing.push('record a result for every selected list');
               if (record.checks.some((check) => check.isSelected && isMatch(check.resultStatus) && !hasComment(check.notes))) missing.push('comment on each match');
+              // Finalize is always the last step, so name it after anything else that is missing.
+              if (record.status !== 'COMPLETED') missing.push('click Finalize');
               return missing.length ? `${record.entityName}: ${missing.join(', ')}` : '';
             })
             .filter(Boolean);
-          if (incomplete.length) issues.push(`Finish these screening records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
+          if (incomplete.length) issues.push(`On the Screening page, finish these records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
           if (issues.length) throw new BadRequestException(issues.join('\n'));
   }
 
