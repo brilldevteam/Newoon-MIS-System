@@ -54,11 +54,11 @@
 - **Where it is enforced:** `backend/src/common/kyc-form-completeness.ts` lists the details a KYC form must have before the AML Supervisor can submit it to DMLRO. `assertReviewPackageReady` enforces it, so it covers both submit paths. Drafts can still be saved with gaps.
 - **Required fields:**
   - A: Legal name, CR No., Date of incorporation, Country of incorporation, Legal form, Registered office address, Telephone (more than the dial code), a valid Email, Main purpose / nature of business, Related Industry, Nature of prospective service.
-  - B Managers: at least one person, each with full name, position, nationality and QID/Passport No.; at least one authorized signatory.
+  - B Managers: at least one person, each with full name, position, nationality and QID/Passport No. The "Authorized signatory" tick is optional (since 2026-11-16), because some companies have no named authorized signatory.
   - C Shareholders: at least one row, each with full name, nationality/country, QID/Passport or CR number, and shareholder %. Direct shareholders must total 100%. At least one beneficial owner (UBO).
   - D: the existing PEP / sanction / dual-citizenship answers.
   - E: Full name, Position, Mobile, a valid Email.
-  - G: Full name, Position, Date, Authorized signature.
+  - G: Full name, Position, Date. The authorized signature upload is optional (since 2026-11-16), because the client's signature is often not available as a file.
   - H: the AML Supervisor's risk classification and due diligence type (added earlier).
 - **Not covered:** preliminary (proposed-company) forms keep their own rules until the full KYC is started.
 - **In the app:**

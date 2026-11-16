@@ -37,7 +37,13 @@ async function main() {
   issues = kycFormCompletenessIssues(form);
   assert.equal(issues[0].title, 'B. Managers / Signatories');
   assert.ok(issues[0].missing.some((text) => /Person "No Details": position, nationality, QID \/ Passport No\./.test(text)));
-  assert.ok(issues[0].missing.some((text) => /Authorized signatory/.test(text)));
+  assert.equal(issues[0].missing.some((text) => /Authorized signatory/.test(text)), false, 'Authorized signatory is optional');
+  form = complete();
+  form.sectionC.managers[0].isAuthorizedSignatory = false;
+  form.sectionG = { fullName: 'Signer', position: 'Director', date: '2026-11-12' };
+  assert.deepEqual(kycFormCompletenessIssues(form), [], 'No signatory tick and no signature upload are both allowed');
+  form = complete();
+  form.sectionC.managers = [{ fullName: 'No Details', isAuthorizedSignatory: false }];
   form.sectionC.managers = [];
   assert.match(kycFormCompletenessIssues(form)[0].missing[0], /at least one manager/);
 
@@ -60,7 +66,7 @@ async function main() {
   form.sectionG = { fullName: 'Signer', positionOther: 'Chairman' };
   issues = kycFormCompletenessIssues(form);
   assert.deepEqual(issues.map((issue) => issue.section), ['sectionE', 'sectionG']);
-  assert.deepEqual(issues[1].missing, ['Date', 'Authorized signature'], 'An "Other" position text counts');
+  assert.deepEqual(issues[1].missing, ['Date'], 'An "Other" position text counts; the signature upload is optional');
 
   // Preliminary forms keep their own rules until the full KYC is started.
   form = { ...complete(), sectionA: { formVariant: 'PRELIMINARY_PROPOSED_COMPANY' } };

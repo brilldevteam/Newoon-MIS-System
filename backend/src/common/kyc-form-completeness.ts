@@ -66,7 +66,7 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
     if (missing.length) managerRows.push(`${rowLabel(row, index, 'Person')}: ${missing.join(', ')}`);
   });
   managerGaps.push(...capRows(managerRows, 'people'));
-  if (managers.length && !managers.some((row) => row.isAuthorizedSignatory === true || row.isAuthorizedSignatory === 'true')) managerGaps.push('tick "Authorized signatory" for at least one person');
+  // "Authorized signatory" is optional: some companies have no named authorized signatory.
   add('sectionC', 'B. Managers / Signatories', managerGaps);
 
   const parties = rows(b.shareholders);
@@ -103,8 +103,8 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
   add('sectionG', 'G. Client Declaration', [
     !filled(g.fullName) && 'Full name',
     !choice(g, 'position') && 'Position',
-    !filled(g.date) && 'Date',
-    !filled(g.signatureDataUrl) && !filled(g.signatureFileName) && 'Authorized signature'
+    !filled(g.date) && 'Date'
+    // The authorized signature upload is optional: the client's signature is often not available as a file.
   ].filter(Boolean) as string[]);
 
   return issues;
