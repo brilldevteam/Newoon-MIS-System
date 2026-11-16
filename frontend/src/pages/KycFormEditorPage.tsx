@@ -1953,7 +1953,7 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No. *'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory (at least one) *', 'checkbox']
+    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No. *'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
@@ -2283,7 +2283,7 @@ function SectionGDeclarationForm({ data, onChange }: FormProps) {
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
     <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-    <UploadField label="Authorized signature *" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
+    <UploadField label="Authorized signature" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
     <UploadField label="Company stamp" fileName={data.stampFileName} imageDataUrl={data.stampDataUrl} onChange={(file, dataUrl) => onChange({ ...data, stampFileName: file.name, stampDataUrl: dataUrl })} />
   </FormGrid>;
 }
