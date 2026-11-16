@@ -23,8 +23,11 @@ async function main() {
   service.changePassword = service.change.bind(service);
   const dto = { currentPassword: old, newPassword: next, confirmPassword: next };
   await assert.rejects(service.changePassword('self', { ...dto, confirmPassword: 'different' }), /do not match/);
-  await assert.rejects(service.changePassword('self', { ...dto, newPassword: 'short', confirmPassword: 'short' }), /16 characters/);
-  await assert.rejects(service.changePassword('self', { ...dto, newPassword: '\u00e9'.repeat(40), confirmPassword: '\u00e9'.repeat(40) }), /UTF-8/);
+  for (const weak of ['Ab1!', 'abcdefg1!', 'ABCDEFGH!', 'Abcdefgh1']) {
+    await assert.rejects(service.changePassword('self', { ...dto, newPassword: weak, confirmPassword: weak }), /capital letter, a number and a symbol/, `${weak} must be rejected`);
+  }
+  const tooLong = 'Aa1!' + '\u00e9'.repeat(40);
+  await assert.rejects(service.changePassword('self', { ...dto, newPassword: tooLong, confirmPassword: tooLong }), /72 bytes/);
   await assert.rejects(service.changePassword('self', { ...dto, currentPassword: 'wrong' }), /Current password/);
   await assert.rejects(service.changePassword('self', { ...dto, newPassword: old, confirmPassword: old }), /different new password/);
   assert.equal(writes, 0);

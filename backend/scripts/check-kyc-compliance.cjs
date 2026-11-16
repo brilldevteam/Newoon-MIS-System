@@ -9,7 +9,7 @@ async function main() {
   assert.match(complianceValidationError(preliminary, {}, true), /PEP exposure/);
   const answers = { pepQuestion: 'Yes', pepDetails: 'Synthetic PEP details', sanctionQuestion: 'No', dualCitizenshipQuestion: 'Yes', dualCitizenshipDetails: 'Synthetic citizenship details' };
   assert.equal(complianceValidationError({}, answers), null);
-  assert.match(complianceValidationError({}, { ...answers, pepDetails: '' }), /Add PEP exposure details/);
+  assert.match(complianceValidationError({}, { ...answers, pepDetails: '' }), /PEP exposure is answered Yes. Add the details/);
   for (const key of ['pepQuestion', 'sanctionQuestion', 'dualCitizenshipQuestion']) {
     assert.ok(complianceValidationError({}, { ...answers, [key]: '' }));
   }

@@ -1,5 +1,91 @@
 # Newoon MIS Developer Handover
 
+## Clients Menu Removed (2026-11-10)
+
+- **Sidebar:** the separate **Clients** item is gone. Onboarded clients are managed under **Compliance → Compliance Clients**, and new clients come in through **Enquiries**.
+- **Old links:** `/clients` now redirects to `/compliance/clients`, so bookmarks keep working.
+- **Still reachable but unlinked:** the client detail and edit pages (`/clients/:id`, `/clients/new`, `/clients/:id/edit`) still work, but the menu no longer links to them. The manual "Add client" form is therefore no longer in the menu.
+- **Dashboard:** the "Clients" card is now "Compliance clients" (active onboarded clients). It opens Compliance Clients for every role that can see it. Its count already used `status = ACTIVE`, which matches the register's Active total.
+- **Not affected:** backend endpoints, permissions and the `clients` access-control area.
+
+## Resuming an Engagement on Hold (2026-11-10)
+
+- **The problem:** an engagement put on hold (`CLIENT_ON_HOLD`) could not be resumed. The activation section and `completeEngagementDecision` / `uploadEngagementLetter` only accepted `KYC_FINAL_APPROVED` and `CLIENT_ACTIVATION_PENDING`.
+- **The fix:** all three now also accept `CLIENT_ON_HOLD`. Operations can upload a new signed letter (earlier letters stay on file) and choose Convert, Reject or keep On hold. The case guide and activation section explain how to resume.
+- **Client status on hold or reject:**
+  - Holding or rejecting an engagement no longer changes a client that is already onboarded (has `activatedAt` or a `clientCode`), for example an existing client asking for new services.
+  - A never-activated client stays `PROSPECT` while on hold, or becomes `REJECTED`, with `statusReason` recording why.
+- **Register filter:** `COMPLIANCE_REGISTER_WHERE` (in `common/client-compliance.ts`) replaces the bare status filter. It also hides `ON_HOLD` clients that were never activated (no `activatedAt` and no code), so clients already held under the old behaviour drop out of Compliance Clients until they are converted. No data migration is needed.
+- **Checks:** `check-compliance-clients.cjs` was updated.
+- **Local verification:** the hold → new letter → convert flow was run through the API for both cases:
+  - a never-activated client: kept out of the register while on hold, then got code CL-2026-0008 when converted;
+  - an already-active client: status and code unchanged by the hold.
+
+## Duplicate Enquiry Prevention (2026-11-10)
+
+- **Server rule** (`backend/src/enquiries/enquiries.service.ts`): one open enquiry per company.
+  - Names are compared ignoring case, spaces and punctuation, so "Nuclei W.L.L." and "nuclei wll" match.
+  - Existing-company and proposed-company enquiries are checked against each other.
+  - New-services enquiries are matched per client instead of by name.
+  - An enquiry stays open until it is closed, or until its KYC case finishes (`CLIENT_ACTIVE`, `CLIENT_REJECTED`, `MLRO_REJECTED`, `SEF_REJECTED`).
+  - Create and update both enforce it and return `409` with a plain message, for example: `An enquiry for "Nuclei" already exists: ENQ-2026-0011 (its KYC is in progress). Open ENQ-2026-0011 and continue there…`.
+  - The check runs inside the enquiry-numbering advisory lock, so a double click cannot slip two copies through.
+- **Live check:** `GET /api/enquiries/duplicate-check?enquiryType=&name=&clientId=&excludeId=` lets the form warn while typing. It is declared before `:id`.
+- **Form** (`AddEnquiryPage.tsx`):
+  - A "Possible duplicate" warning with an "Open ENQ-…" link appears, and Save/Create stay disabled while it shows.
+  - A double click is ignored.
+  - Once an enquiry is created, retrying after a failed attachment upload updates that same enquiry instead of creating a new one, and the error says the enquiry was saved.
+  - The likely cause of the old duplicates was this case: a failed attachment upload left the form on "New Enquiry", and pressing the button again created another enquiry each time.
+- **Existing duplicates** are not removed automatically. A Super Admin can delete the extra drafts from the Enquiries list (the delete is audited). Editing a remaining duplicate draft now shows the warning that names the enquiry to continue.
+- **Checks:** `node backend/scripts/check-enquiry-duplicates.cjs` (mocked persistence). No migration is needed.
+- **Local verification:**
+  - The API refused a duplicate (`409`).
+  - The form showed the warning and disabled Save for a duplicate name, and cleared it for a new name.
+  - A test enquiry created before the cross-type fix was deleted from the local database.
+
+## Step-by-Step Guidance and Plain-English Errors (2026-11-10)
+
+- **KYC case page** (`frontend/src/components/KycCaseGuide.tsx`):
+  - It replaces the one-line "Next step" banner with a progress bar: KYC preparation → DMLRO review → MLRO / SEF approval → Final KYC → Convert to client → Client active.
+  - Below the bar is a "Your next step" box written for the signed-in role. The role that holds the case gets numbered steps and a button to the right page or section (`#final-kyc-decision`, `#client-activation`). Every other role sees "Nothing for you to do right now. This case is with …".
+  - During AML preparation the box is a live checklist from `GET /kyc/:id/submission-readiness`, in work order: documents, KYC form Section D, screening, CRRF, then AML Supervisor comments. Each unfinished item says what is missing and links to where it is fixed.
+  - "Submit to DMLRO" now always shows during preparation. It stays greyed out until everything except the comments is done. Before, it was hidden until a document was uploaded.
+- **Readiness checks** (`kyc.service.ts`):
+  - Each item now returns a `key` alongside its `label`.
+  - Screening messages name exactly what is missing: people or companies not screened, screening lists without a result, matches without a comment, lists without evidence, and unfinished records with what each one lacks.
+  - CRRF says separately whether the rating or the document is missing.
+  - Section D messages say where in the form to answer.
+  - Pass/fail logic is unchanged; only the messages changed.
+  - Multi-issue messages are separated by newlines and rendered with `whitespace-pre-line`.
+- **Submit to DMLRO page:** each checklist item has a "fix it" link and a done/needed state. The duplicate static rows were removed.
+- **Enquiry page:**
+  - A "Your next step" / "Where it is now" box covers draft, returned to BD, with the AML Supervisor, ready for KYC and converted.
+  - "Return to BD" now needs a written reason in the status note, so Operations knows what to fix.
+- **Final engagement form:** it now says whether the signed engagement letter is still required or already uploaded.
+- **Checks:** `check-ownership-review.cjs` and `check-kyc-compliance.cjs` were updated for the new wording. No migration is needed.
+- **Local verification:** the guide was checked in the browser at every stage, from AML preparation through Client active, as AML Supervisor and Operations, including phone width. The DMLRO, MLRO and SEF "your turn" views were not opened as those roles; they use the same code path as the views that were checked.
+
+## Preliminary KYC Final Decision in One Step (2026-11-10)
+
+- Before this change, **Final KYC Decision → Use Preliminary KYC as final** on an approved Preliminary (proposed-company) KYC sent the case back for a second DMLRO and MLRO approval. It also locked the form (`KycForm.status = PRELIMINARY_FINAL_REVIEW`). That lock disabled Section H for the reviewers, so those cases could not move on.
+- That second round is removed. Confirming the approved Preliminary KYC as final now works like a normal KYC (`markApprovedKycFinal` in `backend/src/kyc/kyc.service.ts`):
+  - The form becomes `FINAL` and locked, and the case goes straight to `KYC_FINAL_APPROVED`.
+  - The first-round DMLRO and MLRO approvals stay submitted, so the activation checklist still counts them.
+  - Status history and an audit entry are written.
+  - The action locks the case row and refuses a repeat if the status has already changed.
+- Both paths (Preliminary and normal) send one `CLIENT_READY_FOR_ACTIVATION` notification, "Final KYC approved - convert to client". It reaches Operations (and the AML/reviewer roles), and its link opens the KYC case, where Operations converts the case to a client and uploads the signed engagement letter. The legacy MLRO completion for a `PRELIMINARY_FINAL_REVIEW` form now sends this notification too.
+- **Existing stuck cases:** `backend/scripts/finalize-preliminary-final-review.cjs` moves cases whose form is `PRELIMINARY_FINAL_REVIEW` and whose status is DMLRO/MLRO review pending or in progress to `KYC_FINAL_APPROVED`. It also:
+  - locks the first-round DMLRO/MLRO submissions again;
+  - removes the open second-round DMLRO/MLRO tasks;
+  - sends the Operations notification and writes an audit entry.
+
+  Any other case in that form state is listed and left alone. It is a dry run by default: build, then run `node --env-file=backend/.env backend/scripts/finalize-preliminary-final-review.cjs`, then rerun with `--apply` after a database backup.
+- **Checks:** `node backend/scripts/check-preliminary-final.cjs` (mocked persistence). No schema migration is needed.
+- **Local verification:**
+  - A real local Preliminary case went from `MLRO_APPROVED` to `KYC_FINAL_APPROVED` through the API, and Operations received the unread notification linked to the case. No new DMLRO task was created.
+  - The fix script was run against a local case inside a rolled-back transaction.
+  - The Operations screen was not checked in the browser.
+
 ## End-to-End Check and Activation Fixes (2026-11-10)
 
 - **Engagement letter at activation:** general KYC document uploads stay locked after submission, and Operations was never allowed to use them. The KYC page's **Submit decision** therefore failed when a letter was attached after final approval; activation only worked if the letter had been attached at the enquiry stage.
@@ -148,7 +234,7 @@
 
 ## Self-Service Password Change (2026-11-01)
 
-- Every authenticated role can open Change Password in the sidebar at `/account/password`. `POST /api/auth/change-password` derives the account only from its verified JWT; no target account ID is accepted. Current password, a different new password (16 characters minimum, 72 UTF-8 bytes maximum), and matching confirmation are required.
+- Every authenticated role can open Change Password in the sidebar at `/account/password`. `POST /api/auth/change-password` derives the account only from its verified JWT; no target account ID is accepted. Current password, a different new password (at least 8 characters with a capital letter, a number and a symbol (maximum 72 UTF-8 bytes)), and matching confirmation are required.
 - Uses existing login throttling/lockout and session-version security. Hash verification precedes an atomic compare-and-update, session-version increment, pending login-code removal and credential-free audit. Success signs the browser out and requires a fresh login. No role, tenant or workflow records are changed.
 - This feature relies on the existing uncommitted login-protection/sessionVersion work in this checkout, including its migration; it cannot be deployed independently to an older schema. Preserve and review those changes separately. Verify after build with `node backend/scripts/check-self-password.cjs`; synthetic tests do not replace staging verification.
 

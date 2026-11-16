@@ -24,7 +24,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
-  const canViewClients = hasAnyRole(user, workflowRoles.clientIntake);
+  const canViewClients = hasAnyRole(user, workflowRoles.complianceView);
   const canViewKyc = hasAnyRole(user, [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]);
   const canManageWorkspace = hasAnyRole(user, workflowRoles.admin);
 
@@ -71,7 +71,7 @@ export function DashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Tenants" value={summary.totalTenants} detail="Configured workspaces" trend="Live" tone="green" icon={Building2} to={canManageWorkspace ? '/tenants' : undefined} />
-        <StatCard label="Clients" value={summary.totalClients} detail="Client intake register" trend="Active" tone="blue" icon={UsersRound} to={canViewClients ? '/clients' : undefined} />
+        <StatCard label="Compliance clients" value={summary.totalClients} detail="Active onboarded clients" trend="Active" tone="blue" icon={UsersRound} to={canViewClients ? '/compliance/clients' : undefined} />
         <StatCard label="Pending KYC" value={summary.pendingKyc} detail="Files in preparation" trend="Open" tone="amber" icon={ClipboardCheck} to={canViewKyc ? '/kyc-workflow?filter=pending-kyc' : undefined} />
         <StatCard label="Approvals" value={summary.pendingApprovals} detail="Waiting for review" trend="Queue" tone="rose" icon={ShieldCheck} to={canViewKyc ? '/kyc-workflow?filter=pending-approvals' : undefined} />
         <StatCard label="Modules" value={summary.enabledModules} detail="Enabled capabilities" trend="Ready" icon={Layers} to={canManageWorkspace ? '/modules' : undefined} />
@@ -144,7 +144,7 @@ export function DashboardPage() {
             </span>
           </div>
           <div className="mt-6 space-y-3">
-            <ReadinessRow label="Client intake" value={summary.totalClients ? 'Available' : 'No clients yet'} ready={summary.totalClients > 0} />
+            <ReadinessRow label="Active clients" value={summary.totalClients ? 'Available' : 'No active clients yet'} ready={summary.totalClients > 0} />
             <ReadinessRow label="KYC preparation" value={summary.pendingKyc ? 'In progress' : 'Clear'} ready />
             <ReadinessRow label="Approval workflow" value={summary.pendingApprovals ? 'Action needed' : 'No pending approvals'} ready={!summary.pendingApprovals} />
             <ReadinessRow label="Modules" value={`${formatNumber(summary.enabledModules)} enabled`} ready={summary.enabledModules > 0} />

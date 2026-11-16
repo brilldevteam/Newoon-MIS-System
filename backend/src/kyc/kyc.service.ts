@@ -53,6 +53,23 @@ const REQUIRED_DOCUMENT_TYPES = [
   'Tax Card'
 ];
 
+const SCREENING_LIST_NAMES: Record<string, string> = {
+  NCTC: 'NCTC', UN: 'UN', OFAC: 'OFAC', EU: 'EU', PPO_LIST: 'PPO list', WORLD_CHECK: 'World-Check', GOOGLE: 'Google (adverse media)'
+};
+
+function screeningListName(type: string) {
+  return SCREENING_LIST_NAMES[type] || type;
+}
+
+// "A, B and C" - at most `limit` names, then "and N more", so messages stay readable.
+function namesList(names: string[], limit = 6) {
+  const unique = [...new Set(names.filter(Boolean))];
+  const shown = unique.slice(0, limit);
+  const extra = unique.length - shown.length;
+  if (extra > 0) return `${shown.join(', ')} and ${extra} more`;
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0] || '';
+}
+
 @Injectable()
 export class KycService {
   private readonly logger = new Logger(KycService.name);
@@ -330,9 +347,10 @@ export class KycService {
 
     const kycCase = await this.prisma.kycCase.findFirst({ where: { id, ...this.tenantWhere(user) } });
     if (!kycCase) throw new NotFoundException('KYC case not found');
-    const activationStatuses: KycCaseStatus[] = [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING];
+    // An engagement on hold can be resumed with a new signed letter.
+    const activationStatuses: KycCaseStatus[] = [KycCaseStatus.KYC_FINAL_APPROVED, KycCaseStatus.CLIENT_ACTIVATION_PENDING, KycCaseStatus.CLIENT_ON_HOLD];
     if (!activationStatuses.includes(kycCase.status)) {
-      throw new BadRequestException('The signed engagement letter can be uploaded here once the KYC has final approval and before the engagement decision.');
+      throw new BadRequestException('The signed engagement letter can be uploaded once the KYC has final approval, or while the engagement is on hold.');
     }
 
     const caseDirectory = join(this.legalDocumentUploadRoot(), kycCase.tenantId, kycCase.id);
@@ -563,22 +581,23 @@ export class KycService {
   async submissionReadiness(user: RequestUser, id: string) {
     const kycCase = await this.requireWritableCase(user, id);
     return this.prisma.$transaction(async (tx) => {
-      const checks: Array<{ label: string; complete: boolean; message: string }> = [];
-      const addCheck = async (label: string, check: () => Promise<void>) => {
-        try { await check(); checks.push({ label, complete: true, message: '' }); }
+      // `key` lets the screens link each item to the page where it is fixed; the order is the order to work in.
+      const checks: Array<{ key: string; label: string; complete: boolean; message: string }> = [];
+      const addCheck = async (key: string, label: string, check: () => Promise<void>) => {
+        try { await check(); checks.push({ key, label, complete: true, message: '' }); }
         catch (error) {
           if (!(error instanceof BadRequestException)) throw error;
-          checks.push({ label, complete: false, message: error.message });
+          checks.push({ key, label, complete: false, message: error.message });
         }
       };
-      await addCheck('Screening', () => this.assertScreeningReady(tx, kycCase));
-      await addCheck('CRRF', () => this.assertCrrfReady(tx, kycCase));
-      await addCheck('Full KYC compliance and risk', () => this.assertComplianceReady(tx, kycCase));
       const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
-      checks.push({ label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'Upload at least one document required for KYC preparation.' });
+      checks.push({ key: 'documents', label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'No documents uploaded yet. Use Upload in "Documents Required for KYC Preparation" and add at least one document (for example the CR, QID or passport copies).' });
+      await addCheck('form', 'KYC form - D. Compliance and Risk', () => this.assertComplianceReady(tx, kycCase));
+      await addCheck('screening', 'Screening', () => this.assertScreeningReady(tx, kycCase));
+      await addCheck('crrf', 'CRRF', () => this.assertCrrfReady(tx, kycCase));
       const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       const comments = hasComment(review?.amlClarificationFindings);
-      checks.push({ label: 'AML Supervisor comments', complete: comments, message: comments ? '' : 'Enter AML Supervisor comments below before submitting.' });
+      checks.push({ key: 'comments', label: 'AML Supervisor comments', complete: comments, message: comments ? '' : 'Write the AML Supervisor comments on the Submit to DMLRO page.' });
       return { ready: checks.every((check) => check.complete), checks, supervisorComments: safeComment(review?.amlClarificationFindings) };
     });
   }
@@ -924,6 +943,7 @@ export class KycService {
       if (finalReviewForm?.status === 'PRELIMINARY_FINAL_REVIEW' && (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)) {
         await tx.kycForm.update({ where: { kycCaseId: id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
         await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Final DMLRO and MLRO approval completed for the Preliminary KYC.');
+        await this.notifyReadyForClientConversion(tx, kycCase);
       }
       await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
@@ -1192,9 +1212,11 @@ export class KycService {
 
   async completeEngagementDecision(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const kycCase = await this.findOne(user, id);
+    // CLIENT_ON_HOLD is included so a held engagement can later be converted, rejected or kept on hold.
     const approvedStatuses: KycCaseStatus[] = [
       KycCaseStatus.KYC_FINAL_APPROVED,
-      KycCaseStatus.CLIENT_ACTIVATION_PENDING
+      KycCaseStatus.CLIENT_ACTIVATION_PENDING,
+      KycCaseStatus.CLIENT_ON_HOLD
     ];
     if (!approvedStatuses.includes(kycCase.status)) {
       throw new BadRequestException('The KYC file must receive final approval before the engagement decision.');
@@ -1216,10 +1238,17 @@ export class KycService {
     if (decision === 'CONVERT_TO_CLIENT') {
       await this.activateComplianceClient(user, kycCase);
     } else {
-      await this.prisma.client.update({
-        where: { id: kycCase.clientId },
-        data: { status: decision === 'ON_HOLD' ? 'ON_HOLD' : 'REJECTED' }
-      });
+      // Holding or rejecting this engagement must not change a client that is already onboarded (for example an
+      // existing client asking for new services). A client never activated stays a prospect while on hold.
+      const client = await this.prisma.client.findUniqueOrThrow({ where: { id: kycCase.clientId }, select: { activatedAt: true, clientCode: true } });
+      if (!client.activatedAt && !client.clientCode) {
+        await this.prisma.client.update({
+          where: { id: kycCase.clientId },
+          data: decision === 'ON_HOLD'
+            ? { status: 'PROSPECT', statusReason: `Engagement on hold: ${reason}` }
+            : { status: 'REJECTED', statusReason: `Engagement rejected: ${reason}` }
+        });
+      }
     }
     const note = decision === 'CONVERT_TO_CLIENT'
       ? 'Signed engagement accepted; inquiry converted and client activated'
@@ -1327,16 +1356,7 @@ export class KycService {
       throw new ForbiddenException('The final KYC decision must be completed by the approving MLRO or SEF role.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({
-        where: { tenantId: kycCase.tenantId, kycCaseId: id },
-        data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
-      });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Approving review role confirmed the KYC as the final KYC.');
-      await this.audit(tx, user, kycCase.tenantId, 'KycCase', id, { action: 'APPROVED_KYC_MARKED_FINAL' });
-      await this.createNotification(tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION, 'Final KYC completed', `${kycCase.title} was marked as the final KYC and is ready for the engagement decision.`);
-      return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    return this.markApprovedKycFinal(user, kycCase, 'Approving review role confirmed the KYC as the final KYC.', 'APPROVED_KYC_MARKED_FINAL');
   }
 
   private async beginFormAmendment(
@@ -1492,17 +1512,39 @@ export class KycService {
     }, { timeout: 60000 });
   }
 
+  // The Preliminary KYC already passed DMLRO and MLRO approval, so confirming it as final
+  // completes the KYC directly (no second approval round) and hands it to Operations.
   private async routePreliminaryFinalKycForApproval(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>) {
+    return this.markApprovedKycFinal(user, kycCase, 'Approved Preliminary KYC confirmed as the final KYC.', 'PRELIMINARY_KYC_MARKED_FINAL');
+  }
+
+  private async markApprovedKycFinal(
+    user: RequestUser, kycCase: { id: string; tenantId: string; title: string; status: KycCaseStatus }, note: string, action: string
+  ) {
     return this.prisma.$transaction(async (tx) => {
-      await tx.kycForm.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, data: { status: 'PRELIMINARY_FINAL_REVIEW', isLocked: true, updatedBy: user.id } });
-      await tx.internalReviewSubmission.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } }, data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id } });
-      await tx.internalReviewTask.deleteMany({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO] } } });
-      await tx.internalReviewTask.createMany({ data: [ReviewStage.DMLRO, ReviewStage.MLRO].map((stage) => ({ tenantId: kycCase.tenantId, kycCaseId: kycCase.id, stage, createdBy: user.id, updatedBy: user.id })) });
-      await this.recordStatus(tx, kycCase, user, KycCaseStatus.DMLRO_REVIEW_PENDING, 'AML Supervisor marked the approved Preliminary KYC as final and sent it for final DMLRO and MLRO approval.');
-      await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final DMLRO approval.`);
-      await this.createNotification(tx, kycCase, NotificationType.MLRO_TASK_ASSIGNED, 'Final Preliminary KYC approval requested', `${kycCase.title} requires final MLRO approval.`);
+      // Lock the case row so a double click or two reviewers cannot both complete it.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "KycCase" WHERE "id" = ${kycCase.id} AND "tenantId" = ${kycCase.tenantId} FOR UPDATE`);
+      const current = await tx.kycCase.findFirst({ where: { id: kycCase.id, tenantId: kycCase.tenantId }, select: { status: true } });
+      if (current?.status !== kycCase.status) throw new BadRequestException('The case changed during this action. Refresh before trying again.');
+      await tx.kycForm.updateMany({
+        where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id },
+        data: { isLocked: true, status: 'FINAL', updatedBy: user.id }
+      });
+      await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
+      await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action });
+      await this.notifyReadyForClientConversion(tx, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
     });
+  }
+
+  // Operations (and the reviewer roles) see CLIENT_READY_FOR_ACTIVATION; it opens the KYC case,
+  // where Operations converts the KYC to a client and uploads the signed engagement letter.
+  private notifyReadyForClientConversion(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; title: string }) {
+    return this.createNotification(
+      tx, kycCase, NotificationType.CLIENT_READY_FOR_ACTIVATION,
+      'Final KYC approved - convert to client',
+      `${kycCase.title} is final. Operations: open the case, convert it to a client and upload the signed engagement letter.`
+    );
   }
 
   private async startPreliminaryFullKyc(user: RequestUser, kycCase: Awaited<ReturnType<KycService['findOne']>>, dto: Record<string, unknown>) {
@@ -2789,8 +2831,10 @@ export class KycService {
           const evidence = await tx.screeningCaseDocument.findMany({ where });
           const resultTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST', 'WORLD_CHECK', 'GOOGLE'];
           const evidenceTypes = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST'];
-          const missingCommonChecks = resultTypes.some((type) => !commonChecks.some((check) => check.checkType === type && check.resultStatus !== 'NOT_CHECKED' && (!['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) || hasComment(check.notes))));
-          const missingEvidence = evidenceTypes.some((type) => !evidence.some((document) => document.checkType === type && document.storagePath));
+          const isMatch = (status: string) => ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(status);
+          const listsWithoutResult = resultTypes.filter((type) => !commonChecks.some((check) => check.checkType === type && check.resultStatus !== 'NOT_CHECKED'));
+          const matchesWithoutComment = resultTypes.filter((type) => commonChecks.some((check) => check.checkType === type && isMatch(check.resultStatus) && !hasComment(check.notes)));
+          const listsWithoutEvidence = evidenceTypes.filter((type) => !evidence.some((document) => document.checkType === type && document.storagePath));
           const form = await tx.kycForm.findFirst({ where, include: this.formInclude() });
           const current = form ? this.serializeForm(form) : null;
           const company: Record<string, unknown> = current?.sectionA || {};
@@ -2800,21 +2844,45 @@ export class KycService {
             ...this.asArray<RowPayload>(current?.sectionB.ubos),
             ...this.asArray<RowPayload>(current?.sectionC.managers)
           ].filter((row) => this.text(row.fullName).trim());
-          const missingParty = requiredParties.some((row) => !screening.some((record) =>
+          const unscreened = requiredParties.filter((row) => !screening.some((record) =>
             record.status === 'COMPLETED' && (this.text(row.identityNumber).trim()
               ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
               : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase())));
-          if (!screening.length || missingParty) throw new BadRequestException('Complete Screening for the client and every current shareholder, beneficial owner and manager before submitting to DMLRO.');
-          if (missingCommonChecks || missingEvidence) throw new BadRequestException('Complete Screening common-list results and upload the NCTC, UN, OFAC, EU and PPO evidence before submitting to DMLRO.');
-          if (screening.some((record) => record.status !== 'COMPLETED' || !record.conclusionStatus || !hasComment(record.remarks) || record.checks.some((check) => check.isSelected && (check.resultStatus === 'NOT_CHECKED' || ['POTENTIAL_MATCH', 'CONFIRMED_MATCH'].includes(check.resultStatus) && !hasComment(check.notes))))) {
-            throw new BadRequestException('Complete Screening records with final results, remarks and comments for any matches before submitting to DMLRO.');
+          // Each problem is reported by name so the AML team knows exactly what to fix (one sentence per line).
+          const issues: string[] = [];
+          if (!screening.length) {
+            issues.push('No screening has been done yet. Open Screening and screen the company and every shareholder, beneficial owner and manager.');
+          } else if (unscreened.length) {
+            issues.push(`These names still need a completed screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. If a name is already screened, check its ID / CR number matches the KYC form.`);
           }
+          if (listsWithoutResult.length) issues.push(`Record a result for these screening lists: ${namesList(listsWithoutResult.map(screeningListName), 10)}.`);
+          if (matchesWithoutComment.length) issues.push(`Add a comment explaining the match on: ${namesList(matchesWithoutComment.map(screeningListName), 10)}.`);
+          if (listsWithoutEvidence.length) issues.push(`Upload the screening evidence (screenshot or PDF) for: ${namesList(listsWithoutEvidence.map(screeningListName), 10)}.`);
+          const incomplete = screening
+            .map((record) => {
+              const missing: string[] = [];
+              if (record.status !== 'COMPLETED') missing.push('mark it completed');
+              if (!record.conclusionStatus) missing.push('choose the conclusion');
+              if (!hasComment(record.remarks)) missing.push('add remarks');
+              if (record.checks.some((check) => check.isSelected && check.resultStatus === 'NOT_CHECKED')) missing.push('record a result for every selected list');
+              if (record.checks.some((check) => check.isSelected && isMatch(check.resultStatus) && !hasComment(check.notes))) missing.push('comment on each match');
+              return missing.length ? `${record.entityName}: ${missing.join(', ')}` : '';
+            })
+            .filter(Boolean);
+          if (incomplete.length) issues.push(`Finish these screening records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
+          if (issues.length) throw new BadRequestException(issues.join('\n'));
   }
 
   private async assertCrrfReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
           const crrf = await tx.crrfRecord.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, include: { documents: true } });
-          if (!crrf?.riskRating || !crrf.documents.some((document) => document.storagePath)) {
-            throw new BadRequestException('Complete the CRRF risk rating and upload the CRRF document before submitting to DMLRO.');
+          const issues: string[] = [];
+          if (!crrf) issues.push('The CRRF has not been started. Open CRRF, choose the risk rating and upload the signed CRRF document.');
+          else {
+            if (!crrf.riskRating) issues.push('Choose the CRRF risk rating and save it.');
+            if (!crrf.documents.some((document) => document.storagePath)) issues.push('Upload the CRRF document on the CRRF page.');
+          }
+          if (issues.length) {
+            throw new BadRequestException(issues.join('\n'));
           }
   }
 

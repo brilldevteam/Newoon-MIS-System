@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   ShieldEllipsis,
   UserCheck,
-  UserRoundPlus,
   Users,
   WifiOff,
   X
@@ -41,7 +40,12 @@ const isNavGroup = (item: NavItem): item is NavGroupItem => 'children' in item;
 const navItems: NavItem[] = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
   { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
-  { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake, area: 'clients' },
+  // Ordered as a client moves through the system: enquiry -> KYC (screening, CRRF, reviews) -> compliance.
+  // Onboarded clients live under Compliance -> Compliance Clients (the separate Clients menu was removed).
+  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
+  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening' },
+  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf' },
+  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals' },
   // Compliance area (legacy "Compliance Hub"); later submenu items such as Compliance Staff belong here too.
   {
     key: 'compliance',
@@ -50,10 +54,6 @@ const navItems: NavItem[] = [
     pathPrefix: '/compliance',
     children: [{ to: '/compliance/clients', label: 'Compliance Clients', icon: UserCheck, roles: workflowRoles.complianceView, area: 'compliance' }]
   },
-  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
-  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening' },
-  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf' },
-  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals' },
   // Platform-wide pages: Super Admin only, not controlled by the role matrix.
   { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
   { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },

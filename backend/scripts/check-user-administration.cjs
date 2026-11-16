@@ -40,8 +40,9 @@ async function main() {
   assert.equal(created.passwordHash, undefined);
   await assert.rejects(service.create(actor, { ...profile, password, tenantId: 'tenant-b' }), /own company/);
   await assert.rejects(service.create(actor, { ...profile, password, roles: ['SUPER_ADMIN'] }), /Only a Super Admin/);
-  await assert.rejects(service.create(actor, { ...profile, password: 'short' }), /at least 16/);
-  await assert.rejects(service.create(actor, { ...profile, password: '界'.repeat(30) }), /UTF-8/);
+  await assert.rejects(service.create(actor, { ...profile, password: 'short' }), /at least 8 characters/);
+  await assert.rejects(service.create(actor, { ...profile, password: 'nocapital1!' }), /capital letter/);
+  await assert.rejects(service.create(actor, { ...profile, password: 'Aa1!' + '界'.repeat(30) }), /72 bytes/);
   await assert.rejects(service.create(actor, { ...profile, password, roles: ['CUSTOM_ROLE'] }), /valid workflow/);
   target = { ...target, tenantId: 'tenant-b' };
   await assert.rejects(service.resetPassword(actor, 'target', { password }), /User not found/);
@@ -88,7 +89,8 @@ async function main() {
   };
   const bootstrapDb = { $transaction: async (callback) => callback(bootstrapTx) };
   const superProfile = { email: ' Owner@Example.Invalid ', firstName: 'Platform', lastName: 'Owner', password };
-  await assert.rejects(createSuperAdmin(bootstrapDb, { ...superProfile, password: 'too-short' }), /at least 16/);
+  await assert.rejects(createSuperAdmin(bootstrapDb, { ...superProfile, password: 'too-short' }), /at least 8 characters/);
+  await assert.rejects(createSuperAdmin(bootstrapDb, { ...superProfile, password: 'NoSymbol123' }), /symbol/);
   await createSuperAdmin(bootstrapDb, superProfile);
   assert.equal(bootstrapped.email, 'owner@example.invalid');
   assert.equal(bootstrapped.tenantId, null);

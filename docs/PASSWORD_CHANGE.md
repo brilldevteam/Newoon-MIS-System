@@ -1,6 +1,6 @@
 # Change Your Password
 
-All authenticated roles can use Change Password in the sidebar (`/account/password`). The current password and matching new password/confirmation are required. New passwords require at least 16 characters and at most 72 UTF-8 bytes.
+All authenticated roles can use Change Password in the sidebar (`/account/password`). The current password and matching new password/confirmation are required. New passwords require at least 8 characters with a capital letter, a number and a symbol (maximum 72 UTF-8 bytes).
 
 `POST /api/auth/change-password` uses only the authenticated account ID, not a client-supplied target. It verifies bcrypt, prevents stale hash overwrites, and writes the update and credential-free audit in one transaction. Five failed current-password attempts block this action for 15 minutes per account, per backend process; the limit resets on process restart and is not distributed.
 

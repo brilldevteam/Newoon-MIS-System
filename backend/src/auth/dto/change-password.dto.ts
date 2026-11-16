@@ -1,4 +1,5 @@
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { PASSWORD_MAX_BYTES, PASSWORD_PATTERN, PASSWORD_RULE_MESSAGE } from '../../common/security/password-policy';
 
 export class ChangePasswordDto {
   @IsString()
@@ -7,12 +8,12 @@ export class ChangePasswordDto {
   currentPassword: string;
 
   @IsString()
-  @MinLength(16)
-  @MaxLength(72)
+  @MaxLength(PASSWORD_MAX_BYTES, { message: PASSWORD_RULE_MESSAGE })
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_RULE_MESSAGE })
   newPassword: string;
 
   @IsString()
-  @MinLength(16)
-  @MaxLength(72)
+  @MinLength(1)
+  @MaxLength(PASSWORD_MAX_BYTES, { message: PASSWORD_RULE_MESSAGE })
   confirmPassword: string;
 }

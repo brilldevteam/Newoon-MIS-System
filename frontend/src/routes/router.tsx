@@ -2,7 +2,6 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AddClientPage } from '../pages/AddClientPage';
 import { AccessDeniedPage } from '../pages/AccessDeniedPage';
 import { ClientDetailsPage } from '../pages/ClientDetailsPage';
-import { ClientListPage } from '../pages/ClientListPage';
 import { ComplianceClientDetailsPage } from '../pages/ComplianceClientDetailsPage';
 import { ComplianceClientListPage } from '../pages/ComplianceClientListPage';
 import { CreateKycCasePage } from '../pages/CreateKycCasePage';
@@ -70,7 +69,8 @@ export const router = createBrowserRouter([
           {
             element: <RequireAccess area="clients" fallbackRoles={workflowRoles.clientIntake} />,
             children: [
-              { path: '/clients', element: <ClientListPage /> },
+              // The client list moved to Compliance -> Compliance Clients; old links and bookmarks land there.
+              { path: '/clients', element: <Navigate to="/compliance/clients" replace /> },
               { path: '/clients/:id', element: <ClientDetailsPage /> }
             ]
           },

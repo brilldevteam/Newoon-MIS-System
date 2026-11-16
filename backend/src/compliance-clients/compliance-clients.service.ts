@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { ClientJurisdiction, DueDiligenceType, Prisma, RiskClassification } from '@prisma/client';
 import { Workbook } from 'exceljs';
 import { AccessControlService } from '../access-control/access-control.service';
-import { COMPLIANCE_REGISTER_STATUSES } from '../common/client-compliance';
+import { COMPLIANCE_REGISTER_STATUSES, COMPLIANCE_REGISTER_WHERE } from '../common/client-compliance';
 import { userSummarySelect } from '../common/user-summary';
 import { KycService } from '../kyc/kyc.service';
 import { profileFromForm } from './compliance-client-profile';
@@ -75,7 +75,7 @@ export class ComplianceClientsService {
   // profile KYC case (the latest activated case, else the latest case with a form); nothing is copied or created.
   async findOne(user: RequestUser, id: string) {
     const client = await this.prisma.client.findFirst({
-      where: { id, ...this.tenantWhere(user), status: { in: [...COMPLIANCE_REGISTER_STATUSES] } },
+      where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE },
       select: {
         ...listSelect,
         tenantId: true,
@@ -174,7 +174,7 @@ export class ComplianceClientsService {
 
   async update(user: RequestUser, id: string, dto: UpdateComplianceClientDto) {
     const existing = await this.prisma.client.findFirst({
-      where: { id, ...this.tenantWhere(user), status: { in: [...COMPLIANCE_REGISTER_STATUSES] } }
+      where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE }
     });
     if (!existing) throw new NotFoundException('Compliance client not found');
 
@@ -313,7 +313,7 @@ export class ComplianceClientsService {
   }
 
   private async stats(user: RequestUser) {
-    const base: Prisma.ClientWhereInput = { ...this.tenantWhere(user), status: { in: [...COMPLIANCE_REGISTER_STATUSES] } };
+    const base: Prisma.ClientWhereInput = { ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE };
     const now = new Date();
     const soon = new Date(now.getTime() + DUE_SOON_DAYS * DAY_MS);
     const [byStatus, edd, highRisk, riskPending, overdue, dueSoon, riskApprovals, reviewsInProgress, expiring, screeningAlerts] = await Promise.all([
@@ -371,9 +371,8 @@ export class ComplianceClientsService {
     if (status && status !== 'ALL') {
       if (!(COMPLIANCE_REGISTER_STATUSES as readonly string[]).includes(status)) throw new BadRequestException('Invalid status filter.');
       and.push({ status });
-    } else {
-      and.push({ status: { in: [...COMPLIANCE_REGISTER_STATUSES] } });
     }
+    and.push(COMPLIANCE_REGISTER_WHERE);
 
     const risk = this.optionalText(query.riskLevel)?.toUpperCase();
     if (risk && risk !== 'ALL') {

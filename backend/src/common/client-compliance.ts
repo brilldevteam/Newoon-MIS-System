@@ -4,6 +4,13 @@ import { DueDiligenceType, Prisma, RiskClassification } from '@prisma/client';
 // PROSPECT and REJECTED clients have not been onboarded and stay out of the register.
 export const COMPLIANCE_REGISTER_STATUSES = ['ACTIVE', 'INACTIVE', 'ON_HOLD'] as const;
 
+// The register filter. A client whose engagement was put on hold before it was ever activated (no code, never
+// activated) is not an onboarded client yet, so it stays out of the register until Operations converts it.
+export const COMPLIANCE_REGISTER_WHERE: Prisma.ClientWhereInput = {
+  status: { in: [...COMPLIANCE_REGISTER_STATUSES] },
+  NOT: { status: 'ON_HOLD', activatedAt: null, clientCode: null }
+};
+
 // Periodic review cycle per risk level, in years (agreed 2026-11-09: High 1, Medium 2, Low 3).
 export const REVIEW_CYCLE_YEARS: Record<RiskClassification, number> = {
   HIGH: 1,

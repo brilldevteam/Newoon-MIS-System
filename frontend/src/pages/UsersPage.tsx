@@ -6,6 +6,7 @@ import { hasAnyRole, roleLabels } from '../utils/access-control';
 import { getApiErrorMessage } from '../services/api';
 import { createUser, getUserOptions, listUsers, ManagedUser, resetUserPassword, updateUser, UserOptions } from '../services/users.service';
 import { PasswordInput } from '../components/PasswordInput';
+import { passwordPolicyError } from '../utils/password-policy';
 import { StatCard } from '../components/StatCard';
 
 const fieldClass = 'mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50';
@@ -142,7 +143,11 @@ export function UsersPage() {
   async function submit(event: FormEvent) {
     event.preventDefault(); if (busy || !canWrite) return;
     setDialogError('');
-    if (mode !== 'edit' && (draft.password.length < 16 || new TextEncoder().encode(draft.password).length > 72 || draft.password !== draft.confirmation)) { setDialogError('Passwords must match, contain at least 16 characters and fit within 72 UTF-8 bytes.'); return; }
+    if (mode !== 'edit') {
+      const policyError = passwordPolicyError(draft.password);
+      if (policyError) { setDialogError(policyError); return; }
+      if (draft.password !== draft.confirmation) { setDialogError('Passwords do not match.'); return; }
+    }
     if (mode !== 'password' && !draft.roles.length) { setDialogError('Select at least one role.'); return; }
     setBusy(true); setSuccess('');
     try {
@@ -315,7 +320,7 @@ export function UsersPage() {
           </fieldset>
           {mode === 'edit' ? <label className="block text-sm font-medium">Account status<select disabled={self} value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as 'ACTIVE' | 'SUSPENDED' })} className={fieldClass}><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option></select></label> : null}
         </> : null}
-        {mode !== 'edit' ? <><div><label htmlFor="account-password" className="text-sm font-medium">New password</label><PasswordInput id="account-password" value={draft.password} onChange={(password) => setDraft({ ...draft, password })} disabled={busy} /><p className="mt-2 text-xs text-slate-500">At least 16 characters; maximum 72 UTF-8 bytes.</p></div><div><label htmlFor="account-confirmation" className="text-sm font-medium">Confirm password</label><PasswordInput id="account-confirmation" value={draft.confirmation} onChange={(confirmation) => setDraft({ ...draft, confirmation })} disabled={busy} /></div></> : null}
+        {mode !== 'edit' ? <><div><label htmlFor="account-password" className="text-sm font-medium">New password</label><PasswordInput id="account-password" value={draft.password} onChange={(password) => setDraft({ ...draft, password })} disabled={busy} showRules /></div><div><label htmlFor="account-confirmation" className="text-sm font-medium">Confirm password</label><PasswordInput id="account-confirmation" value={draft.confirmation} onChange={(confirmation) => setDraft({ ...draft, confirmation })} disabled={busy} /></div></> : null}
         {dialogError ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{dialogError}</p> : null}
         <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4"><button type="button" disabled={busy} onClick={close} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50">Cancel</button><button type="submit" disabled={busy} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{busy ? 'Saving...' : mode === 'password' ? 'Update password' : mode === 'create' ? 'Create user' : 'Save changes'}</button></div>
       </form>

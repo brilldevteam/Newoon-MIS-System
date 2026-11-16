@@ -501,6 +501,11 @@ export function createEnquiry(payload: EnquiryPayload) {
   return api.post<Enquiry>('/enquiries', payload).then((response) => response.data);
 }
 
+export type EnquiryDuplicate = { id: string; enquiryCode: string; stage: string; message: string };
+export function checkEnquiryDuplicate(params: { enquiryType: EnquiryType; name?: string; clientId?: string; excludeId?: string }) {
+  return api.get<{ duplicate: EnquiryDuplicate | null }>('/enquiries/duplicate-check', { params }).then((response) => response.data.duplicate);
+}
+
 export function getEnquiry(id: string) {
   return api.get<Enquiry>(`/enquiries/${id}`).then((response) => response.data);
 }
@@ -884,7 +889,7 @@ export function submitToAml(id: string, formalComments?: string) {
   return api.post<KycCase>(`/kyc/${id}/submit-to-aml`, formalComments === undefined ? undefined : { formalComments }, { timeout: 30000 }).then((response) => response.data);
 }
 
-export type SubmissionReadiness = { ready: boolean; supervisorComments?: string; checks: Array<{ label: string; complete: boolean; message: string }> };
+export type SubmissionReadiness = { ready: boolean; supervisorComments?: string; checks: Array<{ key?: string; label: string; complete: boolean; message: string }> };
 export function getSubmissionReadiness(id: string) {
   return api.get<SubmissionReadiness>(`/kyc/${id}/submission-readiness`, { timeout: 30000 }).then((response) => response.data);
 }

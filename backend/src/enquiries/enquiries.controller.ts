@@ -28,6 +28,19 @@ export class EnquiriesController {
     return this.enquiriesService.findAll(user);
   }
 
+  // Declared before ':id' so "duplicate-check" is not read as an enquiry id.
+  @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get('duplicate-check')
+  duplicateCheck(
+    @CurrentUser() user: RequestUser,
+    @Query('enquiryType') enquiryType?: string,
+    @Query('name') name?: string,
+    @Query('clientId') clientId?: string,
+    @Query('excludeId') excludeId?: string
+  ) {
+    return this.enquiriesService.findOpenDuplicate(user, { enquiryType, name, clientId, excludeId });
+  }
+
   @Roles('AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/convert-to-kyc')
   convertToKyc(@CurrentUser() user: RequestUser, @Param('id') id: string) {

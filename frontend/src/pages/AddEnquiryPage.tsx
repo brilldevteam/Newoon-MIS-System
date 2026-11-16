@@ -3,12 +3,12 @@ import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEd
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { filledContactRows } from '../utils/contact-preview';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
-import { createEnquiry, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
+import { checkEnquiryDuplicate, createEnquiry, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 import { useAuth } from '../hooks/useAuth';
@@ -345,6 +345,11 @@ export function AddEnquiryPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(Boolean(id));
   const [saving, setSaving] = useState(false);
+  // Guards against a double click and remembers an enquiry already created by this page, so a retry after a
+  // failed upload updates that enquiry instead of creating a second one.
+  const busyRef = useRef(false);
+  const createdIdRef = useRef<string | null>(null);
+  const [duplicate, setDuplicate] = useState<EnquiryDuplicate | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeStep, setActiveStep] = useState<EnquiryStep>('type');
@@ -461,6 +466,21 @@ export function AddEnquiryPage() {
       .finally(() => setLoading(false));
   }, [id, authLoading]);
 
+  // Warn while typing if another open enquiry already exists for this company (or client), before anything is saved.
+  const duplicateName = form.enquiryType === 'PROPOSED_COMPANY' ? form.proposedCompanyName : form.companyName;
+  useEffect(() => {
+    let active = true;
+    const name = duplicateName.trim();
+    const byClient = form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES';
+    if (byClient ? !form.clientId : name.length < 2) { setDuplicate(null); return; }
+    const timer = window.setTimeout(() => {
+      checkEnquiryDuplicate({ enquiryType: form.enquiryType, name: byClient ? undefined : name, clientId: byClient ? form.clientId : undefined, excludeId: id || createdIdRef.current || undefined })
+        .then((found) => { if (active) setDuplicate(found); })
+        .catch(() => { if (active) setDuplicate(null); });
+    }, 400);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [form.enquiryType, duplicateName, form.clientId, id]);
+
   function buildPayload(completed: boolean): EnquiryPayload {
     const keyContactDetails =
       form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
@@ -572,11 +592,17 @@ export function AddEnquiryPage() {
   }
 
   async function saveDraft() {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     setError('');
     setSuccess('');
+    let savedCode = '';
     try {
-      const enquiry = id ? await updateEnquiry(id, buildPayload(false)) : await createEnquiry(buildPayload(false));
+      const targetId = id || createdIdRef.current;
+      const enquiry = targetId ? await updateEnquiry(targetId, buildPayload(false)) : await createEnquiry(buildPayload(false));
+      createdIdRef.current = enquiry.id;
+      savedCode = enquiry.enquiryCode;
       for (const [index, attachment] of attachments.entries()) {
         if (!attachment.files?.length) continue;
         await uploadEnquiryAttachmentFiles(enquiry.id, { documentType: attachmentDocumentType(form.enquiryType, attachment, index), files: attachment.files });
@@ -589,14 +615,17 @@ export function AddEnquiryPage() {
         navigate(`/enquiries/${enquiry.id}/edit`, { replace: true });
       }
     } catch (requestError: any) {
-      setError(getRequestErrorMessage(requestError, 'Unable to save enquiry draft.'));
+      setError(savedError(savedCode, getRequestErrorMessage(requestError, 'Unable to save enquiry draft.')));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     setError('');
     setSuccess('');
@@ -605,14 +634,19 @@ export function AddEnquiryPage() {
     if (validationError) {
       setError(validationError.message);
       setActiveStep(validationError.step);
+      busyRef.current = false;
       setSaving(false);
       return;
     }
 
     const payload = buildPayload(true);
+    let savedCode = '';
 
     try {
-      const enquiry = id ? await updateEnquiry(id, payload) : await createEnquiry(payload);
+      const targetId = id || createdIdRef.current;
+      const enquiry = targetId ? await updateEnquiry(targetId, payload) : await createEnquiry(payload);
+      createdIdRef.current = enquiry.id;
+      savedCode = enquiry.enquiryCode;
       for (const [index, attachment] of attachments.entries()) {
         if (!attachment.files?.length) continue;
         await uploadEnquiryAttachmentFiles(enquiry.id, {
@@ -623,10 +657,17 @@ export function AddEnquiryPage() {
       await uploadDeclarationFiles(enquiry.id);
       navigate(`/enquiries/${enquiry.id}`);
     } catch (requestError: any) {
-      setError(getRequestErrorMessage(requestError, `Unable to ${isEditMode ? 'update' : 'create'} enquiry.`));
+      setError(savedError(savedCode, getRequestErrorMessage(requestError, `Unable to ${isEditMode ? 'update' : 'create'} enquiry.`)));
     } finally {
+      busyRef.current = false;
       setSaving(false);
     }
+  }
+
+  // The enquiry itself was saved but a later step (an attachment upload) failed: say so, so nobody creates it again.
+  function savedError(code: string, message: string) {
+    if (!code || id) return message;
+    return `Enquiry ${code} was saved, but this step failed: ${message} Press the button again to retry - it updates ${code} and does not create a new enquiry.`;
   }
 
   if (loading) return <p className="text-sm text-slate-500">Loading enquiry details...</p>;
@@ -714,6 +755,12 @@ export function AddEnquiryPage() {
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {duplicate ? (
+        <div role="alert" className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+          <p><span className="font-semibold">Possible duplicate.</span> {duplicate.message}</p>
+          <Link to={`/enquiries/${duplicate.id}`} className="shrink-0 self-start rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100">Open {duplicate.enquiryCode}</Link>
+        </div>
+      ) : null}
       {success ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800" role="status">{success}</p> : null}
 
       <section className={`rounded-lg border border-slate-200 bg-white ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
@@ -977,13 +1024,13 @@ export function AddEnquiryPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               {!isEditMode || activeStepIndex < steps.length - 1 ? (
-              <button type="button" onClick={saveDraft} disabled={saving} className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60 ${isEditMode ? 'bg-brand-600 text-white hover:bg-brand-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
+              <button type="button" onClick={saveDraft} disabled={saving || Boolean(duplicate)} title={duplicate ? 'An enquiry for this company already exists' : undefined} className={`inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold disabled:opacity-60 ${isEditMode ? 'bg-brand-600 text-white hover:bg-brand-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
                 <Save className="h-4 w-4" />
                 {saving ? 'Saving...' : isEditMode ? 'Update Enquiry' : 'Save Draft'}
               </button>
               ) : null}
               {activeStepIndex === steps.length - 1 ? (
-                <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
+                <button type="submit" disabled={saving || Boolean(duplicate)} title={duplicate ? 'An enquiry for this company already exists' : undefined} className="inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
                   <Save className="h-4 w-4" />
                   {saving ? 'Saving...' : isEditMode ? 'Update Enquiry' : 'Create Enquiry'}
                 </button>

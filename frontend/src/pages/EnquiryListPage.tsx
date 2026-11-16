@@ -5,7 +5,7 @@ import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
-import { kycStatusLabel, kycStatusToneClass } from '../utils/kyc-status-labels';
+import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
   EXISTING_LEGAL_ENTITY: 'Existing Legal Entity',
@@ -120,9 +120,12 @@ export function EnquiryListPage() {
                     <td className="max-w-md truncate px-4 py-3 text-slate-600">{enquiry.requestedServices?.join(', ') || 'Not selected'}</td>
                     <td className="px-4 py-3">
                       {enquiry.generatedKycCases?.[0] ? (
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(enquiry.generatedKycCases[0].status)}`}>
-                          {kycStatusLabel(enquiry.generatedKycCases[0].status)}
-                        </span>
+                        <>
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(enquiry.generatedKycCases[0].status)}`}>
+                            {kycStatusLabel(enquiry.generatedKycCases[0].status)}
+                          </span>
+                          {kycStatusOwner(enquiry.generatedKycCases[0].status) ? <p className="mt-1 text-[11px] font-medium text-slate-500">Now with: {kycStatusOwner(enquiry.generatedKycCases[0].status)}</p> : null}
+                        </>
                       ) : (
                         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${enquiryStatusToneClass(enquiry.status)}`}>
                           {enquiryStatusLabels[enquiry.status] || enquiry.status}
