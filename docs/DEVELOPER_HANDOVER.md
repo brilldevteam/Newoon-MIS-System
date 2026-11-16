@@ -1,5 +1,118 @@
 # Newoon MIS Developer Handover
 
+## Country of Incorporation on Proposed-Company Enquiries (2026-11-15)
+
+- **Before:** line 4 of the Preliminary KYC ("Country of incorporation") was fixed text that always printed "-". There was no field for it.
+- **Now:** proposed-company enquiries have a required **Country of incorporation** field on the Details step, defaulting to Qatar because QFC, MOCI and free zones are in Qatar.
+  - It is saved to `details.countryOfIncorporation` and `details.preliminaryKyc.countryOfIncorporation`.
+  - It prints on line 4 in the form preview, `PreliminaryKycDocument` and `preliminary-pdf.ts`.
+  - It becomes Section A `countryOfIncorporation` when the KYC case is created. Older enquiries fall back to the previous jurisdiction / head office value.
+- **Older enquiries:** opening one shows Qatar when a jurisdiction is set; saving stores it.
+- **Other:** no migration is needed.
+
+## Screening Finalize Guidance and Client Declaration Text (2026-11-15)
+
+- **Reported:** "Screening can't be closed" on Arabic Game Partners LLC (test site).
+- **Cause, from the case's screening context on mis-test:**
+  - All three records were fully screened (every list Clear, evidence attached, result set), but **Observation / remarks were empty and none had been finalized**; all were `DRAFT`.
+  - Remarks are mandatory and the box sits at the bottom of each record. The Finalize error appeared at the top of the page.
+  - ID numbers matched the KYC form.
+  - No data was changed on the server.
+- **Screening page** (`KycScreeningPage.tsx`):
+  - Records show a "Not finalized" badge.
+  - A page banner lists records still to finalize, with what to do.
+  - Each open record shows a live "Before you can finalize this record" list right under its buttons, or "Everything is filled in. Click Finalize".
+- **KYC checklist wording:**
+  - Names with no screening record are listed separately from records that exist but are not finalized, which now read "…: add Observation / remarks, click Finalize".
+  - The pass/fail rule is unchanged.
+- **Client declaration:** section G of the full KYC (download, live preview, form) now opens with the client's wording: "By signing this document, I hereby confirm … on behalf of the entity set out in section A:" (`CLIENT_DECLARATION_TEXT`). The Preliminary KYC already had its own version.
+
+## Amendment Drafts Use the Same Submission Checks (2026-11-12)
+
+- **The gap:** a full-KYC amendment draft (`AML_REVIEW_STARTED`, form `AMENDMENT_DRAFT`, `fullKycStarted`, unlocked; for example "Open amendment" on a Preliminary-to-full KYC) could be edited by AML. However:
+  - the case page showed only a generic "complete screening and CRRF" line, with no checklist;
+  - `submitToAml` refused the status, so the required-details check was never reached.
+- **The fix:**
+  - `submitToAml` now accepts this state (`isLegacyFullKycDraft`), so it goes through the same checks: documents, required form details, Section H, screening, CRRF and comments.
+  - The case page loads the checklist and shows "complete the amendment, then resubmit it to DMLRO" (`isAmlAmendmentDraft` / `canSubmitToDmlro` in `KycCaseGuide`). The Submit page labels it as a resubmission.
+- **Unchanged:** normal (non-full-KYC) amendments remain unavailable to AML, as before.
+- **Checks:** `check-kyc-form-required.cjs` was extended.
+
+## Date Picker and Required Markers (2026-11-12)
+
+- **Date picker:** `components/DatePickerPopover.tsx` replaces the browser's native date picker inside `TypedDateInput`, so every date field in the app uses it.
+  - It has month and year lists (1900 to +20 years), brand-coloured selected day, outlined today, and Clear / Today buttons.
+  - Keyboard: arrows move by day or week, PageUp/PageDown change month, Escape closes.
+  - It closes on an outside click.
+  - It renders on `<body>` and is positioned next to the field, so scrolling form panels don't clip it.
+  - Typing DD/MM/YYYY still works as before.
+- **Red `*`:** in `KycFormEditorPage`, any label ending in ` *` is drawn with a red star (`labelText`), matching the enquiry form.
+- **Related Industry** is now required in section A (form marker and `kyc-form-completeness.ts`).
+
+## Required KYC Form Details (2026-11-12)
+
+- **Where it is enforced:** `backend/src/common/kyc-form-completeness.ts` lists the details a KYC form must have before the AML Supervisor can submit it to DMLRO. `assertReviewPackageReady` enforces it, so it covers both submit paths. Drafts can still be saved with gaps.
+- **Required fields:**
+  - A: Legal name, CR No., Date of incorporation, Country of incorporation, Legal form, Registered office address, Telephone (more than the dial code), a valid Email, Main purpose / nature of business, Related Industry, Nature of prospective service.
+  - B Managers: at least one person, each with full name, position, nationality and QID/Passport No.; at least one authorized signatory.
+  - C Shareholders: at least one row, each with full name, nationality/country, QID/Passport or CR number, and shareholder %. Direct shareholders must total 100%. At least one beneficial owner (UBO).
+  - D: the existing PEP / sanction / dual-citizenship answers.
+  - E: Full name, Position, Mobile, a valid Email.
+  - G: Full name, Position, Date, Authorized signature.
+  - H: the AML Supervisor's risk classification and due diligence type (added earlier).
+- **Not covered:** preliminary (proposed-company) forms keep their own rules until the full KYC is started.
+- **In the app:**
+  - The checklist item "KYC form - required details" lists every gap by section and row in plain English. Long tables are capped at six rows plus "and N more".
+  - Its button opens the first section with gaps (`section` on the readiness check).
+  - The editor marks these fields with `*` and says they are required before submitting to DMLRO.
+- **Checks:** `node backend/scripts/check-kyc-form-required.cjs`. `check-ownership-review.cjs` was updated. No migration is needed.
+- **Local verification:** the readiness check was run against two local cases. The browser view was not re-checked, because the pane was signed in with the user's own account.
+
+## Download Progress, User Delete and Enquiry Delete (2026-11-12)
+
+- **Download progress:** `utils/download-progress.ts` (`trackDownload`) and `components/DownloadToast.tsx` (mounted in `AppLayout`) show a bottom-right "Preparing the KYC PDF… / Downloading …" notice, then "… downloaded". The download service functions are wrapped, so every caller gets it: `generateKycDocument`, `downloadGeneratedKycDocument`, `downloadPreliminaryKycPdf`, `exportCrrf` and `downloadKycFormRevision`. The KYC form editor's DOCX/PDF buttons and the enquiry page's Preliminary KYC PDF button also show "Preparing…" and are disabled while they work.
+- **User delete:** `DELETE /api/users/:id` (Super Admin, Company Admin).
+  - Only accounts with no recorded workflow work can be deleted (none of the user's enquiry/KYC/review/compliance relations).
+  - Anyone with work gets a plain message to suspend the account instead, which keeps the audit trail.
+  - Self, platform administrators, other companies' users and the last active Company Admin are protected.
+  - The delete is audited.
+  - The Users page has a red delete button with a confirmation.
+- **Enquiry delete:** `DELETE /api/enquiries/:id` now also allows Operations and Company Admin. Because the access matrix can open the endpoint, the rules are enforced in `EnquiriesService.remove`:
+  - Operations and Company Admin can delete only `DRAFT` or `RETURNED_TO_BD` enquiries that never produced a KYC case.
+  - Super Admin can delete any enquiry, as before.
+  - The list page shows the delete button only where allowed.
+- **Checks:** `node backend/scripts/check-deletes.cjs` (mocked persistence). No migration is needed.
+
+## Client Issues and KYC Format (2026-11-12)
+
+From the client's "Issues identified" and "Format" documents.
+
+- **MLRO can decide while the case waits for DMLRO** (for example when DMLRO is on leave).
+  - `decideMlroReview` accepts a decision while the case is in `SUPERVISOR_REVIEW_COMPLETED` or `DMLRO_REVIEW_PENDING`/`IN_PROGRESS`, and re-checks that status inside the transaction.
+  - It closes the open DMLRO task (`CANCELLED`), records a status-history note, and flags the MLRO submission `bypassedDmlro`. The audit entry gets `decidedWithoutDmlro`.
+  - The MLRO comments count as the reason. `RETURN_TO_DMLRO` is refused in this state.
+  - The MLRO may also edit their part of Section H in that state.
+  - The activation checklist counts the bypass as the DMLRO step.
+  - MLRO users now also receive `DMLRO_TASK_ASSIGNED` notifications.
+  - Case page and guide show "MLRO Review: Decide without DMLRO"; the editor shows an explanation banner.
+- **Blank H values in the download.**
+  - The AML Supervisor's risk classification and due diligence type are now required before Submit to DMLRO (readiness item `internal`; `assertInternalUseReady` in `assertReviewPackageReady`).
+  - The AML Supervisor date defaults to the submission date.
+  - Submitted DMLRO/MLRO/SEF decisions are copied into Section H by `lockReviewSubmission`. The form's decision dropdown showed a default ("Send to MLRO") that was never saved, which printed "Decision: -".
+  - Existing cases: `generateDocument` passes `reviewFallbacks` (CRRF rating, AML submission values and date, submitted decisions, whether the case went to SEF, DMLRO bypass) used only when a Section H field is empty.
+- **Download layout** (`kyc-document-model.ts`):
+  - Order is A → B Manager / Authorized Signatory / Directors / Secretary → C Shareholders (table, totals, **UBO List**, then **Control Structure**) → D–H.
+  - Empty optional rows (DMLRO conditions/reason; MLRO risk reason category, explanation and conditions; SEF conditions) are not printed.
+  - SEF prints only when the file went to SEF.
+  - DMLRO decisions use the form wording ("Send to MLRO").
+  - H. Internal Use Only starts on a new page (`newPage` on the section: DOCX page break, PDF `break-before: page`).
+- **App:** the editor steps and live preview use the same order and letters (B = Managers, C = Shareholders). Data keys and endpoints are unchanged (`sectionB` = ownership, `sectionC` = managers). `/kyc/:id/form?section=sectionH` opens a section directly. The preliminary (proposed-company) document keeps its own layout.
+- **Checks:** `node backend/scripts/check-kyc-format.cjs`. `check-ownership-review.cjs` and `check-export-shareholder-total.cjs` were updated. No migration is needed.
+- **Local verification:**
+  - Word-rendered and Chromium PDF samples (standard and complex) were inspected page by page.
+  - A live MLRO decision on a local case waiting for DMLRO succeeded: DMLRO task `CANCELLED`, submission flagged, timeline note recorded.
+  - The MLRO and AML Supervisor screens were checked in the browser.
+
 ## Clients Menu Removed (2026-11-10)
 
 - **Sidebar:** the separate **Clients** item is gone. Onboarded clients are managed under **Compliance → Compliance Clients**, and new clients come in through **Enquiries**.
@@ -64,6 +177,20 @@
 - **Final engagement form:** it now says whether the signed engagement letter is still required or already uploaded.
 - **Checks:** `check-ownership-review.cjs` and `check-kyc-compliance.cjs` were updated for the new wording. No migration is needed.
 - **Local verification:** the guide was checked in the browser at every stage, from AML preparation through Client active, as AML Supervisor and Operations, including phone width. The DMLRO, MLRO and SEF "your turn" views were not opened as those roles; they use the same code path as the views that were checked.
+
+## Approval Makes the KYC Final Automatically (2026-11-16)
+
+- Before this change, after the last required approval the case sat at `MLRO_APPROVED` / `SEF_APPROVED` ("Required approvals completed - final KYC decision pending"). AML Supervisor, DMLRO or MLRO then had to click a separate final-KYC confirmation before Operations could convert the case.
+- Now the last approval completes the KYC (`finalizeApprovedKyc` in `backend/src/kyc/kyc.service.ts`). The approvals that do this are MLRO Approve or Approve with conditions, DMLRO final approval during MLRO absence, and SEF Approve or Approve with conditions. In the same transaction:
+  - the form becomes `FINAL` and locked;
+  - the case moves to `KYC_FINAL_APPROVED`;
+  - an audit entry (`KYC_MARKED_FINAL_ON_APPROVAL`) is written;
+  - Operations receives "Final KYC approved - convert to client".
+- Rejections, returns, information requests and Send to SEF do not make the KYC final.
+- **Exception:** a Preliminary KYC for a proposed company whose full KYC has not been started still stops at the final-KYC decision, because there the choice is between "this Preliminary KYC is final" and "complete the full KYC".
+- **Amendments:** later changes go through the existing amendment flow.
+- **Existing cases:** cases already at `MLRO_APPROVED` / `SEF_APPROVED` before this deploy keep the manual "Confirm as final KYC" button. Confirm them once.
+- **Checks:** `check-kyc-format.cjs` covers the normal case, the Preliminary exception and rejection. No migration is needed.
 
 ## Preliminary KYC Final Decision in One Step (2026-11-10)
 

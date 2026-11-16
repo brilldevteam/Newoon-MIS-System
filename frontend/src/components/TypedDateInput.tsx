@@ -1,5 +1,6 @@
 import { CalendarDays } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { DatePickerPopover } from './DatePickerPopover';
 
 type TypedDateInputProps = {
   value?: string | null;
@@ -52,7 +53,8 @@ export function maskDateInput(raw: string) {
 export function TypedDateInput({ value, onChange, disabled = false, className = '' }: TypedDateInputProps) {
   const [draft, setDraft] = useState(() => formatDate(value));
   const [invalid, setInvalid] = useState(false);
-  const calendarInputRef = useRef<HTMLInputElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   useEffect(() => {
     setDraft(formatDate(value));
@@ -74,22 +76,12 @@ export function TypedDateInput({ value, onChange, disabled = false, className = 
     setInvalid(false);
     onChange(value);
     setDraft(formatDate(value));
-  }
-
-  function openCalendar() {
-    const input = calendarInputRef.current;
-    if (!input) return;
-    if (typeof input.showPicker === 'function') {
-      input.showPicker();
-      return;
-    }
-    input.focus();
-    input.click();
+    setCalendarOpen(false);
   }
 
   return (
     <>
-      <div className="relative">
+      <div ref={anchorRef} className="relative">
         <input
           type="text"
           inputMode="numeric"
@@ -114,22 +106,17 @@ export function TypedDateInput({ value, onChange, disabled = false, className = 
         <button
           type="button"
           disabled={disabled}
-          onClick={openCalendar}
-          className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={(event) => { event.preventDefault(); setCalendarOpen((open) => !open); }}
+          aria-expanded={calendarOpen}
+          className={`absolute right-1 top-1/2 -translate-y-1/2 rounded p-1.5 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 ${calendarOpen ? 'bg-brand-50 text-brand-700' : 'text-slate-500'}`}
           title="Choose date from calendar"
           aria-label="Choose date from calendar"
         >
           <CalendarDays className="h-4 w-4" />
         </button>
-        <input
-          ref={calendarInputRef}
-          type="date"
-          tabIndex={-1}
-          aria-hidden="true"
-          value={parseDate(draft) || ''}
-          onChange={(event) => selectDate(event.target.value)}
-          className="sr-only"
-        />
+        {calendarOpen && !disabled ? (
+          <DatePickerPopover value={parseDate(draft) || ''} onSelect={selectDate} onClose={() => setCalendarOpen(false)} anchorRef={anchorRef} />
+        ) : null}
       </div>
       {invalid ? <span className="mt-1 block text-xs font-normal text-red-600">Enter a valid date as DD/MM/YYYY.</span> : null}
     </>

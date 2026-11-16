@@ -3,6 +3,7 @@ import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
 import { complianceValidationError } from '../common/kyc-compliance';
+import { kycFormCompletenessIssues, kycFormCompletenessMessage } from '../common/kyc-form-completeness';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
 import { sharedReviewFeedback } from '../common/shared-review-feedback';
 import { preliminaryPdfHtml } from '../enquiries/preliminary-pdf';
@@ -582,7 +583,7 @@ export class KycService {
     const kycCase = await this.requireWritableCase(user, id);
     return this.prisma.$transaction(async (tx) => {
       // `key` lets the screens link each item to the page where it is fixed; the order is the order to work in.
-      const checks: Array<{ key: string; label: string; complete: boolean; message: string }> = [];
+      const checks: Array<{ key: string; label: string; complete: boolean; message: string; section?: string }> = [];
       const addCheck = async (key: string, label: string, check: () => Promise<void>) => {
         try { await check(); checks.push({ key, label, complete: true, message: '' }); }
         catch (error) {
@@ -592,7 +593,17 @@ export class KycService {
       };
       const documents = await tx.legalDocument.count({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       checks.push({ key: 'documents', label: 'KYC preparation documents', complete: documents > 0, message: documents ? '' : 'No documents uploaded yet. Use Upload in "Documents Required for KYC Preparation" and add at least one document (for example the CR, QID or passport copies).' });
-      await addCheck('form', 'KYC form - D. Compliance and Risk', () => this.assertComplianceReady(tx, kycCase));
+      // Required KYC form details (A, B managers, C shareholders, E, G) and the D compliance answers.
+      const formIssues = await this.formCompletenessIssues(tx, kycCase);
+      let complianceError = '';
+      try { await this.assertComplianceReady(tx, kycCase); } catch (error) { if (!(error instanceof BadRequestException)) throw error; complianceError = error.message; }
+      const formMessage = [kycFormCompletenessMessage(formIssues.filter((issue) => issue.section !== 'sectionE' && issue.section !== 'sectionG')), complianceError,
+        kycFormCompletenessMessage(formIssues.filter((issue) => issue.section === 'sectionE' || issue.section === 'sectionG'))].filter(Boolean).join('\n');
+      checks.push({
+        key: 'form', label: 'KYC form - required details', complete: !formMessage, message: formMessage,
+        section: formIssues[0]?.section || (complianceError ? 'sectionD' : undefined)
+      });
+      await addCheck('internal', 'KYC form - H. Internal Use Only', () => this.assertInternalUseReady(tx, kycCase));
       await addCheck('screening', 'Screening', () => this.assertScreeningReady(tx, kycCase));
       await addCheck('crrf', 'CRRF', () => this.assertCrrfReady(tx, kycCase));
       const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
@@ -612,7 +623,9 @@ export class KycService {
         KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
         KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
     ];
-    if (!submittableStatuses.includes(kycCase.status)) {
+    // A full-KYC amendment draft (AML_REVIEW_STARTED) is prepared by AML and goes to DMLRO the same way, through
+    // the same checks (documents, required form details, screening, CRRF, comments).
+    if (!submittableStatuses.includes(kycCase.status) && !(await this.isLegacyFullKycDraft(id, kycCase.status, user))) {
       throw new BadRequestException('This case has already been submitted. It can be resubmitted only after DMLRO returns it to the AML Supervisor.');
     }
 
@@ -888,6 +901,7 @@ export class KycService {
         });
         await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'DMLRO_FINAL_APPROVAL_WITHOUT_MLRO', reason: reason || conditions });
         await this.createNotification(tx, kycCase, NotificationType.MLRO_APPROVAL_COMPLETED, 'DMLRO final approval completed', `${kycCase.title} was approved by DMLRO during MLRO absence.`);
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'DMLRO final approval completed - KYC is final.');
         await this.upsertActivationChecklist(tx, user, kycCase);
         return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
       });
@@ -898,10 +912,17 @@ export class KycService {
 
   async decideMlroReview(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.assertStageRole(user, ReviewStage.MLRO);
-    await this.assertReviewStageActive(id, ReviewStage.MLRO);
-    await this.assertPreviousStageComplete(id, ReviewStage.MLRO);
     const decision = this.enumValue(dto.decision, ['APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'], 'MLRO decision') as ReviewDecision;
     const kycCase = await this.findOne(user, id);
+    // Either reviewer can approve: while the case waits for DMLRO (for example DMLRO is on leave) the MLRO may decide
+    // it directly. The open DMLRO task is then closed and the MLRO comments are kept as the reason.
+    const decidingForAbsentDmlro = this.isDmlroStageStatus(kycCase.status);
+    if (decidingForAbsentDmlro) {
+      if (decision === ReviewDecision.RETURN_TO_DMLRO) throw new BadRequestException('The case is already with DMLRO.');
+    } else {
+      await this.assertReviewStageActive(id, ReviewStage.MLRO);
+      await this.assertPreviousStageComplete(id, ReviewStage.MLRO);
+    }
     const dmlroSubmission = await this.prisma.internalReviewSubmission.findUnique({
       where: { kycCaseId_stage: { kycCaseId: id, stage: ReviewStage.DMLRO } }
     });
@@ -918,8 +939,8 @@ export class KycService {
       throw new BadRequestException('Provide a reason or conditions for this MLRO decision');
     }
 
-    if (bypassingDmlro && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions) && !this.optionalText(dto.riskExplanation)) {
-      throw new BadRequestException('Provide the reason for approving or deciding this case before DMLRO review is completed');
+    if (bypassingDmlro && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions) && !this.optionalText(dto.riskExplanation) && !hasComment(dto.formalComments)) {
+      throw new BadRequestException('DMLRO has not reviewed this case yet. Add your MLRO comments explaining the decision before submitting.');
     }
 
     if (dto.finalRiskClassification && dto.finalRiskClassification !== dto.previousRiskClassification && !this.optionalText(dto.riskExplanation)) {
@@ -936,14 +957,22 @@ export class KycService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-      const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, dto);
+      if (decidingForAbsentDmlro) {
+        // Re-check inside the transaction so a DMLRO decision made at the same moment wins and this one is refused.
+        const current = await tx.kycCase.findFirst({ where: { id, tenantId: kycCase.tenantId }, select: { status: true } });
+        if (!current || !this.isDmlroStageStatus(current.status)) throw new BadRequestException('The case changed during this action. Refresh before trying again.');
+        await tx.internalReviewTask.updateMany({
+          where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.DMLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+          data: { status: ReviewTaskStatus.CANCELLED, completedAt: new Date(), updatedBy: user.id }
+        });
+        await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_REVIEW_IN_PROGRESS, 'MLRO took the decision while the DMLRO review was pending (DMLRO not available).');
+        kycCase.status = KycCaseStatus.MLRO_REVIEW_IN_PROGRESS;
+      }
+      const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, { ...dto, ...(bypassingDmlro ? { data: { ...preliminaryObject(dto.data), bypassedDmlro: true } } : {}) });
       const targetStatus = this.mlroDecisionStatus(decision);
       await this.recordStatus(tx, kycCase, user, targetStatus, this.mlroStatusNote(decision));
-      const finalReviewForm = await tx.kycForm.findUnique({ where: { kycCaseId: id }, select: { status: true } });
-      if (finalReviewForm?.status === 'PRELIMINARY_FINAL_REVIEW' && (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)) {
-        await tx.kycForm.update({ where: { kycCaseId: id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
-        await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Final DMLRO and MLRO approval completed for the Preliminary KYC.');
-        await this.notifyReadyForClientConversion(tx, kycCase);
+      if (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS) {
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'MLRO approval completed - KYC is final.');
       }
       await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
@@ -992,7 +1021,7 @@ export class KycService {
         await this.createNotification(tx, kycCase, NotificationType.DMLRO_TASK_ASSIGNED, 'Returned to DMLRO', `${kycCase.title} was returned by MLRO for DMLRO action.`);
       }
 
-      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'MLRO_DECISION', decision });
+      await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'MLRO_DECISION', decision, ...(bypassingDmlro ? { decidedWithoutDmlro: true } : {}) });
       if (decision !== ReviewDecision.SEND_TO_SEF) {
         await this.createNotification(tx, kycCase, this.mlroNotificationType(decision), this.mlroNotificationTitle(decision), this.mlroNotificationMessage(kycCase.title, decision));
       }
@@ -1042,6 +1071,9 @@ export class KycService {
       });
       await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'SEF_DECISION', decision });
       await this.createNotification(tx, kycCase, NotificationType.SEF_DECISION_COMPLETED, 'SEF decision completed', `${kycCase.title}: ${decision}`);
+      if (decision !== ReviewDecision.REJECT) {
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'SEF approval completed - KYC is final.');
+      }
       await this.upsertActivationChecklist(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     });
@@ -1537,6 +1569,29 @@ export class KycService {
     });
   }
 
+  // The last required approval (MLRO, DMLRO-final or SEF) makes the KYC final straight away and tells
+  // Operations to convert it; changes after that go through an amendment. The one exception is a Preliminary
+  // KYC for a proposed company that has not been confirmed as final yet: AML Supervisor, DMLRO or MLRO still
+  // choose between "this Preliminary KYC is final" and "complete the full KYC" (completeFinalKycDecision).
+  private async finalizeApprovedKyc(
+    tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; title: string; status: KycCaseStatus }, note: string
+  ) {
+    const form = await tx.kycForm.findUnique({
+      where: { kycCaseId: kycCase.id },
+      select: { status: true, fullKycStarted: true, sections: { where: { sectionKey: KycFormSectionKey.GENERAL_COMPANY }, select: { data: true } } }
+    });
+    if (!form) return false;
+    const sectionA = preliminaryObject(form.sections?.[0]?.data);
+    const preliminaryDecisionPending = form.status !== 'PRELIMINARY_FINAL_REVIEW'
+      && sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted;
+    if (preliminaryDecisionPending) return false;
+    await tx.kycForm.update({ where: { kycCaseId: kycCase.id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
+    await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
+    await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action: 'KYC_MARKED_FINAL_ON_APPROVAL' });
+    await this.notifyReadyForClientConversion(tx, kycCase);
+    return true;
+  }
+
   // Operations (and the reviewer roles) see CLIENT_READY_FOR_ACTIVATION; it opens the KYC case,
   // where Operations converts the KYC to a client and uploads the signed engagement letter.
   private notifyReadyForClientConversion(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; title: string }) {
@@ -2005,11 +2060,32 @@ export class KycService {
   async generateDocument(user: RequestUser, id: string, type: KycGeneratedDocumentType) {
     const form = await this.ensureKycNumber(await this.getFormRecord(user, id));
     // The client form has an AML Supervisor "Comments" row; only the formal (non-confidential) comment is exported.
-    const supervisorSubmission = await this.prisma.internalReviewSubmission.findFirst({
-      where: { kycCaseId: id, tenantId: form.tenantId, stage: ReviewStage.SUPERVISOR },
-      select: { formalComments: true }
-    });
-    const payload = { ...this.serializeForm(form), amlComments: supervisorSubmission?.formalComments || form.internalReview?.amlClarificationFindings || '' };
+    const [submissions, crrf, sefTasks] = await Promise.all([
+      this.prisma.internalReviewSubmission.findMany({
+        where: { kycCaseId: id, tenantId: form.tenantId },
+        select: { stage: true, formalComments: true, data: true, submittedAt: true, isLocked: true }
+      }),
+      this.prisma.crrfRecord.findFirst({ where: { kycCaseId: id, tenantId: form.tenantId }, select: { riskRating: true } }),
+      this.prisma.internalReviewTask.count({ where: { kycCaseId: id, tenantId: form.tenantId, stage: ReviewStage.SEF } })
+    ]);
+    const submission = (stage: ReviewStage) => submissions.find((item) => item.stage === stage);
+    const submitted = (stage: ReviewStage) => {
+      const item = submission(stage);
+      return item?.isLocked ? preliminaryObject(item.data) : {};
+    };
+    const supervisorSubmission = submission(ReviewStage.SUPERVISOR);
+    const supervisorData = preliminaryObject(supervisorSubmission?.data);
+    // Fill blank Section H fields from what the workflow recorded (see KycExportPayload.reviewFallbacks).
+    const reviewFallbacks = {
+      riskClassification: this.text(supervisorData.riskClassification) || crrf?.riskRating || null,
+      dueDiligenceType: this.text(supervisorData.dueDiligenceType) || null,
+      amlDate: supervisorSubmission?.submittedAt ? supervisorSubmission.submittedAt.toISOString() : null,
+      dmlroDecision: this.text(submitted(ReviewStage.DMLRO).decision) || null,
+      mlroDecision: this.text(submitted(ReviewStage.MLRO).decision) || null,
+      sentToSef: sefTasks > 0 || Boolean(submission(ReviewStage.SEF)),
+      dmlroSkipped: Boolean(submitted(ReviewStage.MLRO).bypassedDmlro) && !submission(ReviewStage.DMLRO)?.isLocked
+    };
+    const payload = { ...this.serializeForm(form), amlComments: supervisorSubmission?.formalComments || form.internalReview?.amlClarificationFindings || '', reviewFallbacks };
     const isDocx = type === KycGeneratedDocumentType.DOCX;
     const companyName = this.safeFileName(this.text((payload.sectionA as Record<string, unknown>).legalName) || `KYC Case ${payload.kycCaseId}`).slice(0, 120);
     const mimeType = isDocx ? KYC_DOCX_MIME : KYC_PDF_MIME;
@@ -2683,6 +2759,11 @@ export class KycService {
     return stage;
   }
 
+  private isDmlroStageStatus(status: KycCaseStatus) {
+    const dmlroStatuses: KycCaseStatus[] = [KycCaseStatus.SUPERVISOR_REVIEW_COMPLETED, KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_IN_PROGRESS];
+    return dmlroStatuses.includes(status);
+  }
+
   private stageStatus(stage: ReviewStage, state: 'pending' | 'inProgress' | 'additionalInfo' | 'completed') {
     const statuses: Record<ReviewStage, Record<typeof state, KycCaseStatus>> = {
       SUPERVISOR: {
@@ -2808,9 +2889,25 @@ export class KycService {
   }
 
   private async assertReviewPackageReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string; clientId: string; client?: { name: string; registrationNumber: string | null } }) {
+    const formIssues = await this.formCompletenessIssues(tx, kycCase);
+    if (formIssues.length) throw new BadRequestException(`Complete the required KYC form details before submitting to DMLRO.\n${kycFormCompletenessMessage(formIssues)}`);
     await this.assertComplianceReady(tx, kycCase);
+    await this.assertInternalUseReady(tx, kycCase);
     await this.assertScreeningReady(tx, kycCase);
     await this.assertCrrfReady(tx, kycCase);
+  }
+
+  private async formCompletenessIssues(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
+    const form = await tx.kycForm.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId }, include: this.formInclude() });
+    return form ? kycFormCompletenessIssues(this.serializeForm(form)) : [];
+  }
+
+  // H. Internal Use Only: the AML Supervisor's risk classification and due diligence type print on the KYC, so they
+  // are required before the file goes to DMLRO.
+  private async assertInternalUseReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
+    const review = await tx.kycInternalReview.findFirst({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId }, select: { riskClassification: true, dueDiligenceType: true } });
+    const missing = [!review?.riskClassification ? 'Risk classification' : '', !review?.dueDiligenceType ? 'Due diligence type' : ''].filter(Boolean);
+    if (missing.length) throw new BadRequestException(`Open the KYC form, go to H. Internal Use Only and choose the ${missing.join(' and the ')}, then save.`);
   }
 
   private async assertComplianceReady(tx: Prisma.TransactionClient, kycCase: { id: string; tenantId: string }) {
@@ -2844,16 +2941,20 @@ export class KycService {
             ...this.asArray<RowPayload>(current?.sectionB.ubos),
             ...this.asArray<RowPayload>(current?.sectionC.managers)
           ].filter((row) => this.text(row.fullName).trim());
-          const unscreened = requiredParties.filter((row) => !screening.some((record) =>
-            record.status === 'COMPLETED' && (this.text(row.identityNumber).trim()
-              ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
-              : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase())));
+          const matches = (row: RowPayload, record: (typeof screening)[number]) => (this.text(row.identityNumber).trim()
+            ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
+            : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase());
+          const unscreened = requiredParties.filter((row) => !screening.some((record) => record.status === 'COMPLETED' && matches(row, record)));
+          // Names with a record that is not finalized yet are reported once, in the "finish these records" line below.
+          const withoutRecord = unscreened.filter((row) => !screening.some((record) => matches(row, record)));
           // Each problem is reported by name so the AML team knows exactly what to fix (one sentence per line).
           const issues: string[] = [];
           if (!screening.length) {
             issues.push('No screening has been done yet. Open Screening and screen the company and every shareholder, beneficial owner and manager.');
-          } else if (unscreened.length) {
-            issues.push(`These names still need a completed screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. If a name is already screened, check its ID / CR number matches the KYC form.`);
+          } else if (withoutRecord.length) {
+            issues.push(`These names have no screening record: ${namesList(withoutRecord.map((row) => this.text(row.fullName).trim()))}. Add a record for each on the Screening page (if a name is already screened, check its ID / CR number matches the KYC form).`);
+          } else if (unscreened.length && !screening.some((record) => record.status !== 'COMPLETED')) {
+            issues.push(`These names are not covered by a finalized screening: ${namesList(unscreened.map((row) => this.text(row.fullName).trim()))}. Check the ID / CR number on their screening record matches the KYC form.`);
           }
           if (listsWithoutResult.length) issues.push(`Record a result for these screening lists: ${namesList(listsWithoutResult.map(screeningListName), 10)}.`);
           if (matchesWithoutComment.length) issues.push(`Add a comment explaining the match on: ${namesList(matchesWithoutComment.map(screeningListName), 10)}.`);
@@ -2861,15 +2962,16 @@ export class KycService {
           const incomplete = screening
             .map((record) => {
               const missing: string[] = [];
-              if (record.status !== 'COMPLETED') missing.push('mark it completed');
               if (!record.conclusionStatus) missing.push('choose the conclusion');
-              if (!hasComment(record.remarks)) missing.push('add remarks');
+              if (!hasComment(record.remarks)) missing.push('add Observation / remarks');
               if (record.checks.some((check) => check.isSelected && check.resultStatus === 'NOT_CHECKED')) missing.push('record a result for every selected list');
               if (record.checks.some((check) => check.isSelected && isMatch(check.resultStatus) && !hasComment(check.notes))) missing.push('comment on each match');
+              // Finalize is always the last step, so name it after anything else that is missing.
+              if (record.status !== 'COMPLETED') missing.push('click Finalize');
               return missing.length ? `${record.entityName}: ${missing.join(', ')}` : '';
             })
             .filter(Boolean);
-          if (incomplete.length) issues.push(`Finish these screening records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
+          if (incomplete.length) issues.push(`On the Screening page, finish these records - ${incomplete.slice(0, 5).join('; ')}${incomplete.length > 5 ? `; and ${incomplete.length - 5} more` : ''}.`);
           if (issues.length) throw new BadRequestException(issues.join('\n'));
   }
 
@@ -3014,11 +3116,28 @@ export class KycService {
     });
 
     const form = await tx.kycForm.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id }, select: { id: true } });
-    if (form && hasComment(dto.formalComments)) {
-      const comment = safeComment(dto.formalComments);
-      const patch = stage === ReviewStage.SUPERVISOR ? { amlClarificationFindings: comment }
+    // Copy what was actually submitted into Section H, so the downloaded KYC shows it. The form's decision dropdown
+    // displays a default ("Send to MLRO" / "Approve") that is not stored until changed, which left "Decision: -".
+    const decision = this.optionalText(dto.decision);
+    const validDecision = decision && (Object.values(ReviewDecision) as string[]).includes(decision) ? (decision as ReviewDecision) : null;
+    const comment = hasComment(dto.formalComments) ? safeComment(dto.formalComments) : null;
+    const existingReview = form && stage === ReviewStage.SUPERVISOR
+      ? await tx.kycInternalReview.findUnique({ where: { kycFormId: form.id }, select: { amlDate: true } })
+      : null;
+    const patch: {
+      amlClarificationFindings?: string; dmlroComments?: string; mlroComments?: string; sefComments?: string;
+      dmlroDecision?: ReviewDecision; mlroDecision?: ReviewDecision; sefDecision?: ReviewDecision; amlDate?: Date;
+    } = {
+      ...(comment ? (stage === ReviewStage.SUPERVISOR ? { amlClarificationFindings: comment }
         : stage === ReviewStage.DMLRO ? { dmlroComments: comment }
-        : stage === ReviewStage.MLRO ? { mlroComments: comment } : { sefComments: comment };
+        : stage === ReviewStage.MLRO ? { mlroComments: comment } : { sefComments: comment }) : {}),
+      ...(validDecision ? (stage === ReviewStage.DMLRO ? { dmlroDecision: validDecision }
+        : stage === ReviewStage.MLRO ? { mlroDecision: validDecision }
+        : stage === ReviewStage.SEF ? { sefDecision: validDecision } : {}) : {}),
+      // The AML Supervisor date defaults to the submission date when it was left empty.
+      ...(form && stage === ReviewStage.SUPERVISOR && !existingReview?.amlDate ? { amlDate: new Date() } : {})
+    };
+    if (form && Object.keys(patch).length) {
       await tx.kycInternalReview.upsert({
         where: { kycFormId: form.id }, update: { ...patch, updatedBy: user.id },
         create: { tenantId: kycCase.tenantId, kycCaseId: kycCase.id, kycFormId: form.id, ...patch, createdBy: user.id, updatedBy: user.id }
@@ -3262,7 +3381,8 @@ export class KycService {
       { key: 'proposal', label: 'Proposal submitted or not required', completed: ['NOT_REQUIRED', 'SENT', 'ACCEPTED'].includes(kycCase.proposalStatus) },
       { key: 'kycPart1', label: 'KYC form prepared', completed: Boolean(kycCase.kycForm) },
       { key: 'legalDocuments', label: 'Mandatory documents accepted', completed: kycCase.legalDocuments.length > 0 && requiredDocumentsAccepted },
-      { key: 'dmlroReview', label: 'DMLRO review completed', completed: submittedStages.has(ReviewStage.DMLRO) },
+      // An MLRO decision taken while DMLRO was unavailable stands in for the DMLRO review.
+      { key: 'dmlroReview', label: 'DMLRO review completed', completed: submittedStages.has(ReviewStage.DMLRO) || Boolean((mlroSubmission?.data as Record<string, unknown> | undefined)?.bypassedDmlro) },
       { key: 'mlroApproval', label: 'MLRO final approval completed', completed: submittedStages.has(ReviewStage.MLRO) },
       { key: 'sefDecision', label: 'SEF management decision completed', completed: !sefRequired || submittedStages.has(ReviewStage.SEF) },
       { key: 'finalRisk', label: 'Final risk classification assigned', completed: kycCase.riskReclassifications.length > 0 },
@@ -3308,10 +3428,12 @@ export class KycService {
       await this.requireWritableCase(user, id);
     } else {
       const kycCase = await db.kycCase.findFirstOrThrow({ where: { id, ...this.tenantWhere(user) } });
-      if (![this.stageStatus(stage, 'pending'), this.stageStatus(stage, 'inProgress')].includes(kycCase.status)) {
+      // The MLRO may also fill in Section H while the case still waits for DMLRO (MLRO deciding for an absent DMLRO).
+      const mlroForAbsentDmlro = stage === ReviewStage.MLRO && this.isDmlroStageStatus(kycCase.status);
+      if (!mlroForAbsentDmlro && ![this.stageStatus(stage, 'pending'), this.stageStatus(stage, 'inProgress')].includes(kycCase.status)) {
         throw new BadRequestException(`${this.stageLabel(stage)} editing is locked while the case is with another review stage.`);
       }
-      await this.assertReviewStageActive(id, stage, db);
+      if (!mlroForAbsentDmlro) await this.assertReviewStageActive(id, stage, db);
     }
     await this.assertEditableReview(id, stage, db);
   }

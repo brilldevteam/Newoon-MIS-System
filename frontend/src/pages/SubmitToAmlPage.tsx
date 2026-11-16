@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getKycCase, getSubmissionReadiness, KycCase, SubmissionReadiness, submitToAml } from '../services/kyc-workflow.service';
 import { getApiErrorMessage } from '../services/api';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
+import { isAmlAmendmentDraft } from '../components/KycCaseGuide';
 
 export function SubmitToAmlPage() {
   const { id } = useParams();
@@ -50,12 +51,13 @@ export function SubmitToAmlPage() {
   const fixLinks: Record<string, { label: string; to: string }> = {
     documents: { label: 'Upload documents', to: `/kyc/${kycCase.id}/documents` },
     form: { label: 'Open KYC Form', to: `/kyc/${kycCase.id}/form` },
+    internal: { label: 'Open Section H', to: `/kyc/${kycCase.id}/form?section=sectionH` },
     screening: { label: 'Open Screening', to: `/kyc/${kycCase.id}/screening` },
     crrf: { label: 'Open CRRF', to: `/kyc/${kycCase.id}/crrf` }
   };
   const remaining = checks?.filter((check) => !check.complete).length || 0;
   const canSubmit = Boolean(checks?.length && checks.every((check) => check.complete));
-  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status);
+  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) || isAmlAmendmentDraft(kycCase);
 
   return (
     <div className="space-y-6">
@@ -71,7 +73,8 @@ export function SubmitToAmlPage() {
         </p>
         <ul className="mt-3 divide-y divide-slate-200 text-sm">
           {checks?.map((check) => {
-            const fix = check.key ? fixLinks[check.key] : undefined;
+            const base = check.key ? fixLinks[check.key] : undefined;
+            const fix = base && check.section ? { ...base, to: `/kyc/${kycCase.id}/form?section=${check.section}` } : base;
             return (
               <li key={check.label} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex min-w-0 items-start gap-2">

@@ -1,10 +1,10 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, KeyRound, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, UserCheck, UserX, Users, X } from 'lucide-react';
+import { Building2, KeyRound, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, UserCheck, UserX, Users, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, roleLabels } from '../utils/access-control';
 import { getApiErrorMessage } from '../services/api';
-import { createUser, getUserOptions, listUsers, ManagedUser, resetUserPassword, updateUser, UserOptions } from '../services/users.service';
+import { createUser, deleteUser, getUserOptions, listUsers, ManagedUser, resetUserPassword, updateUser, UserOptions } from '../services/users.service';
 import { PasswordInput } from '../components/PasswordInput';
 import { passwordPolicyError } from '../utils/password-policy';
 import { StatCard } from '../components/StatCard';
@@ -109,6 +109,7 @@ export function UsersPage() {
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [busy, setBusy] = useState(false);
   const [dialogError, setDialogError] = useState('');
+  const [deletingId, setDeletingId] = useState('');
   const canManage = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
   const isSuper = hasAnyRole(user, ['SUPER_ADMIN']);
   const wide = useWideLayout();
@@ -163,6 +164,22 @@ export function UsersPage() {
     finally { setBusy(false); }
   }
 
+  // Deleting is for accounts that never did any work (mistaken or test accounts). The server refuses anyone with
+  // recorded workflow activity and explains that they should be suspended instead.
+  async function remove(item: ManagedUser) {
+    if (!canWrite || deletingId) return;
+    if (!window.confirm(`Delete the account ${item.firstName} ${item.lastName} (${item.email})? This cannot be undone.
+
+If this person has worked on enquiries or KYC files, the account will not be deleted - suspend it instead.`)) return;
+    setDeletingId(item.id); setError(''); setSuccess('');
+    try {
+      await deleteUser(item.id);
+      setRows((current) => current.filter((row) => row.id !== item.id));
+      setSuccess(`${item.firstName} ${item.lastName} was deleted.`);
+    } catch (requestError) { setError(getApiErrorMessage(requestError, 'Unable to delete this account.')); }
+    finally { setDeletingId(''); }
+  }
+
   if (authLoading) return <p className="text-sm text-slate-500">Loading users...</p>;
   if (!canManage) return <p role="alert" className="text-sm text-red-700">Only administrators can manage users.</p>;
   const self = selected?.id === user?.id;
@@ -179,6 +196,11 @@ export function UsersPage() {
         <button type="button" disabled={protectedUser} aria-label={`Reset password for ${item.email}`} title={protectedUser ? 'Only a Super Admin can change this account' : 'Reset password'} onClick={() => open('password', item)} className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">
           <KeyRound className="h-3.5 w-3.5" />
         </button>
+        {item.id !== user?.id ? (
+          <button type="button" disabled={protectedUser || item.roles.some((row) => row.role.name === 'SUPER_ADMIN') || deletingId === item.id} aria-label={`Delete ${item.email}`} title={item.roles.some((row) => row.role.name === 'SUPER_ADMIN') ? 'Platform administrators cannot be deleted' : 'Delete user'} onClick={() => void remove(item)} className="grid h-8 w-8 place-items-center rounded-md border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40">
+            {deletingId === item.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          </button>
+        ) : null}
       </div>
     );
   };

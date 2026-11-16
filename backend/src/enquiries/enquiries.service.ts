@@ -801,8 +801,20 @@ export class EnquiriesService {
     };
   }
 
+  // Who may delete an enquiry:
+  // - Super Admin: any enquiry (unchanged).
+  // - Operations and Company Admin: only an enquiry that never became a KYC case and is still with Operations
+  //   (draft or returned to BD). Once AML has it, or a KYC case exists, it stays for the audit trail.
   async remove(user: RequestUser, id: string) {
     const existing = await this.findOne(user, id);
+    if (!this.hasAnyRole(user, ['SUPER_ADMIN'])) {
+      if (!this.hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN'])) throw new ForbiddenException('Only Operations or an administrator can delete enquiries.');
+      const deletable: EnquiryStatus[] = [EnquiryStatus.DRAFT, EnquiryStatus.RETURNED_TO_BD];
+      const kycCases = await this.prisma.kycCase.count({ where: { sourceEnquiryId: existing.id, tenantId: existing.tenantId } });
+      if (kycCases || !deletable.includes(existing.status)) {
+        throw new BadRequestException(`${existing.enquiryCode} cannot be deleted: it has already been sent to AML${kycCases ? ' and has a KYC case' : ''}. Only draft or returned enquiries can be deleted.`);
+      }
+    }
 
     // Record the deletion in the same transaction, so a delete never happens without an audit entry.
     await this.prisma.$transaction([
@@ -1003,6 +1015,7 @@ export class EnquiriesService {
       companyName: this.optionalText(dto.companyName) || enquiry.proposedCompanyName || '',
       proposedLegalForm: this.optionalText(dto.proposedLegalForm),
       jurisdiction: this.optionalText(dto.jurisdiction),
+      countryOfIncorporation: dto.countryOfIncorporation === undefined ? this.optionalText(existing.countryOfIncorporation) : this.optionalText(dto.countryOfIncorporation),
       businessActivity: this.optionalText(dto.businessActivity),
       registeredOfficeAddress: this.optionalText(dto.registeredOfficeAddress),
       sourceOfFunds: this.optionalText(dto.sourceOfFunds),
@@ -1131,7 +1144,8 @@ export class EnquiriesService {
     const preliminary = this.objectValue(details.preliminaryKyc);
     return {
       legalName: this.optionalText(preliminary.companyName) || enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
-      countryOfIncorporation: this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
+      // Prefer the country captured on the enquiry; older enquiries fall back to the previous behaviour.
+      countryOfIncorporation: this.optionalText(preliminary.countryOfIncorporation) || this.optionalText(details.countryOfIncorporation) || this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
       legalForm: this.optionalText(preliminary.proposedLegalForm) || '',
       registeredOfficeAddress: this.optionalText(preliminary.registeredOfficeAddress) || this.optionalText(details.proposedRegisteredOfficeAddress) || '',
       telephone: enquiry.keyContactPhone || '',

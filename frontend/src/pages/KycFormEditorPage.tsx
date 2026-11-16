@@ -1,11 +1,11 @@
-import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X, LoaderCircle } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { uboCompanyName } from '../utils/ubo-display-name';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
@@ -40,8 +40,10 @@ import { STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT } from '../utils/uploa
 
 const sections = [
   { id: 'section-a', key: 'sectionA', label: 'A. General Company Information' },
-  { id: 'section-b', key: 'sectionB', label: 'B. Control / Interest Details' },
-  { id: 'section-c', key: 'sectionC', label: 'C. Managers / Signatories' },
+  // Client's KYC format (2026-11): managers are B and shareholders C. The keys and endpoints stay
+  // sectionB = ownership / sectionC = managers, so stored data and the API are unchanged.
+  { id: 'section-c', key: 'sectionC', label: 'B. Managers / Signatories' },
+  { id: 'section-b', key: 'sectionB', label: 'C. Shareholders' },
   { id: 'section-d', key: 'sectionD', label: 'D. Compliance and Risk' },
   { id: 'section-e', key: 'sectionE', label: 'E. Key Communication Person' },
   { id: 'section-f', key: 'sectionF', label: 'F. Required Documents' },
@@ -963,14 +965,31 @@ const crrfRiskLabels: Record<string, string> = {
   HIGH: 'High'
 };
 
+// Optional review rows (conditions, reasons, risk reason) are shown only when filled, as in the downloaded KYC.
+function filledRows<T>(rows: Array<[string, T]>) {
+  return rows.filter(([, value]) => typeof value !== 'string' ? Boolean(value) : value.trim() !== '' && value.trim() !== '-');
+}
+
+// A label ending in " *" is a required field: the star is drawn in red, as on the enquiry form.
+function labelText(label: string) {
+  return label.endsWith(' *') ? <>{label.slice(0, -2)}<span className="text-red-600" aria-hidden="true"> *</span></> : label;
+}
+
+// Client's declaration wording shown above the signatory details (same text as the downloaded KYC).
+const CLIENT_DECLARATION_TEXT = 'By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorized to represent and sign this document on behalf of the entity set out in section A:';
+
+const DMLRO_STAGE_STATUSES = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'];
+
 export function KycFormEditorPage() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [form, setForm] = useState<KycFormData>(emptyForm);
   const formRef = useRef<KycFormData>(emptyForm);
   const [activeSection, setActiveSection] = useState<SectionKey>('sectionA');
   const [saving, setSaving] = useState(false);
+  const [generatingType, setGeneratingType] = useState<'docx' | 'pdf' | ''>('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [activeReviewPackage, setActiveReviewPackage] = useState<ReviewPackageTab>('kyc');
@@ -1006,7 +1025,8 @@ export function KycFormEditorPage() {
   const reviewerEditable = sectionHMode === 'DMLRO'
     ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase?.status || '')
     : sectionHMode === 'MLRO'
-      ? ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'].includes(kycCase?.status || '')
+      // The MLRO may also decide while the case still waits for an unavailable DMLRO.
+      ? ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS', ...DMLRO_STAGE_STATUSES].includes(kycCase?.status || '')
       : sectionHMode === 'SEF'
         ? ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase?.status || '')
         : false;
@@ -1023,11 +1043,16 @@ export function KycFormEditorPage() {
     }
   }, [activeSection, visibleSections]);
 
+  // A link such as /kyc/:id/form?section=sectionH (from the case checklist) opens that section directly.
+  const requestedSection = searchParams.get('section');
   useEffect(() => {
-    if (canEditAllSections || canPrepareKyc) {
+    const requested = sections.find((section) => section.key === requestedSection)?.key;
+    if (requested && visibleSections.some((section) => section.key === requested)) {
+      setActiveSection(requested);
+    } else if (canEditAllSections || canPrepareKyc) {
       setActiveSection('sectionA');
     }
-  }, [id, canEditAllSections, canPrepareKyc]);
+  }, [id, canEditAllSections, canPrepareKyc, requestedSection, visibleSections]);
 
   function setSection(section: SectionKey, value: Record<string, any>) {
     setForm((current) => {
@@ -1111,7 +1136,8 @@ export function KycFormEditorPage() {
   }
 
   async function generate(type: 'docx' | 'pdf') {
-    if (!id) return;
+    if (!id || generatingType) return;
+    setGeneratingType(type);
     setSaving(true);
     setMessage('');
     setError('');
@@ -1131,6 +1157,7 @@ export function KycFormEditorPage() {
       setError(getApiErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
     } finally {
       setSaving(false);
+      setGeneratingType('');
     }
   }
 
@@ -1395,13 +1422,13 @@ export function KycFormEditorPage() {
               {sefSubmitLabel}
             </button>
           ) : null}
-          <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-            <Download className="h-4 w-4" />
-            DOCX
+          <button onClick={() => generate('docx')} disabled={Boolean(generatingType)} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60">
+            {generatingType === 'docx' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {generatingType === 'docx' ? 'Preparing…' : 'DOCX'}
           </button>
-          <button onClick={() => generate('pdf')} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-            <FileText className="h-4 w-4" />
-            PDF
+          <button onClick={() => generate('pdf')} disabled={Boolean(generatingType)} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60">
+            {generatingType === 'pdf' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+            {generatingType === 'pdf' ? 'Preparing…' : 'PDF'}
           </button>
         </div>
       </div>
@@ -1409,6 +1436,11 @@ export function KycFormEditorPage() {
       {message ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p> : null}
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {!canEditVisibleForm ? <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">KYC preparation is locked while this case is under review. Only the assigned review role can record its decision.</p> : null}
+      {sectionHMode === 'MLRO' && canEditVisibleForm && DMLRO_STAGE_STATUSES.includes(kycCase.status) ? (
+        <p role="status" className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+          <span className="font-semibold">DMLRO has not reviewed this case yet.</span> As MLRO you can decide it now, for example while DMLRO is away. Complete your part of Section H and submit; your MLRO comments are recorded as the reason, and the open DMLRO task is closed.
+        </p>
+      ) : null}
 
       {showReviewPackage ? (
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1465,13 +1497,13 @@ export function KycFormEditorPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => generate('docx')} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-                <Download className="h-4 w-4" />
-                Download DOCX
+              <button onClick={() => generate('docx')} disabled={Boolean(generatingType)} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60">
+                {generatingType === 'docx' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {generatingType === 'docx' ? 'Preparing DOCX…' : 'Download DOCX'}
               </button>
-              <button onClick={() => generate('pdf')} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-                <FileText className="h-4 w-4" />
-                Download PDF
+              <button onClick={() => generate('pdf')} disabled={Boolean(generatingType)} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60">
+                {generatingType === 'pdf' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                {generatingType === 'pdf' ? 'Preparing PDF…' : 'Download PDF'}
               </button>
               <Link to={`/kyc/${kycCase.id}`} className="inline-flex items-center gap-2 rounded-md border border-brand-200 bg-white px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-50">
                 View Case Summary
@@ -1487,7 +1519,7 @@ export function KycFormEditorPage() {
           <section className="min-w-0 rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
               <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
-      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready.'}</p>
+      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
@@ -1553,20 +1585,20 @@ function SectionAForm({ data, onChange }: FormProps) {
     <FormGrid>
       <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
       <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
-      <Field label="Legal Name of Company" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
-      <Field label="Commercial Registration No." value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
+      <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
+      <Field label="Commercial Registration No. *" value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
       <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
-      <Field label="Date of Incorporation" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
-      <Select label="Country of Incorporation" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
-      <Select label="Legal Form" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
-      <Field label="Telephone" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
-      <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+      <Field label="Date of Incorporation *" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
+      <Select label="Country of Incorporation *" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
+      <Select label="Legal Form *" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
+      <Field label="Telephone *" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
+      <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
       <Field label="Website" value={data.website} onChange={(value) => update(data, onChange, 'website', value)} />
-      <Field label="Registered Office Address" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
-      <Select label="Main purpose / nature of business" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
+      <Field label="Registered Office Address *" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
+      <Select label="Main purpose / nature of business *" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
       <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
-      <Select label="Related Industry" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
-      <MultiSelect label="Nature of prospective service from Newoon" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
+      <Select label="Related Industry *" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
+      <MultiSelect label="Nature of prospective service from Newoon *" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
     </FormGrid>
   );
 }
@@ -1763,11 +1795,11 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                         })}
                     </select>
                   </label>
-                  <Field label="Full name" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
-                  <MultiSelect label="Nationality / country" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                  <Field label="Full name *" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+                  <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
-                    <span>{(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number' : 'QID / Passport number'}</span>
+                    <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID / Passport number *')}</span>
                     <div className="mt-1 flex gap-2">
                       <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
                       <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -1785,7 +1817,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
                   </div>
-                  <Field label="Shareholder %" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
+                  <Field label="Shareholder % *" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
                   <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
                   <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked, uboInterestPercentage: event.target.checked && !row.uboInterestPercentage ? (row.shareholderPercentage ?? row.ownershipPercentage) : row.uboInterestPercentage })} />
@@ -1921,7 +1953,7 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name'], ['entityName', 'Entity name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No.'], ['position', 'Position', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No. *'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory (at least one) *', 'checkbox']
   ]} />;
 }
 
@@ -2018,7 +2050,7 @@ function SectionDSupportingDocuments({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <div className="mt-1">
         <MultiFileUploadControl
           names={names}
@@ -2050,12 +2082,12 @@ function SectionEContactForm({ data, onChange }: FormProps) {
   }
 
   return <FormGrid>
-    <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <MultiSelect label="Position / Job title" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
+    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
+    <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
     <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
-    <Field label="Mobile Number" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
-    <Field label="Email" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+    <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
+    <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
   </FormGrid>;
 }
 
@@ -2247,10 +2279,11 @@ function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; em
 
 function SectionGDeclarationForm({ data, onChange }: FormProps) {
   return <FormGrid>
-    <Field label="Full name" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
-    <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-    <UploadField label="Authorized signature" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
+    <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">{CLIENT_DECLARATION_TEXT}</p>
+    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
+    <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
+    <UploadField label="Authorized signature *" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
     <UploadField label="Company stamp" fileName={data.stampFileName} imageDataUrl={data.stampDataUrl} onChange={(file, dataUrl) => onChange({ ...data, stampFileName: file.name, stampDataUrl: dataUrl })} />
   </FormGrid>;
 }
@@ -2277,8 +2310,8 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
   return <FormGrid>
     {showAml ? (
       <>
-        <Select label="Risk classification" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
-        <Select label="Due diligence type" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
+        <Select label="Risk classification *" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
+        <Select label="Due diligence type *" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
         <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
         <Field label="AML Supervisor comments" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
       </>
@@ -2356,16 +2389,18 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
             ['Date', form.sectionA.date], ['KYC Number', form.sectionA.reference], ['Legal Name of Company', form.sectionA.legalName], ['Commercial Registration No.', form.sectionA.commercialRegistrationNo], ['Tax Identification No.', form.sectionA.taxIdentificationNo], ['Date of Incorporation', form.sectionA.dateOfIncorporation], ['Country of Incorporation', resolveOtherValue(form.sectionA.countryOfIncorporation, form.sectionA.countryOfIncorporationOther)], ['Legal Form', resolveOtherValue(form.sectionA.legalForm, form.sectionA.legalFormOther)], ['Registered Office Address', form.sectionA.registeredOfficeAddress], ['Telephone', form.sectionA.telephone], ['Email', form.sectionA.email], ['Website', form.sectionA.website], ['Main purpose / nature of business', resolveOtherValue(form.sectionA.businessNature, form.sectionA.businessNatureOther)], ['License activities', form.sectionA.licenseActivities], ['Related Industry', resolveOtherValue(form.sectionA.relatedIndustry, form.sectionA.relatedIndustryOther)], ['Nature of prospective service from Newoon', displaySelectedList(form.sectionA.prospectiveService, form.sectionA.prospectiveServiceOther)]
           ]} />
         </PreviewSection>
-        <PreviewSection title="B. Control / Interest Details">
+        <PreviewSection title="B. Manager / Authorized Signatory / Directors / Secretary">
+          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+        </PreviewSection>
+        <PreviewSection title="C. Shareholders">
           <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Shareholder %', 'Address', 'Linked client', 'Beneficial person']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.shareholderPercentage ?? row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
           <p className="mt-2 font-semibold">Total shareholder %: {form.sectionB.totalOwnershipPercentage || 0}% | Total UBO %: {form.sectionB.totalUboPercentage || 0}%</p>
           <p>Beneficial person different from listed parties: {form.sectionB.uboDifferentFromShareholders || 'No'}</p>
           <p>Beneficial structure notes: {form.sectionB.uboGroupStructureNotes || '-'}</p>
+          <PreviewGroup title="UBO List">
+            <PreviewTable headers={['Beneficial person', 'Company', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} widths={[17, 22, 10, 10, 14, 8, 19]} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, uboCompanyName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
+          </PreviewGroup>
           <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
-          <PreviewTable headers={['Beneficial person', 'Company', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} widths={[17, 22, 10, 10, 14, 8, 19]} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, uboCompanyName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
-        </PreviewSection>
-        <PreviewSection title="C. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
           <PreviewGrid rows={[
@@ -2389,6 +2424,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGrid rows={[['Additional notes for KYC preparation documents', form.sectionF.uploadedFilesNote || '-']]} />
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
+          <p className="mb-2 text-justify">{CLIENT_DECLARATION_TEXT}</p>
           <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         </> : null}
@@ -2398,14 +2434,16 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
             <PreviewGrid rows={[['Date', form.sectionH?.amlDate], ['Comments', form.sectionH?.amlClarificationFindings]]} />
           </PreviewGroup>
           <PreviewGroup title="DMLRO">
-            <PreviewGrid rows={[['Name', form.sectionH?.dmlroName], ['Date', form.sectionH?.dmlroDate], ['Signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['Risk classification', form.sectionH?.dmlroRiskClassification], ['Decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ['Conditions', form.sectionH?.dmlroConditions], ['Reason', form.sectionH?.dmlroReason], ['Comments', form.sectionH?.dmlroComments]]} />
+            <PreviewGrid rows={[['Name', form.sectionH?.dmlroName], ['Date', form.sectionH?.dmlroDate], ['Signature', previewImage(form.sectionH?.dmlroSignatureDataUrl, form.sectionH?.dmlroSignatureFileName)], ['Risk classification', form.sectionH?.dmlroRiskClassification], ['Decision', dmlroDecisionLabels[form.sectionH?.dmlroDecision || ''] || form.sectionH?.dmlroDecision], ...filledRows([['Conditions', form.sectionH?.dmlroConditions], ['Reason', form.sectionH?.dmlroReason]]), ['Comments', form.sectionH?.dmlroComments]]} />
           </PreviewGroup>
           <PreviewGroup title="MLRO">
-            <PreviewGrid rows={[['Name', form.sectionH?.mlroName], ['Date', form.sectionH?.mlroDate], ['Signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['Final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['Conditions', form.sectionH?.mlroConditions], ['Comments', form.sectionH?.mlroComments]]} />
+            <PreviewGrid rows={[['Name', form.sectionH?.mlroName], ['Date', form.sectionH?.mlroDate], ['Signature', previewImage(form.sectionH?.mlroSignatureDataUrl, form.sectionH?.mlroSignatureFileName)], ['Final decision', mlroDecisionLabels[form.sectionH?.mlroDecision || ''] || form.sectionH?.mlroDecision], ['Final risk classification', form.sectionH?.mlroFinalRiskClassification || form.sectionH?.riskClassification], ...filledRows([['Risk reason category', displayCodeLabel(form.sectionH?.mlroRiskReasonCategory)], ['Risk explanation', form.sectionH?.mlroRiskExplanation], ['Conditions', form.sectionH?.mlroConditions]]), ['Comments', form.sectionH?.mlroComments]]} />
           </PreviewGroup>
-          <PreviewGroup title="SEF">
-            <PreviewGrid rows={[['Name', form.sectionH?.sefName], ['Date', form.sectionH?.sefDate], ['Signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['Management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ['Conditions', form.sectionH?.sefConditions], ['Comments', form.sectionH?.sefComments]]} />
-          </PreviewGroup>
+          {form.sectionH?.mlroDecision === 'SEND_TO_SEF' || [form.sectionH?.sefName, form.sectionH?.sefDate, form.sectionH?.sefDecision, form.sectionH?.sefComments, form.sectionH?.sefConditions].some((value) => String(value || '').trim()) ? (
+            <PreviewGroup title="SEF">
+              <PreviewGrid rows={[['Name', form.sectionH?.sefName], ['Date', form.sectionH?.sefDate], ['Signature', previewImage(form.sectionH?.sefSignatureDataUrl, form.sectionH?.sefSignatureFileName)], ['Management decision', sefDecisionLabels[form.sectionH?.sefDecision || ''] || form.sectionH?.sefDecision], ...filledRows([['Conditions', form.sectionH?.sefConditions]]), ['Comments', form.sectionH?.sefComments]]} />
+            </PreviewGroup>
+          ) : null}
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
@@ -2423,7 +2461,7 @@ function Field({ label, value, onChange, type = 'text', textarea = false, wide =
   const className = `${wide ? 'md:col-span-2' : ''} min-w-0 text-sm font-medium text-slate-700`;
   return (
     <label className={className}>
-      {label}
+      {labelText(label)}
       {textarea && /comment/i.test(label) ? <RichTextEditor label={label} value={value || ''} onChange={onChange} /> : textarea ? (
         <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : type === 'date' ? (
@@ -2505,7 +2543,7 @@ function OldSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <button
         ref={triggerRef}
         type="button"
@@ -2643,7 +2681,7 @@ function OldMultiSelect({
 
   return (
     <div className={`${wide ? 'md:col-span-2' : ''} text-sm font-medium text-slate-700`}>
-      <span>{label}</span>
+      <span>{labelText(label)}</span>
       <button
         ref={triggerRef}
         type="button"
@@ -2725,7 +2763,7 @@ function OldMultiSelect({
 }
 
 function Choice({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <div><p className="text-sm font-medium text-slate-700">{label}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
+  return <div><p className="text-sm font-medium text-slate-700">{labelText(label)}</p><div className="mt-2 inline-flex overflow-hidden rounded-md border border-slate-300">{['Yes', 'No'].map((option) => <button key={option} type="button" onClick={() => onChange(option)} className={`px-4 py-2 text-sm font-semibold ${value === option ? 'bg-brand-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}>{option}</button>)}</div></div>;
 }
 
 function UploadField({ label, fileName, imageDataUrl, onChange }: { label: string; fileName?: string; imageDataUrl?: string; onChange: (file: File, dataUrl?: string) => void }) {
@@ -2740,7 +2778,7 @@ function UploadField({ label, fileName, imageDataUrl, onChange }: { label: strin
 
   return (
     <div className="text-sm font-medium text-slate-700">
-      {label}
+      {labelText(label)}
       <div className="mt-1 grid items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)]">
         <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50">
           <Upload className="h-4 w-4" />
@@ -2824,7 +2862,7 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
           <div className="grid gap-3 md:grid-cols-2">
             {fields.map(([key, label, type, options]) => {
               if (type === 'checkbox') {
-                return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {label}</label>;
+                return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {labelText(label)}</label>;
               }
 
               if (type === 'select') {

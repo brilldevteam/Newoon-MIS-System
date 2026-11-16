@@ -25,6 +25,7 @@ import { ComponentType, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { AccountMenu } from '../components/AccountMenu';
+import { DownloadToast } from '../components/DownloadToast';
 import { InstallAppButton } from '../components/InstallAppButton';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
@@ -341,6 +342,7 @@ export function AppLayout() {
         <main className="min-w-0 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-5 sm:pt-6 lg:px-8">
           <Outlet />
         </main>
+        <DownloadToast />
       </div>
     </div>
   );

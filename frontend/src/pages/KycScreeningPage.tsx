@@ -226,7 +226,7 @@ export function KycScreeningPage() {
   function finalizationRequirements(record: ScreeningRecord) {
     if (!context) return ['Wait for the Screening workspace to finish loading.'];
     const requirements: string[] = [];
-    if (!record.remarks?.trim()) requirements.push('Add observations or remarks for this person or entity.');
+    if (!record.remarks?.trim()) requirements.push('Add observations / remarks (the box at the bottom of this record).');
     if (!record.conclusionStatus) requirements.push('Select the final screening result for this person or entity.');
 
     const missingEvidence = context.mergedEvidenceChecks.filter((checkType) => !(mergedDocumentsByCheck.get(checkType) || []).length);
@@ -572,6 +572,18 @@ export function KycScreeningPage() {
 
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
       {error ? <div ref={errorRef} tabIndex={-1} className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      {context.records.length ? (() => {
+        // Screening is only done when every record is finalized; say which ones are still open.
+        const open = context.records.filter((record) => record.status !== 'COMPLETED');
+        return open.length ? (
+          <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <span className="font-semibold">{open.length} of {context.records.length} screening record{context.records.length === 1 ? ' is' : 's are'} not finalized yet:</span> {open.map((record) => record.entityName).join(', ')}.
+            {' '}Open each one, fill in <span className="font-semibold">Observation / remarks</span> at the bottom, then click <span className="font-semibold">Finalize</span>. Screening counts as done for the KYC only when every record is finalized.
+          </div>
+        ) : (
+          <div role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">All {context.records.length} screening records are finalized.</div>
+        );
+      })() : null}
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -780,7 +792,9 @@ export function KycScreeningPage() {
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           Completed
                         </span>
-                      ) : null}
+                      ) : (
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">Not finalized</span>
+                      )}
                     </div>
                     <p className="mt-1 truncate text-sm text-slate-500">
                       {record.identifier ? `Reliable ID: ${record.identifier}` : 'No reliable ID'} {record.country ? `| ${record.country}` : ''}
@@ -825,6 +839,17 @@ export function KycScreeningPage() {
                       </>
                     ) : null}
                     </div>
+                    {canEditScreening && record.status !== 'COMPLETED' ? (() => {
+                      const left = finalizationRequirements(record);
+                      return left.length ? (
+                        <div className="mx-5 mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          <p className="font-semibold">Before you can finalize this record:</p>
+                          <ul className="mt-1 list-disc space-y-0.5 pl-5">{left.map((item) => <li key={item}>{item}</li>)}</ul>
+                        </div>
+                      ) : (
+                        <p className="mx-5 mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">Everything is filled in. Click <span className="font-semibold">Finalize</span> to complete this record.</p>
+                      );
+                    })() : null}
 
                 <div className="space-y-5 p-5">
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

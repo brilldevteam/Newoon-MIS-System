@@ -54,6 +54,7 @@ async function main() {
   service.findOne = async () => ({ id: 'case', tenantId: 'tenant', clientId: 'client', status: 'SUPERVISOR_REVIEW_PENDING', client: { name: 'Example', registrationNumber: '001' } });
   service.assertPreviousStageComplete = service.assertEditableReview = async () => {};
   service.lockReviewSubmission = async () => { throw new Error('VALID_PACKAGE_REACHED_LOCK'); };
+  const reviewed = { riskClassification: 'LOW', dueDiligenceType: 'REGULAR' };
   const checks = ['NCTC', 'UN', 'OFAC', 'EU', 'PPO_LIST', 'WORLD_CHECK', 'GOOGLE'].map((checkType) => ({ checkType, resultStatus: 'NO_MATCH' }));
   const documents = checks.slice(0, 5).map((check) => ({ checkType: check.checkType, storagePath: 'synthetic.pdf' }));
   const tx = {
@@ -61,9 +62,13 @@ async function main() {
     screeningCaseCheck: { findMany: async () => checks },
     screeningCaseDocument: { findMany: async () => documents },
     kycForm: { findFirst: async () => null },
-    crrfRecord: { findFirst: async () => null }
+    crrfRecord: { findFirst: async () => null },
+    // H. Internal Use Only must carry the AML Supervisor's risk classification and due diligence type.
+    kycInternalReview: { findFirst: async () => reviewed }
   };
   service.prisma = { $transaction: async (callback) => callback(tx) };
+  // The required-form-details rule is covered in check-kyc-form-required.cjs; this check focuses on screening and CRRF.
+  service.formCompletenessIssues = async () => [];
   const route = () => service.submitReviewAndRoute({}, 'case', 'SUPERVISOR', { formalComments: 'Reviewed' }, 'DMLRO');
   await assert.rejects(route, /No screening has been done yet/);
   tx.screeningRecord.findMany = async () => [{ identifier: '001', entityName: 'Example', status: 'COMPLETED', conclusionStatus: 'CLEAR', remarks: 'Reviewed', checks: [] }];
@@ -72,7 +77,7 @@ async function main() {
   await assert.rejects(route, /VALID_PACKAGE_REACHED_LOCK/);
   service.serializeForm = () => ({ sectionA: {}, sectionB: { shareholders: [{ fullName: 'Missing Owner', identityNumber: '999' }], ubos: [] }, sectionC: { managers: [] } });
   tx.kycForm.findFirst = async () => ({ sections: [{ sectionKey: 'COMPLIANCE_RISK', data: { pepQuestion: 'No', sanctionQuestion: 'No', dualCitizenshipQuestion: 'No' } }] });
-  await assert.rejects(route, /still need a completed screening.*Missing Owner/);
+  await assert.rejects(route, /have no screening record.*Missing Owner/);
   tx.kycForm.findFirst = async () => null;
   tx.screeningCaseDocument.findMany = async () => [];
   await assert.rejects(route, /Upload the screening evidence.*NCTC, UN, OFAC, EU and PPO list/);
@@ -81,19 +86,19 @@ async function main() {
   const legacy = () => service.submitToAml({}, 'case');
   await assert.rejects(legacy, /Upload the screening evidence/);
   tx.screeningCaseDocument.findMany = async () => documents;
-  tx.kycInternalReview = { findFirst: async () => ({ amlClarificationFindings: '<p><br></p>' }) };
+  tx.kycInternalReview = { findFirst: async () => ({ ...reviewed, amlClarificationFindings: '<p><br></p>' }) };
   await assert.rejects(legacy, /Supervisor comments/);
-  tx.kycInternalReview.findFirst = async () => ({ amlClarificationFindings: '<p>Reviewed package</p>' });
+  tx.kycInternalReview.findFirst = async () => ({ ...reviewed, amlClarificationFindings: '<p>Reviewed package</p>' });
   await assert.rejects(legacy, /VALID_PACKAGE_REACHED_LOCK/);
   await assert.rejects(() => service.submitToAml({}, 'case', { formalComments: '<p><br></p>' }), /Supervisor comments/);
-  tx.kycInternalReview.findFirst = async () => null;
+  tx.kycInternalReview.findFirst = async () => ({ ...reviewed });
   service.lockReviewSubmission = async (_, __, ___, ____, dto) => {
     assert.equal(dto.formalComments, '<p><strong>Reviewed preliminary case</strong></p>');
     assert.equal(dto.data.amlClarificationFindings, dto.formalComments);
     throw new Error('SUBMISSION_COMMENTS_REACHED_LOCK');
   };
   await assert.rejects(() => service.submitToAml({}, 'case', { formalComments: '<p><strong>Reviewed preliminary case</strong></p>' }), /SUBMISSION_COMMENTS_REACHED_LOCK/);
-  tx.kycInternalReview.findFirst = async () => ({ amlClarificationFindings: 'Reviewed' });
+  tx.kycInternalReview.findFirst = async () => ({ ...reviewed, amlClarificationFindings: 'Reviewed' });
   tx.legalDocument = { count: async () => 1 };
   assert.equal((await service.submissionReadiness({}, 'case')).ready, true);
   tx.screeningRecord.findMany = async () => [];
@@ -102,6 +107,13 @@ async function main() {
   assert.equal(pending.ready, false);
   assert.equal(pending.checks.find((check) => check.label === 'Screening').complete, false);
   assert.equal(pending.checks.find((check) => check.label === 'CRRF').complete, false);
+  tx.kycInternalReview.findFirst = async () => ({ amlClarificationFindings: 'Reviewed', riskClassification: 'LOW' });
+  const internal = (await service.submissionReadiness({}, 'case')).checks.find((check) => check.key === 'internal');
+  assert.equal(internal.complete, false);
+  assert.match(internal.message, /H\. Internal Use Only and choose the Due diligence type/);
+  await assert.rejects(legacy, /H\. Internal Use Only/);
+  service.formCompletenessIssues = async () => [{ section: 'sectionA', title: 'A. General Company Information', missing: ['Email (a valid address)'] }];
+  await assert.rejects(legacy, /Complete the required KYC form details[\s\S]*A\. General Company Information: Email/);
   console.log('Ownership, safe formatting, empty comments, Screening and CRRF regression checks passed.');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

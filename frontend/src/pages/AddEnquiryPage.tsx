@@ -106,6 +106,7 @@ type EnquiryValidationForm = {
   proposedLegalForm: string;
   proposedLegalFormOther: string;
   jurisdictionOfRegistration: string;
+  countryOfIncorporation: string;
   proposedBusinessActivity: string;
   sourceOfInitialCapital: string;
   proposedRegisteredOfficeAddress: string;
@@ -267,6 +268,7 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
       if (!form.proposedCompanyName.trim()) return 'Proposed company name is required.';
       if (!resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther)) return 'Proposed legal form is required.';
       if (!form.jurisdictionOfRegistration) return 'Jurisdiction of registration is required.';
+      if (!form.countryOfIncorporation) return 'Country of incorporation is required.';
       if (!form.proposedBusinessActivity.trim()) return 'Proposed business activity is required.';
       if (!form.sourceOfInitialCapital.trim()) return 'Source of initial capital is required.';
       if (!isProposedAddressOptional(form) && !form.proposedRegisteredOfficeAddress.trim()) return 'Proposed registered office address is required.';
@@ -381,6 +383,8 @@ export function AddEnquiryPage() {
     proposedLegalForm: '',
     proposedLegalFormOther: '',
     jurisdictionOfRegistration: '',
+    // QFC, MOCI and the free zones are all in Qatar, so new proposed companies start with Qatar (editable).
+    countryOfIncorporation: 'Qatar',
     proposedBusinessActivity: '',
     sourceOfInitialCapital: '',
     proposedRegisteredOfficeAddress: '',
@@ -435,6 +439,8 @@ export function AddEnquiryPage() {
           proposedLegalForm: proposedLegalForm.value,
           proposedLegalFormOther: proposedLegalForm.otherValue,
           jurisdictionOfRegistration: String(details.jurisdictionOfRegistration || ''),
+          // Enquiries saved before this field existed show Qatar when a (Qatari) jurisdiction is already chosen.
+          countryOfIncorporation: String(details.countryOfIncorporation || (details.preliminaryKyc as Record<string, unknown> | undefined)?.countryOfIncorporation || (details.jurisdictionOfRegistration ? 'Qatar' : '')),
           proposedBusinessActivity: String(details.proposedBusinessActivity || ''),
           sourceOfInitialCapital: String(details.sourceOfInitialCapital || ''),
           proposedRegisteredOfficeAddress: String(details.proposedRegisteredOfficeAddress || ''),
@@ -500,6 +506,7 @@ export function AddEnquiryPage() {
             ...keyContactDetails,
             proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
             jurisdictionOfRegistration: form.jurisdictionOfRegistration,
+            countryOfIncorporation: form.countryOfIncorporation,
             proposedBusinessActivity: form.proposedBusinessActivity,
             sourceOfInitialCapital: form.sourceOfInitialCapital,
             proposedRegisteredOfficeAddress: form.proposedRegisteredOfficeAddress,
@@ -507,6 +514,7 @@ export function AddEnquiryPage() {
               companyName: form.proposedCompanyName,
               proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
               jurisdiction: form.jurisdictionOfRegistration,
+              countryOfIncorporation: form.countryOfIncorporation,
               businessActivity: form.proposedBusinessActivity,
               registeredOfficeAddress: form.proposedRegisteredOfficeAddress,
               sourceOfFunds: form.sourceOfInitialCapital,
@@ -1079,6 +1087,7 @@ function ProposedCompanyDetails({
           allowOther
         />
         <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => onFormChange({ ...form, jurisdictionOfRegistration: value })} />
+        <SearchableSelect label="Country of incorporation *" value={form.countryOfIncorporation} options={countryOptions} onChange={(value) => onFormChange({ ...form, countryOfIncorporation: value })} />
         <label className="text-sm font-medium text-slate-700">
           Proposed business activity <RequiredMark />
           <input value={form.proposedBusinessActivity} onChange={(event) => onFormChange({ ...form, proposedBusinessActivity: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -1117,7 +1126,7 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
           ['1', `Proposed Company Name (if available): ${value(form.proposedCompanyName)}`],
           ['2', `Proposed Legal Form (LLC, Branch, Partnership, etc.): ${value(legalForm)}`],
           ['3', `Jurisdiction of Registration (QFC/MOCI): ${value(form.jurisdictionOfRegistration)}`],
-          ['4', 'Country of incorporation: -'],
+          ['4', `Country of incorporation: ${value(form.countryOfIncorporation)}`],
           ['5', `Proposed Registered Office Address: ${value(form.proposedRegisteredOfficeAddress)}`],
           ['6', `Proposed Business Activity: ${value(form.proposedBusinessActivity)}`],
           ['7', `Expected Source of Initial Capital: ${value(form.sourceOfInitialCapital)}`],

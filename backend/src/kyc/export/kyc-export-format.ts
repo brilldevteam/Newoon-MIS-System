@@ -48,6 +48,18 @@ export function decisionText(value: unknown) {
   return labels[decision] || enumText(decision);
 }
 
+// DMLRO decisions use the wording of the DMLRO decision list in the KYC form.
+export function dmlroDecisionText(value: unknown) {
+  const labels: Record<string, string> = {
+    APPROVE: 'Send to MLRO',
+    APPROVE_WITH_CONDITIONS: 'Approve with conditions',
+    DMLRO_FINAL_APPROVE: 'Final approval during MLRO absence',
+    REQUEST_ADDITIONAL_INFORMATION: 'Request additional information from AML Supervisor',
+    RETURN_TO_SUPERVISOR: 'Return to AML Supervisor'
+  };
+  return labels[text(value)] || decisionText(value);
+}
+
 // Removes characters that are illegal in XML 1.0 (commonly pasted from PDFs/Word) so documents never corrupt.
 export function cleanText(value: string) {
   // eslint-disable-next-line no-control-regex

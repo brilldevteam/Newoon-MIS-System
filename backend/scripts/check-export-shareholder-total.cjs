@@ -12,7 +12,7 @@ async function main() {
         { id: 'c', fullName: 'Indirect owner', parentRowId: 'a', ownershipPercentage: '100' }
       ]
     } }, 1);
-    const section = model.blocks.find((block) => block.kind === 'section' && block.title.startsWith('B.'));
+    const section = model.blocks.find((block) => block.kind === 'section' && block.title.startsWith('C. Shareholders'));
     const summary = section.blocks.find((block) => block.kind === 'para').line.parts[0].text;
     assert.match(summary, /^Total shareholder %: 100%/, 'Use direct shareholder rows, not cached totals or nested interests');
   }

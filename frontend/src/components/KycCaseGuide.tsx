@@ -11,6 +11,15 @@ const STAGES = ['KYC preparation', 'DMLRO review', 'MLRO / SEF approval', 'Final
 
 const PREPARATION = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUBMITTED_TO_AML', 'AML_REVIEW_STARTED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_REVIEW_IN_PROGRESS', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED', 'FINAL_SIGNATURES_PENDING', 'FINAL_DOCUMENTS_PENDING'];
 export const SUBMITTABLE_STATUSES = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'];
+
+// A full-KYC amendment draft is prepared by AML and submitted to DMLRO like a new file (same checklist).
+export function isAmlAmendmentDraft(kycCase: Pick<KycCase, 'status' | 'kycForm'>) {
+  return kycCase.status === 'AML_REVIEW_STARTED' && kycCase.kycForm?.fullKycStarted === true && kycCase.kycForm.status === 'AMENDMENT_DRAFT' && !kycCase.kycForm.isLocked;
+}
+
+export function canSubmitToDmlro(kycCase: Pick<KycCase, 'status' | 'kycForm'>) {
+  return SUBMITTABLE_STATUSES.includes(kycCase.status) || isAmlAmendmentDraft(kycCase);
+}
 const DMLRO = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'];
 const MLRO = ['DMLRO_REVIEW_COMPLETED', 'MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS'];
 const SEF = ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'];
@@ -82,11 +91,14 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
 
     if (stage === 0) {
       if (!hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', ...ADMIN])) return <Waiting owner={owner || 'AML Team'} text={kycNextStep(status)} />;
-      if (!SUBMITTABLE_STATUSES.includes(status)) return <Todo title="Your next step" intro={kycNextStep(status) || 'Complete the KYC preparation.'} action={{ label: 'Open KYC Form', to: `${caseUrl}/form` }} />;
+      if (!canSubmitToDmlro(kycCase)) return <Todo title="Your next step" intro={kycNextStep(status) || 'Complete the KYC preparation.'} action={{ label: 'Open KYC Form', to: `${caseUrl}/form` }} />;
       return <PreparationChecklist />;
     }
 
     if (stage === 1) {
+      if (hasAnyRole(user, ['MLRO']) && !hasAnyRole(user, ['DMLRO', ...ADMIN])) {
+        return <Todo title="Waiting for DMLRO - you can decide it as MLRO" intro="This case is waiting for the DMLRO review. If DMLRO is not available (for example on leave), you can decide it yourself: open the review, complete your part of Section H, explain in your comments, and submit. The DMLRO task is then closed." action={{ label: 'Decide as MLRO', to: `${caseUrl}/form?section=sectionH` }} />;
+      }
       if (!hasAnyRole(user, ['DMLRO', ...ADMIN])) return <Waiting owner="DMLRO" text={kycNextStep(status)} />;
       return <Todo title="Your next step (DMLRO)" steps={['Check the KYC form, Screening and CRRF using the Review Package tabs.', 'In Section H, enter your name, date, signature, risk classification and comments.', 'Choose the decision: send to MLRO, or return to AML with the reason, then press Submit.']} action={{ label: 'Open DMLRO review', to: `${caseUrl}/form` }} />;
     }
@@ -128,11 +140,12 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
   }
 
   function PreparationChecklist() {
-    const resubmit = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(status);
+    const resubmit = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(status) || isAmlAmendmentDraft(kycCase);
     const links: Record<string, Action> = {
       documents: { label: 'Upload documents', to: `${caseUrl}/documents` },
-      // Only fails for a full KYC (Section D answers), which is edited in the KYC form.
+      // Opens the first section with missing required details (the check carries that section).
       form: { label: 'Open KYC Form', to: `${caseUrl}/form` },
+      internal: { label: 'Open Section H', to: `${caseUrl}/form?section=sectionH` },
       screening: { label: 'Open Screening', to: `${caseUrl}/screening` },
       crrf: { label: 'Open CRRF', to: `${caseUrl}/crrf` },
       comments: { label: 'Write comments', to: `${caseUrl}/submit` }
@@ -146,7 +159,7 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
       <div className="rounded-md border border-sky-200 bg-sky-50/60 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-slate-950">{resubmit ? 'Your next step: fix the points DMLRO raised, then resubmit' : 'Your next step: prepare the KYC file and submit it to DMLRO'}</p>
+            <p className="text-sm font-semibold text-slate-950">{isAmlAmendmentDraft(kycCase) ? 'Your next step: complete the amendment, then resubmit it to DMLRO' : resubmit ? 'Your next step: fix the points DMLRO raised, then resubmit' : 'Your next step: prepare the KYC file and submit it to DMLRO'}</p>
             <p className="mt-0.5 text-xs text-slate-600">
               {!readiness ? (readinessError ? 'The checklist could not be loaded.' : 'Checking what is left…') : left ? `${left} item${left === 1 ? '' : 's'} left. Work through them in this order.` : 'Everything is ready. Submit it to DMLRO.'}
             </p>
@@ -157,7 +170,8 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
         {checks.length ? (
           <ul className="mt-3 divide-y divide-sky-100 rounded-md border border-sky-100 bg-white">
             {checks.map((check) => {
-              const action = check.key ? links[check.key] : undefined;
+              const base = check.key ? links[check.key] : undefined;
+              const action = base && check.section ? { ...base, to: `${caseUrl}/form?section=${check.section}` } : base;
               return (
                 <li key={check.key || check.label} className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 items-start gap-2">

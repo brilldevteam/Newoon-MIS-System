@@ -35,7 +35,10 @@ export function EnquiryListPage() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
-  const canDeleteEnquiries = hasAnyRole(user, ['SUPER_ADMIN']);
+  // Super Admin can delete any enquiry; Operations and Company Admin only drafts / returned enquiries with no KYC case.
+  const canDeleteEnquiry = (enquiry: Enquiry) =>
+    hasAnyRole(user, ['SUPER_ADMIN']) ||
+    (hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN']) && ['DRAFT', 'RETURNED_TO_BD'].includes(enquiry.status) && !enquiry.generatedKycCases?.length);
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
 
   useEffect(() => {
@@ -142,7 +145,7 @@ export function EnquiryListPage() {
                             <Edit3 className="h-4 w-4" />
                           </Link>
                         ) : null}
-                        {canDeleteEnquiries ? (
+                        {canDeleteEnquiry(enquiry) ? (
                           <button type="button" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50" title="Delete">
                             <Trash2 className="h-4 w-4" />
                           </button>

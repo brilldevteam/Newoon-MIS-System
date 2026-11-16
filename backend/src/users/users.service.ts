@@ -110,6 +110,38 @@ export class UsersService {
     } catch (error) { this.duplicateEmail(error); }
   }
 
+  // Delete is only for accounts that never did workflow work (for example a mistaken or test account). Anyone who
+  // prepared, reviewed or approved something keeps their account for the audit trail and should be suspended instead.
+  async remove(user: RequestUser, id: string) {
+    this.assertAdmin(user);
+    if (id === user.id) throw new BadRequestException('You cannot delete your own account.');
+    await this.scopedTarget(user, id, this.prisma);
+    return this.prisma.$transaction(async (tx) => {
+      const target = await this.scopedTarget(user, id, tx);
+      if (target.tenantId) await tx.$queryRaw(Prisma.sql`SELECT id FROM "Tenant" WHERE id = ${target.tenantId} FOR UPDATE`);
+      const roleNames = target.roles.map((row) => row.role.name);
+      if (roleNames.includes('SUPER_ADMIN')) throw new BadRequestException('Platform administrator removal is protected.');
+      if (target.tenantId && target.status === 'ACTIVE' && roleNames.includes('COMPANY_ADMIN')) {
+        const remaining = await tx.user.count({ where: { tenantId: target.tenantId, id: { not: id }, status: 'ACTIVE', roles: { some: { role: { name: 'COMPANY_ADMIN' } } } } });
+        if (!remaining) throw new BadRequestException('Keep at least one active Company Admin for this company.');
+      }
+      const work = await tx.user.findUniqueOrThrow({ where: { id }, select: { _count: { select: {
+        createdEnquiries: true, enquiryComments: true, enquiryStatusHistory: true, createdCases: true, assignedCases: true,
+        uploadedDocuments: true, comments: true, statusHistory: true, createdKycForms: true, updatedKycForms: true,
+        assignedReviewTasks: true, submittedInternalReviews: true, reviewerComments: true, uploadedSignedKycDocuments: true,
+        riskReclassifications: true, createdClientEngagements: true, uploadedClientDocuments: true, performedClientScreenings: true,
+        requestedClientRiskChanges: true, decidedClientRiskChanges: true, startedClientReviews: true, completedClientReviews: true
+      } } } });
+      const recorded = Object.values(work._count).reduce((sum, count) => sum + count, 0);
+      if (recorded) {
+        throw new BadRequestException(`${target.firstName} ${target.lastName} has work recorded in the system (${recorded} item${recorded === 1 ? '' : 's'} such as enquiries, KYC reviews or comments), so the account cannot be deleted without losing the audit trail. Use Edit and set the status to Suspended instead - they will no longer be able to sign in.`);
+      }
+      await tx.auditLog.create({ data: { tenantId: target.tenantId, actorId: user.id, action: 'DELETE', entityType: 'User', entityId: id, metadata: { email: target.email, roles: roleNames } } });
+      await tx.user.delete({ where: { id } });
+      return { id };
+    });
+  }
+
   async resetPassword(user: RequestUser, id: string, dto: ResetUserPasswordDto) {
     this.assertAdmin(user);
     await this.scopedTarget(user, id, this.prisma);

@@ -58,6 +58,7 @@ export function EnquiryDetailsPage() {
   const [statusNote, setStatusNote] = useState('');
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -104,10 +105,11 @@ export function EnquiryDetailsPage() {
   async function downloadPreliminaryKyc() {
     if (!id || saving) return;
     setSaving(true);
+    setDownloadingPdf(true);
     setError('');
     try { await downloadPreliminaryKycPdf(id); }
     catch (failure) { setError(getApiErrorMessage(failure, 'Unable to download Preliminary KYC PDF.')); }
-    finally { setSaving(false); }
+    finally { setSaving(false); setDownloadingPdf(false); }
   }
 
   async function submitComment(event: FormEvent<HTMLFormElement>) {
@@ -348,8 +350,8 @@ export function EnquiryDetailsPage() {
                 View Preliminary KYC
               </button>
               <button type="button" disabled={saving} onClick={downloadPreliminaryKyc} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-                <Download className="h-4 w-4" />
-                Download Preliminary KYC PDF
+                <Download className={`h-4 w-4 ${downloadingPdf ? 'animate-pulse' : ''}`} />
+                {downloadingPdf ? 'Preparing PDF…' : 'Download Preliminary KYC PDF'}
               </button>
             </>
           ) : null}

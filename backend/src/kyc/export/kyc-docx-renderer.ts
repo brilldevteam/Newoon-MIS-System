@@ -178,7 +178,8 @@ function block(item: Block, width: number): Array<Paragraph | Table> {
     case 'section': {
       const inner = width - SECTION_PADDING * 2;
       return [
-        spacer(10),
+        // A section marked newPage (H. Internal Use Only) always starts on a fresh page.
+        item.newPage ? new Paragraph({ pageBreakBefore: true, spacing: { before: 0, after: 0 }, children: [] }) : spacer(10),
         new Table({
           width: { size: width, type: WidthType.DXA },
           columnWidths: [width],
