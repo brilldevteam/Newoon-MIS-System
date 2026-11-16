@@ -8,15 +8,16 @@ export function ClientListPage() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'PROSPECT' | 'ALL'>('ACTIVE');
 
   useEffect(() => {
-    loadClients();
-  }, []);
+    loadClients(statusFilter);
+  }, [statusFilter]);
 
-  function loadClients() {
+  function loadClients(status: 'ACTIVE' | 'PROSPECT' | 'ALL') {
     setLoading(true);
     setError('');
-    listClients()
+    listClients(status)
       .then(setClients)
       .catch((requestError: any) => {
         setError(requestError.response?.data?.message || 'Unable to load clients.');
@@ -61,9 +62,21 @@ export function ClientListPage() {
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
       <div className="rounded-lg border border-slate-200 bg-white">
-        <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
-          <Search className="h-4 w-4" />
-          Client intake register
+        <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
+          <span className="flex items-center gap-2">
+            <Search className="h-4 w-4" />
+            Client intake register
+          </span>
+          <select
+            aria-label="Client status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as 'ACTIVE' | 'PROSPECT' | 'ALL')}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          >
+            <option value="ACTIVE">Active clients</option>
+            <option value="PROSPECT">Prospects (KYC pending)</option>
+            <option value="ALL">All statuses</option>
+          </select>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">

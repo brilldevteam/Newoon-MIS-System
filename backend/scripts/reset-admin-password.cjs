@@ -11,7 +11,7 @@ async function resetAdminPassword(prisma, email, password) {
   if (!target || !target.roles.some((row) => ['COMPANY_ADMIN', 'SUPER_ADMIN'].includes(row.role.name))) throw new Error('No matching administrator account. Nothing changed.');
   const passwordHash = await bcrypt.hash(password, 12);
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: target.id }, data: { passwordHash } });
+    await tx.user.update({ where: { id: target.id }, data: { passwordHash, sessionVersion: { increment: 1 }, failedLoginCount: 0, lockedUntil: null } });
     await tx.auditLog.create({ data: { tenantId: target.tenantId, actorId: target.id, action: 'UPDATE', entityType: 'User', entityId: target.id, metadata: { event: 'OPERATOR_ADMIN_PASSWORD_RECOVERY' } } });
   });
 }
@@ -42,7 +42,7 @@ async function main() {
     if (await ask('Type RESET to confirm: ') !== 'RESET') throw new Error('Recovery cancelled.');
     await resetAdminPassword(prisma, email, password);
     console.log('Administrator password updated. No other accounts, roles or records changed.');
-    console.log('Existing signed-in sessions are not revoked by password reset; suspension is enforced on subsequent authenticated requests.');
+    console.log('Existing signed-in sessions for this account have ended and any sign-in lockout was cleared.');
   } finally { muted = false; rl.close(); await prisma.$disconnect(); }
 }
 

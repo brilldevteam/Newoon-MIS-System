@@ -11,6 +11,7 @@ import { PermissionsModule } from './permissions/permissions.module';
 import { ModulesModule } from './modules/modules.module';
 import { TenantModulesModule } from './tenant-modules/tenant-modules.module';
 import { ClientsModule } from './clients/clients.module';
+import { ComplianceClientsModule } from './compliance-clients/compliance-clients.module';
 import { EnquiriesModule } from './enquiries/enquiries.module';
 import { KycModule } from './kyc/kyc.module';
 import { DocumentsModule } from './documents/documents.module';
@@ -37,6 +38,7 @@ import { AccessControlModule } from './access-control/access-control.module';
     ModulesModule,
     TenantModulesModule,
     ClientsModule,
+    ComplianceClientsModule,
     EnquiriesModule,
     KycModule,
     DocumentsModule,

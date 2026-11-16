@@ -16,7 +16,7 @@ export function getApiErrorMessage(error: any, fallback: string) {
   const data = error?.response?.data;
   const message = findErrorMessage(data);
   if (message) return message;
-  if (error?.response?.status === 429) return 'AI service is temporarily rate-limited. Wait one minute and try again.';
+  if (error?.response?.status === 429) return 'Too many attempts. Wait a moment and try again.';
   return fallback;
 }
 

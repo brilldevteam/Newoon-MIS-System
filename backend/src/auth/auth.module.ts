@@ -3,10 +3,11 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
 import { SelfPasswordController, SelfPasswordService } from './self-password.controller';
 import { SelfProfileController, SelfProfileService } from './self-profile.controller';
+import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { MailService } from './mail.service';
 import { AccessControlModule } from '../access-control/access-control.module';
 
 @Module({
@@ -25,7 +26,7 @@ import { AccessControlModule } from '../access-control/access-control.module';
     })
   ],
   controllers: [AuthController, SelfPasswordController, SelfProfileController],
-  providers: [AuthService, JwtStrategy, SelfPasswordService, SelfProfileService],
+  providers: [AuthService, JwtStrategy, MailService, SelfPasswordService, SelfProfileService],
   exports: [AuthService]
 })
 export class AuthModule {}

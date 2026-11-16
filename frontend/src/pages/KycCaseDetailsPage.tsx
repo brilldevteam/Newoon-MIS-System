@@ -21,6 +21,7 @@ import {
   KycCaseStatus,
   returnKycToBusinessDevelopment,
   updateProposalStatus,
+  uploadEngagementLetter,
   uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
@@ -215,7 +216,7 @@ export function KycCaseDetailsPage() {
     try {
       let nextCase = kycCase;
       if (engagementFile) {
-        nextCase = await uploadLegalDocumentFiles(id, { documentType: 'Signed Engagement Letter', files: [engagementFile] });
+        nextCase = await uploadEngagementLetter(id, engagementFile);
         setKycCase(nextCase);
       }
       if (!nextCase?.legalDocuments.some((document) => document.documentType === 'Signed Engagement Letter' && document.storagePath)) {

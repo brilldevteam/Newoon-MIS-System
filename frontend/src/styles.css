@@ -26,3 +26,51 @@ select,
 textarea {
   font: inherit;
 }
+
+/* Thin, unobtrusive horizontal scrollbar for scrolling tab bars. */
+@layer utilities {
+  /* Firefox only: in Chromium these standard properties would override the slimmer ::-webkit-scrollbar styles. */
+  @supports not selector(::-webkit-scrollbar) {
+    .scrollbar-thin {
+      scrollbar-width: thin;
+      scrollbar-color: rgb(203 213 225) transparent;
+    }
+    .scrollbar-thin:hover {
+      scrollbar-color: rgb(148 163 184) transparent;
+    }
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 4px;
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(203 213 225);
+    border-radius: 9999px;
+  }
+  .scrollbar-thin:hover::-webkit-scrollbar-thumb {
+    background-color: rgb(148 163 184);
+  }
+  .scrollbar-thin::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+/* Mobile and installed-app (PWA) helpers. */
+@layer utilities {
+  .mobile-drawer {
+    animation: mobile-drawer-in 180ms ease-out;
+    padding-top: env(safe-area-inset-top);
+  }
+  @keyframes mobile-drawer-in {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mobile-drawer { animation: none; }
+  }
+}

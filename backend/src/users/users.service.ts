@@ -98,6 +98,8 @@ export class UsersService {
         await tx.userRole.deleteMany({ where: { userId: id } });
         const updated = await tx.user.update({ where: { id }, data: {
           email: dto.email.trim().toLowerCase(), firstName: dto.firstName.trim(), lastName: dto.lastName.trim(), status: dto.status,
+          // Suspending a user ends their signed-in sessions immediately.
+          ...(dto.status === 'SUSPENDED' && target.status !== 'SUSPENDED' ? { sessionVersion: { increment: 1 } } : {}),
           roles: { create: roles.map((role) => ({ roleId: role.id })) }
         }, select: publicUser });
         await tx.auditLog.create({ data: { tenantId: target.tenantId, actorId: user.id, action: 'UPDATE', entityType: 'User', entityId: id, metadata: { roles: dto.roles, status: dto.status } } });
@@ -112,7 +114,8 @@ export class UsersService {
     const passwordHash = await this.passwordHash(dto.password);
     await this.prisma.$transaction(async (tx) => {
       const target = await this.scopedTarget(user, id, tx);
-      await tx.user.update({ where: { id }, data: { passwordHash } });
+      // A reset ends all existing sessions and clears any sign-in lockout.
+      await tx.user.update({ where: { id }, data: { passwordHash, sessionVersion: { increment: 1 }, failedLoginCount: 0, lockedUntil: null } });
       await tx.auditLog.create({ data: { tenantId: target.tenantId, actorId: user.id, action: 'UPDATE', entityType: 'User', entityId: id, metadata: { event: 'ADMIN_PASSWORD_RESET' } } });
     });
     return { success: true };

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { userSummarySelect } from '../common/user-summary';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 
@@ -19,7 +20,7 @@ export class TenantsService {
     return this.prisma.tenant.findUniqueOrThrow({
       where: { id },
       include: {
-        users: true,
+        users: { select: { ...userSummarySelect, status: true } },
         tenantModules: { include: { module: true } }
       }
     });

@@ -2,37 +2,61 @@ import {
   Building2,
   Bell,
   CheckCheck,
+  ChevronDown,
   ClipboardCheck,
   Inbox,
   LayoutDashboard,
   Layers,
   ListChecks,
+  LogOut,
+  Menu,
   PanelLeftClose,
   PanelLeftOpen,
   SearchCheck,
   SlidersHorizontal,
   ShieldCheck,
+  ShieldEllipsis,
+  UserCheck,
   UserRoundPlus,
-  Users
+  Users,
+  WifiOff,
+  X
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { ComponentType, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { AccountMenu } from '../components/AccountMenu';
+import { InstallAppButton } from '../components/InstallAppButton';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
 import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { enquiryNotificationLink } from '../utils/enquiry-notification-link';
 
-const navItems = [
+type NavLinkItem = { to: string; label: string; icon: ComponentType<{ className?: string }>; roles: string[]; area?: string };
+type NavGroupItem = { key: string; label: string; icon: ComponentType<{ className?: string }>; pathPrefix: string; children: NavLinkItem[] };
+type NavItem = NavLinkItem | NavGroupItem;
+
+const isNavGroup = (item: NavItem): item is NavGroupItem => 'children' in item;
+
+const navItems: NavItem[] = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
   { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
   { to: '/clients', label: 'Clients', icon: UserRoundPlus, roles: workflowRoles.clientIntake, area: 'clients' },
+  // Compliance area (legacy "Compliance Hub"); later submenu items such as Compliance Staff belong here too.
+  {
+    key: 'compliance',
+    label: 'Compliance',
+    icon: ShieldEllipsis,
+    pathPrefix: '/compliance',
+    children: [{ to: '/compliance/clients', label: 'Compliance Clients', icon: UserCheck, roles: workflowRoles.complianceView, area: 'compliance' }]
+  },
   { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
   { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening' },
   { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf' },
   { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals' },
-  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin, area: 'administration' },
-  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin, area: 'administration' },
+  // Platform-wide pages: Super Admin only, not controlled by the role matrix.
+  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
+  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
   { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin, area: 'administration' },
   { to: '/access-control', label: 'Access Control', icon: SlidersHorizontal, roles: workflowRoles.admin }
 ];
@@ -50,6 +74,18 @@ export function AppLayout() {
   const useCollapsedSidebar = isFocusedWorkspace && isSidebarCollapsed;
   const fullName = user ? `${user.firstName} ${user.lastName}`.trim() : '';
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const online = useOnlineStatus();
+  const visibleNavItems = navItems
+    .map((item) => (isNavGroup(item) ? { ...item, children: item.children.filter((child) => canAccessNavigation(user, child.roles, child.area)) } : item))
+    .filter((item) => (isNavGroup(item) ? item.children.length > 0 : canAccessNavigation(user, item.roles, item.area)));
+
+  // A group opens automatically while one of its pages is shown.
+  useEffect(() => {
+    const active = navItems.find((item) => isNavGroup(item) && location.pathname.startsWith(`${item.pathPrefix}/`));
+    if (active && isNavGroup(active)) setOpenGroups((current) => (current[active.key] ? current : { ...current, [active.key]: true }));
+  }, [location.pathname]);
 
   useEffect(() => {
     setIsSidebarCollapsed(isFocusedWorkspace);
@@ -57,7 +93,21 @@ export function AppLayout() {
 
   useEffect(() => {
     setNotificationsOpen(false);
+    setMobileNavOpen(false);
   }, [location.pathname]);
+
+  // Mobile drawer: close with Escape and keep the page behind it from scrolling.
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMobileNavOpen(false); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', escape);
+    };
+  }, [mobileNavOpen]);
 
   useEffect(() => {
     if (!notificationsOpen) return;
@@ -132,12 +182,16 @@ export function AppLayout() {
           useCollapsedSidebar ? 'w-20' : 'w-64'
         }`}
       >
-        <div className={`flex h-[85px] items-center border-b border-slate-200/80 ${useCollapsedSidebar ? 'justify-center px-3' : 'justify-between px-6'}`}>
-          <div className={useCollapsedSidebar ? 'hidden' : 'min-w-0'}>
-            <p className="text-lg font-semibold text-slate-950">Newoon MIS</p>
-            <p className="text-sm text-slate-500">KYC & Engagement Platform</p>
-          </div>
-          {useCollapsedSidebar && <p className="text-lg font-semibold text-slate-950">NM</p>}
+        <div className={`flex h-[85px] items-center border-b border-slate-200/80 ${useCollapsedSidebar ? 'flex-col justify-center gap-1 px-3' : 'justify-between gap-3 px-5'}`}>
+          <Link to="/" className={useCollapsedSidebar ? 'hidden' : 'flex min-w-0 flex-col'} aria-label="Newoon MIS home">
+            <img src="/brand/newoon-logo.png" alt="Newoon Global LTD." className="h-14 w-auto self-start" width={125} height={56} />
+            <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">MIS · KYC & Engagement</span>
+          </Link>
+          {useCollapsedSidebar && (
+            <Link to="/" aria-label="Newoon MIS home" title="Newoon MIS">
+              <img src="/brand/newoon-mark.png" alt="Newoon" className="h-7 w-7 rounded" width={28} height={28} />
+            </Link>
+          )}
           {isFocusedWorkspace && (
             <button
               type="button"
@@ -150,30 +204,62 @@ export function AppLayout() {
             </button>
           )}
         </div>
-        <nav className={`space-y-1 py-4 ${useCollapsedSidebar ? 'px-3' : 'px-3'}`}>
-          {navItems.filter((item) => canAccessNavigation(user, item.roles, item.area)).map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              title={useCollapsedSidebar ? item.label : undefined}
-              className={({ isActive }) =>
-                `flex items-center rounded-xl py-2.5 text-sm font-medium transition ${
-                  useCollapsedSidebar ? 'justify-center px-0' : 'gap-3 px-3'
-                } ${
-                  isActive ? 'bg-brand-50 text-brand-700 shadow-sm shadow-brand-100/50' : 'text-slate-600 hover:bg-slate-50'
-                }`
-              }
-            >
-              <item.icon className="h-4 w-4" />
-              {!useCollapsedSidebar && item.label}
-            </NavLink>
-          ))}
+        <nav className="space-y-1 px-3 py-4" aria-label="Main navigation">
+          <NavItems items={visibleNavItems} collapsed={useCollapsedSidebar} openGroups={openGroups} setOpenGroups={setOpenGroups} pathname={location.pathname} />
         </nav>
       </aside>
+
+      {mobileNavOpen ? (
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Main menu">
+          <button type="button" aria-label="Close menu" onClick={() => setMobileNavOpen(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" />
+          <div className="mobile-drawer absolute inset-y-0 left-0 flex w-[min(20rem,86vw)] flex-col bg-white shadow-xl">
+            <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-4">
+              <Link to="/" aria-label="Newoon MIS home" className="min-w-0">
+                <img src="/brand/newoon-logo.png" alt="Newoon Global LTD." className="h-11 w-auto" width={98} height={44} />
+              </Link>
+              <button type="button" onClick={() => setMobileNavOpen(false)} aria-label="Close menu" className="grid h-10 w-10 place-items-center rounded-md text-slate-600 hover:bg-slate-100">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Main navigation">
+              <NavItems items={visibleNavItems} collapsed={false} openGroups={openGroups} setOpenGroups={setOpenGroups} pathname={location.pathname} />
+            </nav>
+            <div className="shrink-0 space-y-2 border-t border-slate-200 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+              {user ? (
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{fullName || user.email}</p>
+                  <p className="truncate text-xs text-slate-500">{roleList(user)}</p>
+                </div>
+              ) : null}
+              <InstallAppButton />
+              <button type="button" onClick={logout} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-brand-700 hover:bg-brand-50">
+                <LogOut className="h-4 w-4" />
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className={useCollapsedSidebar ? 'min-w-0 lg:pl-20' : 'min-w-0 lg:pl-64'}>
         <header className="sticky top-0 z-10 flex h-16 min-w-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
-          <div className="min-w-0">
-            <p className="truncate text-base font-semibold text-slate-950">Newoon Operations</p>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open menu"
+              aria-expanded={mobileNavOpen}
+              className="-ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-md text-slate-700 hover:bg-slate-100 lg:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <Link to="/" aria-label="Newoon MIS home" className="shrink-0 lg:hidden">
+              <img src="/brand/newoon-mark.png" alt="" className="h-8 w-8 rounded" width={32} height={32} />
+            </Link>
+            <p className="truncate text-base font-semibold text-slate-950">
+              <span className="lg:hidden">Newoon MIS</span>
+              <span className="hidden lg:inline">Newoon Operations</span>
+            </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             {user ? (
@@ -246,11 +332,78 @@ export function AppLayout() {
             {user ? <AccountMenu name={fullName || user.email} role={roleList(user)} logout={logout} /> : null}
           </div>
         </header>
-        <main className="min-w-0 px-4 py-6 lg:px-8">
+        {!online ? (
+          <div role="status" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 lg:px-8">
+            <WifiOff className="h-4 w-4 shrink-0" />
+            You are offline. Changes cannot be saved until the connection returns.
+          </div>
+        ) : null}
+        <main className="min-w-0 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-5 sm:pt-6 lg:px-8">
           <Outlet />
         </main>
       </div>
     </div>
+  );
+}
+
+type GroupState = Record<string, boolean>;
+
+// Navigation shared by the desktop sidebar and the mobile drawer.
+function NavItems({ items, collapsed, openGroups, setOpenGroups, pathname }: {
+  items: NavItem[];
+  collapsed: boolean;
+  openGroups: GroupState;
+  setOpenGroups: (update: (current: GroupState) => GroupState) => void;
+  pathname: string;
+}) {
+  return (
+    <>
+      {items.map((item) => {
+        if (!isNavGroup(item)) return <SidebarLink key={item.to} item={item} collapsed={collapsed} />;
+        // A collapsed sidebar has no room for a group header, so it shows the group's pages as icons.
+        if (collapsed) return item.children.map((child) => <SidebarLink key={child.to} item={child} collapsed />);
+        const open = Boolean(openGroups[item.key]);
+        const groupActive = pathname.startsWith(`${item.pathPrefix}/`);
+        return (
+          <div key={item.key}>
+            <button
+              type="button"
+              onClick={() => setOpenGroups((current) => ({ ...current, [item.key]: !open }))}
+              aria-expanded={open}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                groupActive && !open ? 'bg-brand-50 text-brand-700' : groupActive ? 'text-brand-700 hover:bg-slate-50' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <item.icon className="h-4 w-4" />
+              <span className="flex-1 text-left">{item.label}</span>
+              <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+            </button>
+            {open ? (
+              <div className="ml-5 mt-1 space-y-1 border-l border-slate-200 pl-3">
+                {item.children.map((child) => <SidebarLink key={child.to} item={child} collapsed={false} />)}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function SidebarLink({ item, collapsed }: { item: NavLinkItem; collapsed: boolean }) {
+  return (
+    <NavLink
+      to={item.to}
+      title={collapsed ? item.label : undefined}
+      className={({ isActive }) =>
+        `flex items-center rounded-xl py-2.5 text-sm font-medium transition ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${
+          isActive ? 'bg-brand-50 text-brand-700 shadow-sm shadow-brand-100/50' : 'text-slate-600 hover:bg-slate-50'
+        }`
+      }
+    >
+      <item.icon className="h-4 w-4" />
+      {!collapsed && item.label}
+    </NavLink>
   );
 }
 
@@ -264,6 +417,17 @@ function canAccessNavigation(user: ReturnType<typeof useAuth>['user'], roles: st
 function notificationLink(notification: AppNotification) {
   const caseId = notification.kycCase?.id;
   if (notification.enquiry?.id) return `/enquiries/${notification.enquiry.id}`;
+  // Compliance client monitoring notifications open the matching tab of the client page.
+  if (notification.client?.id) {
+    const tab = {
+      COMPLIANCE_SCREENING_ALERT: 'screening',
+      COMPLIANCE_DOCUMENT_EXPIRING: 'expiry',
+      COMPLIANCE_REVIEW_DUE: 'reviews',
+      COMPLIANCE_RISK_CHANGE_REQUESTED: 'reviews',
+      COMPLIANCE_RISK_CHANGE_DECIDED: 'reviews'
+    }[notification.type];
+    return `/compliance/clients/${notification.client.id}${tab ? `?tab=${tab}` : ''}`;
+  }
   if (!caseId) {
     return ['GENERAL', 'AML_CASE_SUBMITTED', 'ADDITIONAL_INFORMATION_REQUESTED'].includes(notification.type) ? '/enquiries' : '/review-tasks';
   }

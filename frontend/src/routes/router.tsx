@@ -3,6 +3,8 @@ import { AddClientPage } from '../pages/AddClientPage';
 import { AccessDeniedPage } from '../pages/AccessDeniedPage';
 import { ClientDetailsPage } from '../pages/ClientDetailsPage';
 import { ClientListPage } from '../pages/ClientListPage';
+import { ComplianceClientDetailsPage } from '../pages/ComplianceClientDetailsPage';
+import { ComplianceClientListPage } from '../pages/ComplianceClientListPage';
 import { CreateKycCasePage } from '../pages/CreateKycCasePage';
 import { CrrfListPage } from '../pages/CrrfListPage';
 import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
@@ -80,7 +82,14 @@ export const router = createBrowserRouter([
             ]
           },
           {
-            element: <RequireAccess area="administration" fallbackRoles={workflowRoles.admin} />,
+            element: <RequireAccess area="compliance" fallbackRoles={workflowRoles.complianceView} />,
+            children: [
+              { path: '/compliance/clients', element: <ComplianceClientListPage /> },
+              { path: '/compliance/clients/:id', element: <ComplianceClientDetailsPage /> }
+            ]
+          },
+          {
+            element: <RequireRoles roles={workflowRoles.admin} />,
             children: [
               { path: '/tenants', element: <TenantsPage /> },
               { path: '/modules', element: <ModulesPage /> }
