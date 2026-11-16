@@ -10,7 +10,7 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
   const declaration = data.declaration && typeof data.declaration === 'object' ? data.declaration as Record<string, any> : {};
   return <section id="preliminary-kyc-form" className={embedded ? 'min-w-0' : 'scroll-mt-6 max-h-[calc(100vh-150px)] min-w-0 overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4'}>
     <article className="mx-auto max-w-[794px] bg-white p-6 text-[10px] leading-[1.4] text-black shadow-sm sm:p-8">
-      <p>Date: {data.completedAt ? new Date(data.completedAt).toLocaleDateString('en-GB') : '-'}</p>
+      <div className="flex flex-wrap justify-between gap-x-4 gap-y-1"><p>Date: {data.completedAt ? new Date(data.completedAt).toLocaleDateString('en-GB') : '-'}</p><p className="break-words">KYC Number: {value(data.kycNumber || data.reference || 'Not assigned')}</p></div>
       <h2 className="mt-3 text-center text-[11px] font-bold underline">Prospective Customer Information &amp; Preliminary Due Diligence form</h2>
       <p className="mt-2">This form is completed prior to the establishment of a business relationship and before incorporation of the proposed entity.</p>
       <PreliminaryTable title="Section A: Basic Client Details" headers={['No.', 'Details']} rows={[

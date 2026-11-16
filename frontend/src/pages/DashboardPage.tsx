@@ -6,6 +6,7 @@ import { useAuth } from '../hooks/useAuth';
 import { DashboardSummary, getDashboardSummary } from '../services/dashboard.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { formatNumber } from '../utils/format';
+import { getApiErrorMessage } from '../services/api';
 
 const emptySummary: DashboardSummary = {
   totalTenants: 0,
@@ -21,6 +22,7 @@ export function DashboardPage() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
   const canViewClients = hasAnyRole(user, workflowRoles.clientIntake);
   const canViewKyc = hasAnyRole(user, [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]);
@@ -29,7 +31,7 @@ export function DashboardPage() {
   useEffect(() => {
     getDashboardSummary()
       .then(setSummary)
-      .catch(() => setSummary(emptySummary))
+      .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load dashboard data. Please reload to try again.')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -61,6 +63,8 @@ export function DashboardPage() {
     );
   }
 
+  if (error) return <div className="space-y-6"><DashboardHeader canCreateEnquiry={canCreateEnquiry} /><p role="alert" className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p></div>;
+
   return (
     <div className="space-y-6">
       <DashboardHeader canCreateEnquiry={canCreateEnquiry} />
@@ -89,12 +93,12 @@ export function DashboardPage() {
             <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-5">
               <div className="flex items-end justify-between gap-4">
                 <div>
-                  <p className="text-sm font-medium text-slate-500">Operational Health</p>
-                  <p className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">{healthScore}%</p>
+                  <p className="text-sm font-medium text-slate-500">Tracked KYC approval rate</p>
+                  <p className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">{summary.pendingKyc + summary.pendingApprovals + summary.approvedKyc ? `${healthScore}%` : '—'}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Current focus</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-700">{summary.pendingApprovals ? 'Approval queue' : 'KYC preparation'}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-700">{summary.pendingApprovals ? 'Approval queue' : summary.pendingKyc ? 'KYC preparation' : summary.openEnquiries ? 'Enquiries' : 'No pending work'}</p>
                 </div>
               </div>
               <div className="mt-6 h-3 overflow-hidden rounded-full bg-white">

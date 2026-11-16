@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { KycCaseStatus } from '@prisma/client';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,6 +9,7 @@ export class DashboardService {
 
   async summary(user: RequestUser) {
     const isSuperAdmin = user.roles.includes('SUPER_ADMIN');
+    if (!isSuperAdmin && !user.tenantId) throw new ForbiddenException('User is not assigned to a tenant');
     const tenantFilter = isSuperAdmin ? {} : { tenantId: user.tenantId || '' };
 
     const [
@@ -20,8 +21,8 @@ export class DashboardService {
       approvedKyc,
       enabledModules
     ] = await Promise.all([
-      isSuperAdmin ? this.prisma.tenant.count() : Promise.resolve(1),
-      this.prisma.client.count({ where: tenantFilter }),
+      this.prisma.tenant.count({ where: isSuperAdmin ? {} : { id: user.tenantId || '' } }),
+      this.prisma.client.count({ where: { ...tenantFilter, status: 'ACTIVE' } }),
       this.prisma.enquiry.count({ where: { ...tenantFilter, status: { in: ['DRAFT', 'SUBMITTED_TO_AML_SUPERVISOR', 'RETURNED_TO_BD', 'READY_FOR_KYC'] } } }),
       this.prisma.kycCase.count({
         where: {
@@ -31,7 +32,12 @@ export class DashboardService {
               KycCaseStatus.INQUIRY_RECEIVED,
               KycCaseStatus.PROPOSAL_OPTIONAL,
               KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
-              KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED
+              KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
+              KycCaseStatus.RETURNED_TO_BD,
+              KycCaseStatus.SUBMITTED_TO_AML,
+              KycCaseStatus.AML_REVIEW_STARTED,
+              KycCaseStatus.FINAL_SIGNATURES_PENDING,
+              KycCaseStatus.FINAL_DOCUMENTS_PENDING
             ]
           }
         }
@@ -39,7 +45,16 @@ export class DashboardService {
       this.prisma.kycCase.count({
         where: {
           ...tenantFilter,
-          status: { in: [KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.MLRO_REVIEW_PENDING, KycCaseStatus.SEF_DECISION_PENDING] }
+          status: { in: [
+            KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_REVIEW_IN_PROGRESS,
+            KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED, KycCaseStatus.SUPERVISOR_REVIEW_COMPLETED,
+            KycCaseStatus.DMLRO_REVIEW_PENDING, KycCaseStatus.DMLRO_REVIEW_IN_PROGRESS,
+            KycCaseStatus.DMLRO_ADDITIONAL_INFORMATION_REQUIRED, KycCaseStatus.DMLRO_REVIEW_COMPLETED,
+            KycCaseStatus.MLRO_REVIEW_PENDING, KycCaseStatus.MLRO_REVIEW_IN_PROGRESS,
+            KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED, KycCaseStatus.MLRO_APPROVED,
+            KycCaseStatus.MLRO_APPROVED_WITH_CONDITIONS, KycCaseStatus.SEF_DECISION_PENDING,
+            KycCaseStatus.SEF_DECISION_IN_PROGRESS, KycCaseStatus.SEF_APPROVED
+          ] }
         }
       }),
       this.prisma.kycCase.count({
