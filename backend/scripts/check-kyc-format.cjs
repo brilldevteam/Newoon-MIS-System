@@ -73,9 +73,11 @@ async function main() {
     kycCase: { findFirst: async () => ({ status }), findUniqueOrThrow: async () => ({ id: 'c', status }) },
     internalReviewTask: { updateMany: async (args) => { writes.tasks.push(args); return { count: 1 }; } },
     auditLog: { create: async ({ data }) => { writes.audits.push(data); } },
-    kycForm: { findUnique: async () => ({ status: 'FINAL_DRAFT' }) },
+    kycForm: { findUnique: async () => ({ status: 'FINAL_DRAFT' }), update: async ({ data }) => { writes.forms.push(data); } },
     notification: { create: async () => ({}) }
   };
+  writes.forms = [];
+  const notified = [];
   const service = Object.create(KycService.prototype);
   service.prisma = { $transaction: async (fn) => fn(tx), internalReviewSubmission: { findUnique: async () => null } };
   service.findOne = async () => ({ id: 'c', tenantId: 't', title: 'Synthetic Co KYC', status });
@@ -85,12 +87,15 @@ async function main() {
   service.lockReviewSubmission = async (_tx, _user, _case, stage, dto) => { writes.locked = { stage, dto }; return { id: 'sub' }; };
   service.clearReviewTaskStatus = async () => {};
   service.upsertActivationChecklist = async () => {};
-  service.createNotification = async () => {};
+  service.createNotification = async (_tx, _case, type) => { notified.push(type); };
   const mlro2 = { id: 'm', roles: ['MLRO'] };
   await assert.rejects(service.decideMlroReview(mlro2, 'c', { decision: 'APPROVE' }), /DMLRO has not reviewed this case yet/);
   await assert.rejects(service.decideMlroReview(mlro2, 'c', { decision: 'RETURN_TO_DMLRO', reason: 'x' }), /already with DMLRO/);
   await service.decideMlroReview(mlro2, 'c', { decision: 'APPROVE', formalComments: '<p>DMLRO on leave; low risk, approved.</p>', data: { decision: 'APPROVE' } });
-  assert.deepEqual(writes.statuses, ['MLRO_REVIEW_IN_PROGRESS', 'MLRO_APPROVED']);
+  // MLRO approval makes the KYC final straight away and tells Operations to convert it.
+  assert.deepEqual(writes.statuses, ['MLRO_REVIEW_IN_PROGRESS', 'MLRO_APPROVED', 'KYC_FINAL_APPROVED']);
+  assert.deepEqual(writes.forms, [{ status: 'FINAL', isLocked: true, updatedBy: 'm' }]);
+  assert.ok(notified.includes('CLIENT_READY_FOR_ACTIVATION'), JSON.stringify(notified));
   assert.equal(writes.tasks[0].where.stage, 'DMLRO');
   assert.equal(writes.tasks[0].data.status, 'CANCELLED', 'The open DMLRO task is closed');
   assert.equal(writes.locked.stage, 'MLRO');
@@ -102,6 +107,20 @@ async function main() {
   tx.kycCase.findFirst = async () => ({ status: 'MLRO_REVIEW_PENDING' });
   await assert.rejects(service.decideMlroReview(mlro2, 'c', { decision: 'APPROVE', formalComments: '<p>ok</p>' }), /case changed/);
   tx.kycCase.findFirst = raced;
+
+  // A Preliminary KYC (proposed company, full KYC not started) keeps the "final or full KYC" decision.
+  status = 'DMLRO_REVIEW_PENDING'; writes.statuses = []; writes.forms = []; notified.length = 0;
+  tx.kycForm.findUnique = async () => ({ status: 'SUBMITTED', fullKycStarted: false, sections: [{ data: { formVariant: 'PRELIMINARY_PROPOSED_COMPANY' } }] });
+  await service.decideMlroReview(mlro2, 'c', { decision: 'APPROVE', formalComments: '<p>ok</p>' });
+  assert.deepEqual(writes.statuses, ['MLRO_REVIEW_IN_PROGRESS', 'MLRO_APPROVED']);
+  assert.deepEqual(writes.forms, []);
+  assert.equal(notified.includes('CLIENT_READY_FOR_ACTIVATION'), false);
+  // Rejection never makes the KYC final.
+  status = 'DMLRO_REVIEW_PENDING'; writes.statuses = []; writes.forms = [];
+  tx.kycForm.findUnique = async () => ({ status: 'FINAL_DRAFT' });
+  await service.decideMlroReview(mlro2, 'c', { decision: 'REJECT', reason: 'no', formalComments: '<p>no</p>' });
+  assert.deepEqual(writes.forms, []);
+  assert.equal(writes.statuses.includes('KYC_FINAL_APPROVED'), false);
 
   console.log('KYC format checks passed: B Managers / C Shareholders with UBO List before the chart, H on a new page, empty review rows and unused SEF hidden, Section H fallbacks and DMLRO wording, MLRO decision for an absent DMLRO (mocked persistence).');
 }

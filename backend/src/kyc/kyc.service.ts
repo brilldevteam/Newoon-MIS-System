@@ -901,6 +901,7 @@ export class KycService {
         });
         await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'DMLRO_FINAL_APPROVAL_WITHOUT_MLRO', reason: reason || conditions });
         await this.createNotification(tx, kycCase, NotificationType.MLRO_APPROVAL_COMPLETED, 'DMLRO final approval completed', `${kycCase.title} was approved by DMLRO during MLRO absence.`);
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'DMLRO final approval completed - KYC is final.');
         await this.upsertActivationChecklist(tx, user, kycCase);
         return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
       });
@@ -970,11 +971,8 @@ export class KycService {
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, { ...dto, ...(bypassingDmlro ? { data: { ...preliminaryObject(dto.data), bypassedDmlro: true } } : {}) });
       const targetStatus = this.mlroDecisionStatus(decision);
       await this.recordStatus(tx, kycCase, user, targetStatus, this.mlroStatusNote(decision));
-      const finalReviewForm = await tx.kycForm.findUnique({ where: { kycCaseId: id }, select: { status: true } });
-      if (finalReviewForm?.status === 'PRELIMINARY_FINAL_REVIEW' && (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS)) {
-        await tx.kycForm.update({ where: { kycCaseId: id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
-        await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, 'Final DMLRO and MLRO approval completed for the Preliminary KYC.');
-        await this.notifyReadyForClientConversion(tx, kycCase);
+      if (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS) {
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'MLRO approval completed - KYC is final.');
       }
       await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({
@@ -1073,6 +1071,9 @@ export class KycService {
       });
       await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', saved.id, { action: 'SEF_DECISION', decision });
       await this.createNotification(tx, kycCase, NotificationType.SEF_DECISION_COMPLETED, 'SEF decision completed', `${kycCase.title}: ${decision}`);
+      if (decision !== ReviewDecision.REJECT) {
+        await this.finalizeApprovedKyc(tx, user, kycCase, 'SEF approval completed - KYC is final.');
+      }
       await this.upsertActivationChecklist(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     });
@@ -1566,6 +1567,29 @@ export class KycService {
       await this.notifyReadyForClientConversion(tx, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
     });
+  }
+
+  // The last required approval (MLRO, DMLRO-final or SEF) makes the KYC final straight away and tells
+  // Operations to convert it; changes after that go through an amendment. The one exception is a Preliminary
+  // KYC for a proposed company that has not been confirmed as final yet: AML Supervisor, DMLRO or MLRO still
+  // choose between "this Preliminary KYC is final" and "complete the full KYC" (completeFinalKycDecision).
+  private async finalizeApprovedKyc(
+    tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; title: string; status: KycCaseStatus }, note: string
+  ) {
+    const form = await tx.kycForm.findUnique({
+      where: { kycCaseId: kycCase.id },
+      select: { status: true, fullKycStarted: true, sections: { where: { sectionKey: KycFormSectionKey.GENERAL_COMPANY }, select: { data: true } } }
+    });
+    if (!form) return false;
+    const sectionA = preliminaryObject(form.sections?.[0]?.data);
+    const preliminaryDecisionPending = form.status !== 'PRELIMINARY_FINAL_REVIEW'
+      && sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted;
+    if (preliminaryDecisionPending) return false;
+    await tx.kycForm.update({ where: { kycCaseId: kycCase.id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
+    await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
+    await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action: 'KYC_MARKED_FINAL_ON_APPROVAL' });
+    await this.notifyReadyForClientConversion(tx, kycCase);
+    return true;
   }
 
   // Operations (and the reviewer roles) see CLIENT_READY_FOR_ACTIVATION; it opens the KYC case,

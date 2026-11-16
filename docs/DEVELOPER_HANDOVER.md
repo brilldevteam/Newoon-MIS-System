@@ -178,6 +178,20 @@ From the client's "Issues identified" and "Format" documents.
 - **Checks:** `check-ownership-review.cjs` and `check-kyc-compliance.cjs` were updated for the new wording. No migration is needed.
 - **Local verification:** the guide was checked in the browser at every stage, from AML preparation through Client active, as AML Supervisor and Operations, including phone width. The DMLRO, MLRO and SEF "your turn" views were not opened as those roles; they use the same code path as the views that were checked.
 
+## Approval Makes the KYC Final Automatically (2026-11-16)
+
+- Before this change, after the last required approval the case sat at `MLRO_APPROVED` / `SEF_APPROVED` ("Required approvals completed - final KYC decision pending"). AML Supervisor, DMLRO or MLRO then had to click a separate final-KYC confirmation before Operations could convert the case.
+- Now the last approval completes the KYC (`finalizeApprovedKyc` in `backend/src/kyc/kyc.service.ts`). The approvals that do this are MLRO Approve or Approve with conditions, DMLRO final approval during MLRO absence, and SEF Approve or Approve with conditions. In the same transaction:
+  - the form becomes `FINAL` and locked;
+  - the case moves to `KYC_FINAL_APPROVED`;
+  - an audit entry (`KYC_MARKED_FINAL_ON_APPROVAL`) is written;
+  - Operations receives "Final KYC approved - convert to client".
+- Rejections, returns, information requests and Send to SEF do not make the KYC final.
+- **Exception:** a Preliminary KYC for a proposed company whose full KYC has not been started still stops at the final-KYC decision, because there the choice is between "this Preliminary KYC is final" and "complete the full KYC".
+- **Amendments:** later changes go through the existing amendment flow.
+- **Existing cases:** cases already at `MLRO_APPROVED` / `SEF_APPROVED` before this deploy keep the manual "Confirm as final KYC" button. Confirm them once.
+- **Checks:** `check-kyc-format.cjs` covers the normal case, the Preliminary exception and rejection. No migration is needed.
+
 ## Preliminary KYC Final Decision in One Step (2026-11-10)
 
 - Before this change, **Final KYC Decision → Use Preliminary KYC as final** on an approved Preliminary (proposed-company) KYC sent the case back for a second DMLRO and MLRO approval. It also locked the form (`KycForm.status = PRELIMINARY_FINAL_REVIEW`). That lock disabled Section H for the reviewers, so those cases could not move on.
