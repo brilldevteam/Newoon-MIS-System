@@ -41,6 +41,8 @@ export function AccessControlPage() {
     setSuccess('');
     try {
       const updated = await updateRoleAccess(selectedRole, values);
+      window.dispatchEvent(new Event('access-updated'));
+      localStorage.setItem('newoon_access_updated', String(Date.now()));
       setMatrix(updated);
       setDraft({});
       setSuccess(`${roleLabels[selectedRole] || selectedRole} access saved.`);

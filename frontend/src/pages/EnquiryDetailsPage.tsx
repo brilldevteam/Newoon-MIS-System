@@ -18,6 +18,7 @@ import {
 import { getApiErrorMessage } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 const enquiryTypeLabels: Record<string, string> = {
@@ -187,11 +188,7 @@ export function EnquiryDetailsPage() {
   const details = enquiry.details || {};
   const preliminaryKyc = details.preliminaryKyc && typeof details.preliminaryKyc === 'object' ? details.preliminaryKyc as Record<string, any> : null;
   const enquiryReturnedOrDraft = ['DRAFT', 'RETURNED_TO_BD'].includes(enquiry.status);
-  const enquiryReviewLocked = enquiry.generatedKycCases?.some((item) => !['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(item.status));
-  const canEditEnquiry =
-    hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN']) ||
-    (!enquiryReviewLocked && (hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM']) ||
-    (hasAnyRole(user, ['OPERATING_TEAM']) && enquiryReturnedOrDraft)));
+  const canEditEnquiry = canEditEnquiryRecord(user, enquiry);
   const canSubmitToAmlSupervisor = hasAnyRole(user, workflowRoles.caseCreation) && enquiryReturnedOrDraft;
   const canAmlManageStatus = hasAnyRole(user, ['AML_SUPERVISOR', 'AML_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const canAddComment = hasAnyRole(user, ['OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);

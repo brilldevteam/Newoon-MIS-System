@@ -21,6 +21,7 @@ import { useAuth } from '../hooks/useAuth';
 import { AccountMenu } from '../components/AccountMenu';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
 import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
+import { enquiryNotificationLink } from '../utils/enquiry-notification-link';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
@@ -214,7 +215,7 @@ export function AppLayout() {
                         notifications.map((notification) => (
                           <Link
                             key={notification.id}
-                            to={notificationLink(notification)}
+                            to={enquiryNotificationLink(notification, user) || notificationLink(notification)}
                             onClick={() => markRead(notification)}
                             className={`block border-b border-slate-100 px-4 py-3 last:border-b-0 hover:bg-slate-50 ${
                               notification.isRead ? 'bg-white' : 'bg-brand-50/50'
