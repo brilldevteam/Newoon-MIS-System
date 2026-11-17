@@ -13,6 +13,7 @@ const { KycService } = require('../dist/kyc/kyc.service');
 const { AccessControlService, ACCESS_AREAS } = require('../dist/access-control/access-control.service');
 const profile = require('../dist/compliance-clients/compliance-client-profile');
 const { syncIdentityExpiryItems } = require('../dist/compliance-clients/identity-expiry-sync');
+const mrz = require('../dist/common/mrz');
 const { nextReviewDateFor, nextClientCode, nextEngagementNumber, legacyClientCode, onboardingRiskProfile } = require('../dist/common/client-compliance');
 
 // Synthetic persistence only: never connects to the configured database.
@@ -855,10 +856,40 @@ async function checkMonitoring() {
   assert.equal(second.created, 0, 'Repeated sweeps do not repeat reminders');
 }
 
+// Machine-readable zone parsing (ICAO 9303 specimens): check digits, OCR look-alikes, ID-card number overflow.
+async function checkMrz() {
+  const join = (...lines) => lines.join('\n');
+  const passport = mrz.parseMrz(join('P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<', 'L898902C36UTO7408122F1204159ZE184226B<<<<<10'));
+  assert.equal(passport.format, 'TD3');
+  assert.equal(passport.documentNumber, 'L898902C3');
+  assert.equal(passport.documentNumberCheck, 'OK');
+  assert.equal(passport.expiryDate, '2012-04-15');
+  assert.equal(passport.expiryValid, true);
+  const noisy = mrz.parseMrz(join('header', 'P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<', 'L8989O2C36UTO74O8122F12O4159ZE184226B<<<<<1O'));
+  assert.equal(noisy.documentNumber, 'L898902C3', 'O read for 0 is corrected when the check digit then matches');
+  assert.equal(noisy.documentNumberCheck, 'CORRECTED', 'A corrected number is flagged for checking');
+  assert.equal(noisy.expiryDate, '2012-04-15');
+  const card = mrz.parseMrz(join('I<UTOD231458907<<<<<<<<<<<<<<<', '7408122F1204159UTO<<<<<<<<<<<6', 'ERIKSSON<<ANNA<MARIA<<<<<<<<<<'));
+  assert.equal(card.format, 'TD1');
+  assert.equal(card.documentNumber, 'D23145890');
+  const qid = '28412345678';
+  const line1 = ('IDQAT' + qid.slice(0, 9) + '<' + qid.slice(9) + mrz.checkDigit(qid)).padEnd(30, '<');
+  const line2 = '840101' + mrz.checkDigit('840101') + 'M281101' + mrz.checkDigit('281101') + 'QAT<<<<<<<<<<<0';
+  const overflow = mrz.parseMrz(join(line1, line2, 'AL<MANSOORI<<KHALID<<<<<<<<<<<'));
+  assert.equal(overflow.documentNumber, qid, 'An 11-digit QID number continues in the optional data');
+  assert.equal(overflow.documentNumberCheck, 'OK');
+  assert.equal(overflow.expiryDate, '2028-11-01');
+  assert.equal(overflow.expiryValid, true);
+  const wrong = mrz.parseMrz(join('P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<', 'L898902C36UTO7408122F1204158ZE184226B<<<<<10'));
+  assert.equal(wrong.expiryValid, false, 'A date that fails its check digit is not confirmed');
+  assert.equal(mrz.parseMrz('no machine readable zone here'), null);
+}
+
 async function main() {
   await checkMonitoring();
   await checkDocuments();
   await checkProfileMapping();
+  await checkMrz();
   await checkProfileEdits();
   await checkRekycCompletion();
   await checkProfileAccess();

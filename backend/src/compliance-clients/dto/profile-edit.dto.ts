@@ -54,3 +54,9 @@ export class LinkKycIdentityDocumentDto extends UploadIdentityDocumentDto {
   @MaxLength(100)
   legalDocumentId!: string;
 }
+
+// Multipart field sent with a file whose number and expiry date should be read to pre-fill the upload form.
+export class ReadIdentityDocumentDto {
+  @IsIn(['QID', 'PASSPORT'])
+  identityType!: 'QID' | 'PASSPORT';
+}

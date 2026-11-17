@@ -225,11 +225,37 @@ export function uploadIdentityDocument(
   return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents`, data, { timeout: 120000 }).then((response) => response.data);
 }
 
+// What the server read from a QID / passport file's machine-readable lines; used only to pre-fill the upload form.
+export type IdentityDocumentReading =
+  | { found: false; message: string }
+  | {
+      found: true;
+      format: 'TD3' | 'TD1';
+      documentType: string;
+      issuingCountry: string;
+      documentNumber: string | null;
+      documentNumberCheck: 'OK' | 'CORRECTED' | 'FAILED';
+      expiryDate: string | null;
+      expiryValid: boolean;
+      nameOnDocument: string;
+      nationality: string;
+      typeMatches: boolean;
+    };
+
+export function readIdentityDocument(clientId: string, identityType: 'QID' | 'PASSPORT', file: File) {
+  const data = new FormData();
+  data.append('identityType', identityType);
+  data.append('files', file);
+  return api.post<IdentityDocumentReading>(`/compliance/clients/${clientId}/identity-documents/read`, data, { timeout: 120000 }).then((response) => response.data);
+}
+
 export function linkKycIdentityDocument(
   clientId: string,
   payload: { legalDocumentId: string; section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT' }
 ) {
-  return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, rowId: payload.rowId || undefined }).then((response) => response.data);
+  return api
+    .post<ComplianceClientDetail & { readFromDocument: { documentNumber: string; expiryDate: string } | null }>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, rowId: payload.rowId || undefined }, { timeout: 120000 })
+    .then((response) => response.data);
 }
 
 export function startComplianceRekyc(id: string) {

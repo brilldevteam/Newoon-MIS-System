@@ -1,11 +1,13 @@
-import { CalendarClock, Eye, FileText, IdCard, Link2, LoaderCircle, RefreshCw, Upload, X } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Eye, FileText, IdCard, Info, Link2, LoaderCircle, RefreshCw, ScanLine, Upload, X } from 'lucide-react';
 import { FormEvent, ReactNode, useState } from 'react';
 import { getApiErrorMessage } from '../services/api';
 import {
   ComplianceClientDetail,
   IdentityDocument,
+  IdentityDocumentReading,
   linkKycIdentityDocument,
   personKey,
+  readIdentityDocument,
   ProfileRef,
   uploadIdentityDocument,
   viewClientDocument
@@ -128,7 +130,9 @@ export function IdentityDocumentsBlock({ person, context }: { person: Person; co
     try {
       const next = await linkKycIdentityDocument(context.clientId, { legalDocumentId: document.id, section: person.ref.section, rowId: person.ref.rowId, identityType: type });
       context.onUploaded(next);
-      showToast(`Saved as the ${type === 'QID' ? 'QID' : 'passport'} copy of ${person.fullName}.`, 'success');
+      showToast(next.readFromDocument
+        ? `Saved as the ${type === 'QID' ? 'QID' : 'passport'} copy of ${person.fullName}. Number ${next.readFromDocument.documentNumber} and expiry ${formatDate(next.readFromDocument.expiryDate)} were read from the document.`
+        : `Saved as the ${type === 'QID' ? 'QID' : 'passport'} copy of ${person.fullName}. Enter the number and expiry with the pencils if they are missing.`, 'success');
     } catch (requestError) {
       showToast(getApiErrorMessage(requestError, 'Unable to use this document.'), 'error');
     } finally {
@@ -304,6 +308,32 @@ function UploadForm({ type, person, context, replacing, onDone }: { type: IdType
   const [expiryDate, setExpiryDate] = useState(((type === 'QID' ? person.qidExpiry : person.passportExpiry) || '').slice(0, 10));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [reading, setReading] = useState(false);
+  const [readResult, setReadResult] = useState<IdentityDocumentReading | null>(null);
+  const [filled, setFilled] = useState<{ number: boolean; expiry: boolean }>({ number: false, expiry: false });
+  const currentNumber = (type === 'QID' ? person.qidNumber : person.passportNumber) || '';
+
+  // Reads the machine-readable lines of the chosen file and pre-fills the number and expiry for review.
+  async function chooseFile(next: File | null) {
+    setFile(next);
+    setReadResult(null);
+    setFilled({ number: false, expiry: false });
+    if (!next) return;
+    setReading(true);
+    try {
+      const result = await readIdentityDocument(context.clientId, type, next);
+      setReadResult(result);
+      if (result.found && result.typeMatches) {
+        if (result.documentNumber) setDocumentNumber(result.documentNumber);
+        if (result.expiryDate) setExpiryDate(result.expiryDate);
+        setFilled({ number: Boolean(result.documentNumber), expiry: Boolean(result.expiryDate) });
+      }
+    } catch (requestError) {
+      setReadResult({ found: false, message: getApiErrorMessage(requestError, 'The file could not be read. Enter the number and expiry date from the document.') });
+    } finally {
+      setReading(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -332,23 +362,28 @@ function UploadForm({ type, person, context, replacing, onDone }: { type: IdType
       <p className="text-xs font-semibold text-slate-700">{replacing ? `Replace the ${label} copy` : `Upload the ${label} copy`}</p>
       <label className="block text-xs font-medium text-slate-700">
         File *
-        <input type="file" accept={STANDARD_DOCUMENT_ACCEPT} disabled={saving} onChange={(event) => setFile(event.target.files?.[0] || null)} className="mt-1 block w-full text-xs" />
-        <span className="mt-0.5 block font-normal text-slate-500">One file: PDF, Word, Excel or an image (JPG, PNG, GIF, WEBP), up to 10 MB.</span>
+        <input type="file" accept={STANDARD_DOCUMENT_ACCEPT} disabled={saving || reading} onChange={(event) => chooseFile(event.target.files?.[0] || null)} className="mt-1 block w-full text-xs" />
+        <span className="mt-0.5 block font-normal text-slate-500">
+          One file: PDF, Word, Excel or an image (JPG, PNG, GIF, WEBP), up to 10 MB. The number and expiry are read from the machine-readable lines ({type === 'QID' ? 'back of the QID' : 'bottom of the photo page'}).
+        </span>
       </label>
+      {reading ? (
+        <p className="flex items-center gap-1.5 rounded-md bg-white px-2 py-1.5 text-xs text-slate-600"><LoaderCircle className="h-3.5 w-3.5 animate-spin" />Reading the number and expiry date from the document...</p>
+      ) : readResult ? <ReadingNote result={readResult} label={label} type={type} personName={person.fullName} currentNumber={currentNumber} /> : null}
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block text-xs font-medium text-slate-700">
           {label} number
-          <input value={documentNumber} maxLength={100} disabled={saving} onChange={(event) => setDocumentNumber(event.target.value)} className={`${inputClass} mt-1`} />
+          <input value={documentNumber} maxLength={100} disabled={saving} onChange={(event) => { setDocumentNumber(event.target.value); setFilled((current) => ({ ...current, number: false })); }} className={`${inputClass} mt-1 ${filled.number ? 'border-emerald-300 bg-emerald-50' : ''}`} />
         </label>
         <label className="block text-xs font-medium text-slate-700">
           Expiry date
-          <TypedDateInput value={expiryDate} onChange={setExpiryDate} disabled={saving} className={`${inputClass} mt-1`} />
+          <TypedDateInput value={expiryDate} onChange={(value) => { setExpiryDate(value); setFilled((current) => ({ ...current, expiry: false })); }} disabled={saving} className={`${inputClass} mt-1 ${filled.expiry ? 'border-emerald-300 bg-emerald-50' : ''}`} />
         </label>
       </div>
       <p className="text-xs text-slate-500">{replacing ? 'The current copy is kept under Earlier copies. ' : ''}Saving also updates the {label} number and expiry of this person, and a new expiry date restarts the 60 / 30-day reminders.</p>
       {error ? <p className="text-xs text-red-700">{error}</p> : null}
       <div className="flex gap-2">
-        <button type="submit" disabled={saving} className="inline-flex items-center gap-1 rounded-md bg-brand-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
+        <button type="submit" disabled={saving || reading} className="inline-flex items-center gap-1 rounded-md bg-brand-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
           {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
           {replacing ? 'Replace' : 'Upload'}
         </button>
@@ -357,5 +392,52 @@ function UploadForm({ type, person, context, replacing, onDone }: { type: IdType
         </button>
       </div>
     </form>
+  );
+}
+
+// Explains what was read from the file: confirmed values, values to check, a wrong document type or another name.
+function ReadingNote({ result, label, type, personName, currentNumber }: { result: IdentityDocumentReading; label: string; type: IdType; personName: string | null; currentNumber: string }) {
+  if (!result.found) {
+    return (
+      <p className="flex items-start gap-1.5 rounded-md bg-white px-2 py-1.5 text-xs text-slate-600">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+        <span>{result.message} {type === 'QID' ? 'A QID front side has no machine-readable lines; upload the back, or both sides in one file.' : 'Use a clear scan of the photo page.'}</span>
+      </p>
+    );
+  }
+  if (!result.typeMatches) {
+    return (
+      <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>This looks like {result.format === 'TD3' ? 'a passport' : 'an ID card'} ({result.issuingCountry}, no. {result.documentNumber || 'unknown'}), not a {label}. Nothing was filled in; check you are in the right box.</span>
+      </p>
+    );
+  }
+  const numberOk = result.documentNumberCheck === 'OK';
+  const confirmed = numberOk && result.expiryValid;
+  const tokens = (value: string | null) => (value || '').toUpperCase().split(/[^A-Z]+/).filter((token) => token.length > 2);
+  const personTokens = tokens(personName);
+  const nameMismatch = result.nameOnDocument && personTokens.length && !tokens(result.nameOnDocument).some((token) => personTokens.includes(token));
+  const toCheck = [!numberOk && 'the number', !result.expiryValid && 'the expiry date'].filter(Boolean).join(' and ');
+  return (
+    <div className="space-y-1">
+      <p className={`flex items-start gap-1.5 rounded-md px-2 py-1.5 text-xs ${confirmed ? 'border border-emerald-200 bg-emerald-50 text-emerald-800' : 'border border-amber-200 bg-amber-50 text-amber-800'}`}>
+        {confirmed ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <ScanLine className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+        <span>
+          {confirmed
+            ? 'Number and expiry date read from the document and confirmed by its check digits. Still compare them with the document before uploading.'
+            : `Read from the document, but ${toCheck} could not be confirmed. Check ${toCheck === 'the number and the expiry date' ? 'them' : 'it'} against the document.`}
+        </span>
+      </p>
+      {nameMismatch ? (
+        <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>The name on the document reads "{result.nameOnDocument}". Check this is the {label} of {personName}.</span>
+        </p>
+      ) : null}
+      {currentNumber && result.documentNumber && currentNumber.replace(/\s/g, '').toUpperCase() !== result.documentNumber ? (
+        <p className="px-2 text-xs text-slate-500">The number on file was {currentNumber}; saving replaces it.</p>
+      ) : null}
+    </div>
   );
 }

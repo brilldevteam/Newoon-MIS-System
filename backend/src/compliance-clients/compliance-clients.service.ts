@@ -7,6 +7,9 @@ import { userSummarySelect } from '../common/user-summary';
 import { KycService } from '../kyc/kyc.service';
 import { applyOverrides, identityExpiries, optionText, personKey, profileFieldSpec, profileFromForm, ProfileOverride, rowKey, text } from './compliance-client-profile';
 import { ComplianceDocumentsService, UploadedClientFile } from './compliance-documents.service';
+import { IdDocumentReaderService } from './id-document-reader.service';
+import { standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
+import { MrzResult } from '../common/mrz';
 import { syncIdentityExpiryItems } from './identity-expiry-sync';
 import { UpdateProfileFieldDto } from './dto/profile-edit.dto';
 import { expiryState } from './compliance-monitoring.service';
@@ -72,7 +75,8 @@ export class ComplianceClientsService {
     private readonly prisma: PrismaService,
     private readonly kycService?: KycService,
     private readonly accessControl?: AccessControlService,
-    private readonly documents?: ComplianceDocumentsService
+    private readonly documents?: ComplianceDocumentsService,
+    private readonly reader?: IdDocumentReaderService
   ) {}
 
   // Client profile for the compliance client page. Company and party details are read from the client's
@@ -334,9 +338,59 @@ export class ComplianceClientsService {
     });
     if (!legal) throw new NotFoundException('KYC document not found for this client.');
     const file = await this.kycService.getLegalDocumentFile(user, legal.kycCaseId, legal.id);
-    return this.uploadIdentityDocument(user, id, input, [
-      { originalname: file.fileName, mimetype: file.mimeType || undefined, size: file.content.length, buffer: file.content }
-    ], `From ${legal.kycCase.kycNumber} (${legal.documentType})`);
+    const upload = { originalname: file.fileName, mimetype: file.mimeType || undefined, size: file.content.length, buffer: file.content };
+    // Without typed values, use the number and expiry read from the file, but only when both pass their check digits
+    // exactly as read and the document is the right kind; otherwise staff enter them with the pencils.
+    let readFromDocument: { documentNumber: string; expiryDate: string } | null = null;
+    if (!this.optionalText(input.documentNumber) && !this.optionalText(input.expiryDate)) {
+      const read = await this.readSafely(upload);
+      if (read && read.documentNumber && read.expiryDate && read.documentNumberCheck === 'OK' && read.expiryValid && this.typeMatches(read, input.identityType)) {
+        readFromDocument = { documentNumber: read.documentNumber, expiryDate: read.expiryDate };
+      }
+    }
+    const detail = await this.uploadIdentityDocument(user, id, { ...input, ...(readFromDocument || {}) }, [upload], `From ${legal.kycCase.kycNumber} (${legal.documentType})`);
+    return { ...detail, readFromDocument };
+  }
+
+  // Reads the number and expiry date from a QID / passport copy (machine-readable zone, local OCR) to pre-fill the
+  // upload form. Nothing is stored; staff check the values before saving.
+  async readIdentityDocument(user: RequestUser, id: string, identityType: string | undefined, files: UploadedClientFile[]) {
+    const client = await this.prisma.client.findFirst({ where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE }, select: { id: true } });
+    if (!client) throw new NotFoundException('Compliance client not found');
+    if (files.length !== 1) throw new BadRequestException('Select one file to read.');
+    validateUploadFiles(files, standardDocumentKinds, 'document');
+    const read = await this.readSafely(files[0]);
+    if (!read || (!read.documentNumber && !read.expiryDate)) {
+      return { found: false, message: 'The number and expiry date could not be read from this file. Enter them from the document.' };
+    }
+    return {
+      found: true,
+      format: read.format,
+      documentType: read.documentType,
+      issuingCountry: read.issuingCountry,
+      documentNumber: read.documentNumber,
+      documentNumberCheck: read.documentNumberCheck,
+      expiryDate: read.expiryDate,
+      expiryValid: read.expiryValid,
+      nameOnDocument: [read.givenNames, read.surname].filter(Boolean).join(' '),
+      nationality: read.nationality,
+      typeMatches: this.typeMatches(read, identityType)
+    };
+  }
+
+  private async readSafely(file: UploadedClientFile) {
+    if (!this.reader) return null;
+    try {
+      return await this.reader.read(file);
+    } catch (error) {
+      // Reading is a convenience: a file that cannot be read (or a reader problem) falls back to manual entry.
+      return null;
+    }
+  }
+
+  // A passport has a TD3 zone with document type P; an ID card such as the QID a TD1 zone.
+  private typeMatches(read: MrzResult, identityType: string | undefined) {
+    return identityType === 'PASSPORT' ? read.format === 'TD3' && read.documentType.startsWith('P') : identityType === 'QID' ? read.format === 'TD1' : false;
   }
 
   // Starts a periodic re-KYC prefilled from the current profile (including edits made on this page). The earlier

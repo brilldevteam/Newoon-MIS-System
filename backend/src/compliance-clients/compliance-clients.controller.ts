@@ -8,7 +8,7 @@ import { standardDocumentKinds, uploadInterceptorOptions } from '../common/secur
 import { RequestUser } from '../common/types/request-user.type';
 import { ComplianceClientQuery, ComplianceClientsService } from './compliance-clients.service';
 import { UploadedClientFile } from './compliance-documents.service';
-import { LinkKycIdentityDocumentDto, UpdateProfileFieldDto, UploadIdentityDocumentDto } from './dto/profile-edit.dto';
+import { LinkKycIdentityDocumentDto, ReadIdentityDocumentDto, UpdateProfileFieldDto, UploadIdentityDocumentDto } from './dto/profile-edit.dto';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
 
 // Access follows the "compliance" area of the role matrix (see RolesGuard): GET needs view, PATCH needs edit.
@@ -57,6 +57,13 @@ export class ComplianceClientsController {
     @UploadedFiles() files: UploadedClientFile[]
   ) {
     return this.complianceClientsService.uploadIdentityDocument(user, id, body, files || []);
+  }
+
+  // Reads the number and expiry date from a QID / passport file to pre-fill the upload form; nothing is stored.
+  @Post(':id/identity-documents/read')
+  @UseInterceptors(FilesInterceptor('files', 1, uploadInterceptorOptions(standardDocumentKinds)))
+  readIdentityDocument(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: ReadIdentityDocumentDto, @UploadedFiles() files: UploadedClientFile[]) {
+    return this.complianceClientsService.readIdentityDocument(user, id, dto.identityType, files || []);
   }
 
   // Uses an ID file uploaded on one of the client's KYC cases as a person's QID / passport copy.

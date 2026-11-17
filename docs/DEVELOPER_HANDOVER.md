@@ -59,6 +59,23 @@ Design confirmed with the user on 2026-11-17: edits are kept on the client recor
     Each has View and "Use as QID" / "Use as passport". `POST /api/compliance/clients/:id/identity-documents/from-kyc` (`legalDocumentId`, `section`, `rowId`, `identityType`) reads the file through `KycService.getLegalDocumentFile` (KYC access checks) and copies it into the person's ID copies with the note "From KYC-… (type)". The KYC file is unchanged.
   - The remaining shared uploads ("QID / Passport copies", "Passport") are one bundle per KYC case for everyone. They are counted with a link to KYC & Documents.
   - A copy stored without a new number or expiry records the person's current values.
+  - **Reading the number and expiry from the file** (user decision 2026-11-17: local reading only, no external AI service):
+    - Choosing a file in the upload form calls `POST /api/compliance/clients/:id/identity-documents/read` (compliance Edit, multipart `files` = one file, `identityType`). Nothing is stored.
+    - `IdDocumentReaderService` runs OCR locally. It reads images with `@napi-rs/canvas` (enlarged, greyscale, contrast stretch; bottom band first) and PDFs by rendering their first two pages with `pdfjs-dist`. OCR uses `tesseract.js` with the bundled English data from `@tesseract.js-data/eng`; nothing is downloaded at runtime.
+    - One worker is reused and jobs are queued one at a time, with a 60-second timeout. On the test documents a read took about 0.5–2 seconds.
+    - `common/mrz.ts` parses the machine-readable zone: passports (TD3) and ID cards (TD1, including the overflow rule for the 11-digit QID number on the back of the Qatar ID), with ICAO check digits.
+    - Look-alike characters (O/0, I/1, S/5, B/8, Z/2, G/6) are corrected only when the check digit then matches, and such a number is reported as `CORRECTED` to be checked against the document.
+    - **Form behaviour:** the number and expiry are filled in and highlighted, with a note:
+      - green: confirmed by check digits;
+      - amber: a value to check;
+      - amber: the name on the document doesn't match the person;
+      - "wrong document type" (a passport in the QID box): nothing is filled in;
+      - "could not be read" (for example a QID front side, which has no machine-readable lines): manual entry.
+
+      Staff still press Upload, and nothing is saved automatically.
+    - "Use as QID / passport" on a KYC file reads the file too. It saves the number and expiry only when both pass their check digits exactly as read and the document type matches; otherwise they stay for the pencils.
+    - **Dependencies added to the backend:** `tesseract.js` ^7.0.0, `@tesseract.js-data/eng` ^1.0.0 (about 11 MB of language data), `pdfjs-dist` ^6.5.438. `pdfjs-dist` needs Node 22.13 or newer; on an older Node, PDF files fall back to manual entry, while images still work. `npm ci` on the server must be able to reach the npm registry. `npm audit` shows 33 advisories in existing packages and none from these.
+    - **Verified locally** with generated test documents (no real ID images): ICAO specimen passport and ID card, a QID back with an 11-digit number, a PDF scan, a tilted and blurred photo, a front-only card (nothing read), and a passport in the QID box (type warning). Not verified with real scanned Qatari IDs or passports.
   - Copies can be removed (soft delete) from the CDD tab's Identity Documents folder.
   - **Migration** `20261117120000_client_identity_documents`: additive nullable `ClientDocument` columns and an index on `(clientId, personKey)`.
   - **Verified locally** (Company Admin, CL-2026-0006):
