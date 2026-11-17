@@ -153,6 +153,11 @@ const percentage = (value: unknown) => {
   return result === null ? null : result.replace(/%$/, '');
 };
 
+// Links uploaded QID / passport copies to a person: the same name on several tabs shares the copies.
+export function personKey(fullName: string | null | undefined) {
+  return (fullName || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
 export function rowKey(row: Rec, index: number) {
   return text(row.id) || `#${index}`;
 }

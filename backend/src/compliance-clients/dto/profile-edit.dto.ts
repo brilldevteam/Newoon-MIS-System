@@ -23,3 +23,27 @@ export class UpdateProfileFieldDto {
   @MaxLength(2000)
   value?: string | null;
 }
+
+// Multipart fields sent with a QID / passport copy for one person on the profile.
+export class UploadIdentityDocumentDto {
+  @IsIn(['SHAREHOLDER', 'UBO', 'OFFICER', 'KEY_CONTACT'])
+  section!: 'SHAREHOLDER' | 'UBO' | 'OFFICER' | 'KEY_CONTACT';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  rowId?: string;
+
+  @IsIn(['QID', 'PASSPORT'])
+  identityType!: 'QID' | 'PASSPORT';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  documentNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  expiryDate?: string;
+}

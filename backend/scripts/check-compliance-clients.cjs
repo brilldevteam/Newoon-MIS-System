@@ -474,6 +474,25 @@ async function checkProfileEdits() {
   await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'shareholderPercentage', value: '120' }), /between 0 and 100/);
   await assert.rejects(editService.updateProfileField({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'COMPANY', field: 'legalName', value: 'x' }), /not found/);
 
+  // ID copy upload: linked to the person by normalized name, refused for corporate rows, updates number and expiry.
+  const storedFiles = [];
+  const docs = { sectionByKey: async (_tenant, key) => ({ id: 'sec-identity', key }), storeFiles: async (_user, client, section, files, options) => storedFiles.push({ client, section, files, options }) };
+  const idService = new ComplianceClientsService(editPrisma, { formSnapshot: async () => form }, undefined, docs);
+  const edits = [];
+  idService.updateProfileField = async (_user, _id, dto) => { edits.push(`${dto.section}|${dto.rowId}|${dto.field}=${dto.value}`); };
+  idService.findOne = async () => 'refreshed';
+  const file = { originalname: 'passport.pdf', mimetype: 'application/pdf', buffer: Buffer.from('%PDF-1.4') };
+  assert.equal(await idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'PASSPORT', documentNumber: ' N555 ', expiryDate: '2031-05-01' }, [file]), 'refreshed');
+  assert.equal(storedFiles[0].section.key, 'identity');
+  assert.equal(storedFiles[0].options.identity.personKey, 'OLD OWNER', 'Copies are linked by the normalized name');
+  assert.equal(storedFiles[0].options.identity.documentNumber, 'N555');
+  assert.deepEqual(edits, ['SHAREHOLDER|s1|passportNumber=N555', 'SHAREHOLDER|s1|passportExpiry=2031-05-01'], 'The person details follow the renewed copy');
+  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's2', identityType: 'QID' }, [file]), /individuals/);
+  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'CR' }, [file]), /QID or passport/);
+  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'QID' }, []), /one file/);
+  await assert.rejects(idService.uploadIdentityDocument({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'QID' }, [file]), /not found/);
+  assert.equal(profile.personKey('  samer   saleh '), 'SAMER SALEH');
+
   // Re-KYC is started from the current KYC with the edits applied.
   let rekyc = null;
   const rekycService = new ComplianceClientsService(editPrisma, {
@@ -560,7 +579,8 @@ async function checkProfileAccess() {
     riskReclassification: { findMany: async () => [] },
     crrfRecord: { findFirst: async () => ({ riskRating: 'HIGH', updatedAt: new Date(), internalComment: 'confidential', documents: [] }) },
     kycInternalReview: { findFirst: async () => null },
-    clientProfileOverride: { findMany: async () => [] }
+    clientProfileOverride: { findMany: async () => [] },
+    clientDocument: { findMany: async ({ where }) => { assert.equal(where.tenantId, 'tenant-a'); return []; } }
   };
   const kycService = { formSnapshot: async (caseId) => { seen.snapshotCase = caseId; return null; } };
   const accessFor = (crrfAllowed) => ({ allows: async () => crrfAllowed, allowsByDefault: () => false });

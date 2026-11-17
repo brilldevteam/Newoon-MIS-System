@@ -169,6 +169,7 @@ export type ComplianceClientDetail = {
     keyContact: ProfileKeyContact;
   } | null;
   editedFields: string[];
+  identityDocuments: IdentityDocument[];
   legalDocuments: Array<{ id: string; kycCaseId: string; documentType: string; fileName: string; mimeType: string | null; createdAt: string }>;
   riskHistory: Array<{
     id: string; kycCaseId: string; previousRisk: ClientRiskLevel | null; newRisk: ClientRiskLevel; reasonCategory: string; explanation: string; effectiveDate: string;
@@ -189,6 +190,39 @@ export function updateComplianceClient(id: string, payload: ComplianceClientUpda
 
 export function updateComplianceProfileField(id: string, payload: { section: ProfileSection; rowId?: string; field: string; value: string | null }) {
   return api.patch<ComplianceClientDetail>(`/compliance/clients/${id}/profile`, payload).then((response) => response.data);
+}
+
+// A QID or passport copy uploaded from a person's details; personKey is the person's normalized full name.
+export type IdentityDocument = {
+  id: string;
+  personKey: string;
+  personName: string | null;
+  identityType: 'QID' | 'PASSPORT';
+  documentNumber: string | null;
+  documentExpiry: string | null;
+  fileName: string;
+  mimeType: string | null;
+  createdAt: string;
+  uploadedBy: { id: string; firstName: string; lastName: string; email: string } | null;
+};
+
+// Same normalization as the backend (personKey in compliance-client-profile.ts).
+export function personKey(fullName: string | null | undefined) {
+  return (fullName || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+export function uploadIdentityDocument(
+  clientId: string,
+  payload: { section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT'; documentNumber?: string; expiryDate?: string; file: File }
+) {
+  const data = new FormData();
+  data.append('section', payload.section);
+  if (payload.rowId) data.append('rowId', payload.rowId);
+  data.append('identityType', payload.identityType);
+  if (payload.documentNumber?.trim()) data.append('documentNumber', payload.documentNumber.trim());
+  if (payload.expiryDate) data.append('expiryDate', payload.expiryDate);
+  data.append('files', payload.file);
+  return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents`, data, { timeout: 120000 }).then((response) => response.data);
 }
 
 export function startComplianceRekyc(id: string) {
@@ -260,7 +294,7 @@ export function deleteClientDocument(clientId: string, documentId: string, reaso
   return api.post<ClientDocumentFolders>(`/compliance/clients/${clientId}/documents/${documentId}/delete`, { reason: reason?.trim() || undefined }).then((response) => response.data);
 }
 
-export async function viewClientDocument(clientId: string, document: ClientDocument) {
+export async function viewClientDocument(clientId: string, document: Pick<ClientDocument, 'id' | 'mimeType' | 'fileName'>) {
   const response = await api.get(`/compliance/clients/${clientId}/documents/${document.id}/view`, { responseType: 'blob' });
   const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
   const url = window.URL.createObjectURL(blob);

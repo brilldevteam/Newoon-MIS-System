@@ -41,6 +41,24 @@ Design confirmed with the user on 2026-11-17: edits are kept on the client recor
     - A synced record cannot be edited in the Expiry tab; change the date on the person instead.
     - The existing reminder sweep notifies QID and passport at 60 and 30 days and when expired (no 90-day reminder). CR and other company documents keep 90/60/30/expired. Each milestone is still claimed once in `ComplianceReminder`, and a new expiry date starts a new set.
     - The notification asks staff to upload the renewed copy (CDD tab) and update the date.
+- **ID copies on each person** (`components/IdentityDocumentsBlock.tsx`):
+  - Every individual's card (shareholders, UBOs, directors/managers, secretary, SEF, key contact) shows its QID copy and passport copy: the latest with View, plus "Earlier copies" as history.
+  - Compliance editors can upload a new copy with "Upload new copy". The form takes the file plus the number and expiry date, prefilled with the current values.
+  - **Endpoint:** `POST /api/compliance/clients/:id/identity-documents` (compliance Edit, multipart `files` = one file, `section`, `rowId`, `identityType` QID/PASSPORT, `documentNumber`, `expiryDate`).
+    - The file is stored as a `ClientDocument` in the new default CDD folder **Identity Documents** (`key: identity`, created automatically for every company). It uses the same upload checks, storage, viewer and audit as other client documents.
+    - The row carries `personKey` (normalized full name), `personName`, `identityType`, `documentNumber` and `documentExpiry`, so the same person listed in several roles shares the copies.
+    - A new number or expiry updates the person through the audited profile edit. That keeps the Expiry record in step and restarts the 60/30-day reminders for the new date; a new document number replaces the old number's Expiry record.
+  - Copies uploaded with the KYC ("QID / Passport copies") are one bundle per KYC case, not per person. The cards link to them in KYC & Documents instead of splitting them.
+  - Copies can be removed (soft delete) from the CDD tab's Identity Documents folder.
+  - **Migration** `20261117120000_client_identity_documents`: additive nullable `ClientDocument` columns and an index on `(clientId, personKey)`.
+  - **Verified locally** (Company Admin, CL-2026-0006):
+    - upload from the Secretary card with prefilled values;
+    - a renewal moved the first copy to "Earlier copies";
+    - View returned the PDF;
+    - the passport Expiry record moved to the new number and date;
+    - the files appear in CDD → Identity Documents;
+    - a copy uploaded for a shareholder also shows on the same person's director card;
+    - synthetic checks for scoping and validation.
 - **Migration** `20261117100000_client_profile_rekyc_identity` is additive only:
   - `KycCasePurpose` enum;
   - nullable columns `Client.currentKycCaseId`, `ClientExpiryItem.sourceKey`, `KycCase.previousKycCaseId`, and `KycCase.purpose` (default `ONBOARDING`);

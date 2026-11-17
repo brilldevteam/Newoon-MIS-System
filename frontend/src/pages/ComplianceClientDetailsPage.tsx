@@ -3,6 +3,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ClientDocumentFolders } from '../components/ClientDocumentFolders';
 import { EditableFields, EditableItem, EditConfig, EditKind } from '../components/EditableFields';
+import { IdentityDocumentsBlock, IdentityDocumentsContext } from '../components/IdentityDocumentsBlock';
 import { ExpiryPanel, ReviewsPanel, ScreeningPanel } from '../components/ComplianceMonitoringPanels';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
@@ -91,6 +92,7 @@ function Empty({ children }: { children: ReactNode }) {
 type ProfileEditing = {
   canEdit: boolean;
   edited: Set<string>;
+  ids: IdentityDocumentsContext;
   save: (ref: ProfileRef, field: string, value: string | null) => Promise<void>;
 };
 
@@ -166,6 +168,7 @@ function PartyCards({ parties, empty, editing, kind }: { parties: ProfileParty[]
               profileItem(editing, party.ref, kind === 'ubo' ? 'UBO interest %' : 'Shareholding %', party.percentage ? `${party.percentage}%` : null, party.percentageField, 'percent', party.percentage),
               profileItem(editing, party.ref, 'Address', party.address, 'residenceAddress', 'longtext', party.address)
             ]} />
+            {!party.isCorporate ? <IdentityDocumentsBlock person={party} context={editing.ids} /> : null}
           </div>
         </article>
       ))}
@@ -202,6 +205,7 @@ function OfficerCards({ officers, empty, editing }: { officers: ProfileOfficer[]
               profileItem(editing, officer.ref, 'Address', officer.address, 'address', 'longtext', officer.address),
               { label: 'Authorized signatory', value: officer.isAuthorizedSignatory ? 'Yes' : 'No' }
             ]} />
+            <IdentityDocumentsBlock person={officer} context={editing.ids} />
           </div>
         </article>
       ))}
@@ -320,6 +324,18 @@ export function ComplianceClientDetailsPage() {
   const editing: ProfileEditing = {
     canEdit: canEdit && Boolean(profile),
     edited: new Set(data.editedFields),
+    ids: {
+      clientId: client.id,
+      canEdit: canEdit && Boolean(profile),
+      documents: data.identityDocuments || [],
+      kycCopies: data.legalDocuments.filter((document) => /qid|passport/i.test(document.documentType)).length,
+      onUploaded: (next) => {
+        setData(next);
+        loadMonitoring();
+        loadFolders();
+      },
+      openKycDocuments: () => setSearchParams({ tab: 'documents' }, { replace: true })
+    },
     save: async (ref, field, value) => {
       const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
       setData(next);
@@ -452,6 +468,7 @@ export function ComplianceClientDetailsPage() {
             </Panel>
             <Panel title="Key communication person">
               {profile ? (
+                <>
                 <EditableFields columns={2} items={[
                   profileItem(editing, profile.keyContact.ref, 'Name', profile.keyContact.fullName, 'fullName', 'text', profile.keyContact.fullName),
                   profileItem(editing, profile.keyContact.ref, 'Position', profile.keyContact.position, 'position', 'list', profile.keyContact.position),
@@ -460,6 +477,8 @@ export function ComplianceClientDetailsPage() {
                   profileItem(editing, profile.keyContact.ref, 'Nationality', profile.keyContact.nationality, 'nationality', 'list', profile.keyContact.nationality),
                   ...identityItems(editing, profile.keyContact as PersonIdentity & { ref: ProfileRef })
                 ]} />
+                {profile.keyContact.fullName ? <IdentityDocumentsBlock person={profile.keyContact} context={editing.ids} /> : null}
+                </>
               ) : data.contacts.length ? (
                 <ul className="space-y-3 text-sm">
                   {data.contacts.map((contact) => (

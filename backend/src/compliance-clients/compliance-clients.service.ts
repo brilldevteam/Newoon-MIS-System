@@ -5,7 +5,8 @@ import { AccessControlService } from '../access-control/access-control.service';
 import { COMPLIANCE_REGISTER_STATUSES, COMPLIANCE_REGISTER_WHERE } from '../common/client-compliance';
 import { userSummarySelect } from '../common/user-summary';
 import { KycService } from '../kyc/kyc.service';
-import { applyOverrides, identityExpiries, optionText, profileFieldSpec, profileFromForm, ProfileOverride, rowKey, text } from './compliance-client-profile';
+import { applyOverrides, identityExpiries, optionText, personKey, profileFieldSpec, profileFromForm, ProfileOverride, rowKey, text } from './compliance-client-profile';
+import { ComplianceDocumentsService, UploadedClientFile } from './compliance-documents.service';
 import { syncIdentityExpiryItems } from './identity-expiry-sync';
 import { UpdateProfileFieldDto } from './dto/profile-edit.dto';
 import { expiryState } from './compliance-monitoring.service';
@@ -70,7 +71,8 @@ export class ComplianceClientsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly kycService?: KycService,
-    private readonly accessControl?: AccessControlService
+    private readonly accessControl?: AccessControlService,
+    private readonly documents?: ComplianceDocumentsService
   ) {}
 
   // Client profile for the compliance client page. Company and party details are read from the client's
@@ -103,9 +105,17 @@ export class ComplianceClientsService {
 
     const profileCase = this.pickProfileCase(client);
     const caseIds = client.kycCases.map((kycCase) => kycCase.id);
-    const [form, overrides, legalDocuments, riskHistory, crrf, review, canViewCrrf] = await Promise.all([
+    const [form, overrides, identityDocuments, legalDocuments, riskHistory, crrf, review, canViewCrrf] = await Promise.all([
       profileCase && this.kycService ? this.kycService.formSnapshot(profileCase.id) : Promise.resolve(null),
       profileCase ? this.profileOverrides(client.tenantId, profileCase.id) : Promise.resolve([]),
+      this.prisma.clientDocument.findMany({
+        where: { clientId: client.id, tenantId: client.tenantId, deletedAt: null, personKey: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true, personKey: true, personName: true, identityType: true, documentNumber: true, documentExpiry: true,
+          fileName: true, mimeType: true, createdAt: true, uploadedBy: { select: userSummarySelect }
+        }
+      }),
       this.prisma.legalDocument.findMany({
         where: { kycCaseId: { in: caseIds }, tenantId: client.tenantId, storagePath: { not: null } },
         orderBy: { createdAt: 'desc' },
@@ -142,6 +152,8 @@ export class ComplianceClientsService {
       profile: profileFromForm(form, overrides),
       // Values changed on this page (section|rowId|field), shown with an "edited" marker.
       editedFields: overrides.map((override) => `${override.section}|${override.rowId}|${override.field}`),
+      // QID / passport copies per person (personKey = normalized full name), newest first; earlier copies are history.
+      identityDocuments,
       legalDocuments,
       riskHistory,
       // CRRF ratings and files follow the CRRF area of the role matrix; reviewer comments are never included here.
@@ -251,6 +263,51 @@ export class ComplianceClientsService {
         await syncIdentityExpiryItems(tx, client, user.id, identityExpiries(profileFromForm(form, updated)));
       }
     });
+    return this.findOne(user, id);
+  }
+
+  // Uploads a QID or passport copy for one person on the profile into the "Identity Documents" folder. When a new
+  // number or expiry date is given, the person's details are updated through the audited profile edit, which also
+  // keeps the Expiry record in step (a new expiry date starts a new set of reminders).
+  async uploadIdentityDocument(
+    user: RequestUser, id: string,
+    input: { section?: string; rowId?: string; identityType?: string; documentNumber?: string; expiryDate?: string },
+    files: UploadedClientFile[]
+  ) {
+    if (!this.documents) throw new BadRequestException('Document uploads are not available.');
+    const identityType = input.identityType === 'QID' || input.identityType === 'PASSPORT' ? input.identityType : null;
+    if (!identityType) throw new BadRequestException('Choose QID or passport.');
+    if (files.length !== 1) throw new BadRequestException('Select one file: the copy of the QID or passport.');
+    const section = String(input.section || '');
+    if (!['SHAREHOLDER', 'UBO', 'OFFICER', 'KEY_CONTACT'].includes(section)) throw new BadRequestException('Choose the person this copy belongs to.');
+    const { client, form } = await this.clientWithProfileCase(user, id);
+    const rowId = section === 'KEY_CONTACT' ? '' : this.optionalText(input.rowId) || '';
+    const raw = section === 'KEY_CONTACT'
+      ? [form.sectionE as Record<string, unknown>]
+      : ((section === 'OFFICER' ? (form.sectionC as { managers?: unknown }).managers : (form.sectionB as Record<string, unknown>)[section === 'SHAREHOLDER' ? 'shareholders' : 'ubos']) || []) as Array<Record<string, unknown>>;
+    const row = section === 'KEY_CONTACT' ? raw[0] : raw.find((item, position) => rowKey(item, position) === rowId);
+    if (!row) throw new BadRequestException('This person is no longer on the client profile. Refresh the page.');
+    if (row.shareholderType === 'Corporate Entity') throw new BadRequestException('QID and passport copies apply to individuals.');
+    // The person's current (edited) name is the link, so the copy follows a name changed on this page.
+    const overrides = await this.profileOverrides(client.tenantId, form.kycCaseId);
+    const nameOverride = overrides.find((override) => override.section === section && override.rowId === rowId && override.field === 'fullName');
+    const fullName = text(nameOverride?.value) || text(row.fullName);
+    if (!fullName) throw new BadRequestException('Enter the name of the person before uploading an ID copy.');
+    const documentNumber = this.optionalText(input.documentNumber)?.slice(0, 100) || null;
+    const expiry = this.profileValue('date', input.expiryDate);
+    const section_ = await this.documents.sectionByKey(client.tenantId, 'identity');
+    const label = identityType === 'QID' ? 'QID' : 'Passport';
+    await this.documents.storeFiles(user, client, section_, files, {
+      title: `${label} copy - ${fullName}`.slice(0, 200),
+      notes: [documentNumber && `${label} no. ${documentNumber}`, expiry && `expires ${expiry}`].filter(Boolean).join(', ') || null,
+      identity: {
+        personKey: personKey(fullName), personName: fullName, identityType,
+        documentNumber, documentExpiry: expiry ? new Date(`${expiry}T00:00:00.000Z`) : null
+      }
+    });
+    const prefix = identityType === 'QID' ? 'qid' : 'passport';
+    if (documentNumber) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Number`, value: documentNumber });
+    if (expiry) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Expiry`, value: expiry });
     return this.findOne(user, id);
   }
 

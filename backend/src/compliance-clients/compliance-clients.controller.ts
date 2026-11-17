@@ -1,11 +1,14 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Res, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { ComplianceClientQuery, ComplianceClientsService } from './compliance-clients.service';
-import { UpdateProfileFieldDto } from './dto/profile-edit.dto';
+import { UploadedClientFile } from './compliance-documents.service';
+import { UpdateProfileFieldDto, UploadIdentityDocumentDto } from './dto/profile-edit.dto';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
 
 // Access follows the "compliance" area of the role matrix (see RolesGuard): GET needs view, PATCH needs edit.
@@ -42,6 +45,18 @@ export class ComplianceClientsController {
   @Patch(':id/profile')
   updateProfileField(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateProfileFieldDto) {
     return this.complianceClientsService.updateProfileField(user, id, dto);
+  }
+
+  // A QID or passport copy for one person (multipart: files, section, rowId, identityType, documentNumber, expiryDate).
+  @Post(':id/identity-documents')
+  @UseInterceptors(FilesInterceptor('files', 1, uploadInterceptorOptions(standardDocumentKinds)))
+  uploadIdentityDocument(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body: UploadIdentityDocumentDto,
+    @UploadedFiles() files: UploadedClientFile[]
+  ) {
+    return this.complianceClientsService.uploadIdentityDocument(user, id, body, files || []);
   }
 
   // Starts a periodic re-KYC prefilled from the current profile; earlier KYCs are kept as history.

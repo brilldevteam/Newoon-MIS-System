@@ -625,6 +625,13 @@ model ClientDocument {
   uploadedBy   User?                 @relation("ClientDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
   screeningId  String?
   screening    ClientScreening?      @relation(fields: [screeningId], references: [id], onDelete: SetNull)
+  // QID / passport copies uploaded from a person's details: personKey is the normalized full name, so the same
+  // person listed as shareholder and director shares the copies. Number and expiry are those of this copy.
+  personKey      String?
+  personName     String?
+  identityType   String?
+  documentNumber String?
+  documentExpiry DateTime?
   deletedAt    DateTime?
   deletedById  String?
   deleteReason String?
@@ -633,6 +640,7 @@ model ClientDocument {
 
   @@index([tenantId])
   @@index([clientId, sectionId])
+  @@index([clientId, personKey])
   @@index([screeningId])
 }
 
