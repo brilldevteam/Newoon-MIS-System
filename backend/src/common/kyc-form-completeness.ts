@@ -62,7 +62,7 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
   if (!managers.length) managerGaps.push('add at least one manager, director or authorized signatory');
   const managerRows: string[] = [];
   managers.forEach((row, index) => {
-    const missing = [!filled(row.fullName) && 'full name', !filled(row.position) && 'position', !filled(row.nationality) && !filled(row.nationalityAndAddress) && 'nationality', !filled(row.identityNumber) && 'QID / Passport No.'].filter(Boolean);
+    const missing = [!filled(row.fullName) && 'full name', !filled(row.position) && 'position', !filled(row.nationality) && !filled(row.nationalityAndAddress) && 'nationality', !filled(row.identityNumber) && 'QID or passport number'].filter(Boolean);
     if (missing.length) managerRows.push(`${rowLabel(row, index, 'Person')}: ${missing.join(', ')}`);
   });
   managerGaps.push(...capRows(managerRows, 'people'));
@@ -78,7 +78,7 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
     const missing = [
       !filled(row.fullName) && 'full name',
       !filled(row.nationality) && (corporate ? 'country' : 'nationality'),
-      !filled(row.identityNumber) && (corporate ? 'CR number' : 'QID / Passport number'),
+      !filled(row.identityNumber) && (corporate ? 'CR number' : 'QID or passport number'),
       !filled(row.shareholderPercentage ?? row.ownershipPercentage) && 'shareholder %'
     ].filter(Boolean);
     if (missing.length) partyRows.push(`${rowLabel(row, index, 'Shareholder')}: ${missing.join(', ')}`);

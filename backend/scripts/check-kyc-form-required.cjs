@@ -36,7 +36,7 @@ async function main() {
   form.sectionC.managers = [{ fullName: 'No Details', isAuthorizedSignatory: false }];
   issues = kycFormCompletenessIssues(form);
   assert.equal(issues[0].title, 'B. Managers / Signatories');
-  assert.ok(issues[0].missing.some((text) => /Person "No Details": position, nationality, QID \/ Passport No\./.test(text)));
+  assert.ok(issues[0].missing.some((text) => /Person "No Details": position, nationality, QID or passport number/.test(text)));
   assert.equal(issues[0].missing.some((text) => /Authorized signatory/.test(text)), false, 'Authorized signatory is optional');
   form = complete();
   form.sectionC.managers[0].isAuthorizedSignatory = false;
@@ -52,7 +52,7 @@ async function main() {
   form.sectionB.shareholders[2].identityNumber = '';
   issues = kycFormCompletenessIssues(form);
   assert.equal(issues[0].title, 'C. Shareholders');
-  assert.ok(issues[0].missing.some((text) => /Shareholder "Owner Two": QID \/ Passport number/.test(text)));
+  assert.ok(issues[0].missing.some((text) => /Shareholder "Owner Two": QID or passport number/.test(text)));
   assert.ok(issues[0].missing.some((text) => /total 100% \(now 90%\)/.test(text)), 'Only direct shareholders count toward 100%');
 
   form = complete();

@@ -90,6 +90,8 @@ export type ClientExpiryRecord = {
   expiryDate: string;
   notes: string | null;
   isActive: boolean;
+  // Set when the record follows a person's QID / passport on the client profile (edit it there).
+  sourceKey: string | null;
   expiryState: ExpiryState;
 };
 

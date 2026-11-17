@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { RequestUser } from '../common/types/request-user.type';
 import { ComplianceClientQuery, ComplianceClientsService } from './compliance-clients.service';
+import { UpdateProfileFieldDto } from './dto/profile-edit.dto';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
 
 // Access follows the "compliance" area of the role matrix (see RolesGuard): GET needs view, PATCH needs edit.
@@ -35,6 +36,18 @@ export class ComplianceClientsController {
   @Patch(':id')
   update(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateComplianceClientDto) {
     return this.complianceClientsService.update(user, id, dto);
+  }
+
+  // One company or person detail edited on the client page; stored as an audited overlay on the current KYC.
+  @Patch(':id/profile')
+  updateProfileField(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateProfileFieldDto) {
+    return this.complianceClientsService.updateProfileField(user, id, dto);
+  }
+
+  // Starts a periodic re-KYC prefilled from the current profile; earlier KYCs are kept as history.
+  @Post(':id/rekyc')
+  startRekyc(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.complianceClientsService.startRekyc(user, id);
   }
 
   private pickQuery(query: Record<string, unknown>): ComplianceClientQuery {

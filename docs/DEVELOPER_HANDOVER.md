@@ -1,5 +1,84 @@
 # Newoon MIS Developer Handover
 
+## Compliance Client Inline Editing, Re-KYC and Separate QID / Passport (2026-11-17)
+
+Design confirmed with the user on 2026-11-17: edits are kept on the client record and never rewrite the approved KYC, re-KYC is a prefilled workflow, QID / passport are split on the client page and in the KYC form while exports keep one column, and QID / passport alerts run at 60 and 30 days.
+
+- **Inline editing** (`/compliance/clients/:id`). Every value on Overview, Company, Directors & Managers, Shareholders, Secretary, SEF, UBOs and the key communication person has a pencil icon (`components/EditableFields.tsx`), shown to users with compliance Edit.
+  - **Register values** save through the existing audited `PATCH /api/compliance/clients/:id`. It now also accepts `name`, `clientCode` (must be unique per company; letters, digits and dashes), `registrationNumber`, `country`, `industry`, and `statusReason` on its own.
+  - **Risk level** has no pencil. Its "Request change" link opens Reviews & Risk, so risk still goes through the four-eyes risk-change approval. CDD type stays directly editable, as before.
+  - **Latest service, review dates and the KYC assessment** are derived values and stay read-only.
+  - **Company and person values** save through `PATCH /api/compliance/clients/:id/profile` (`{ section, rowId, field, value }`, compliance Edit, tenant scoped).
+    - They are stored as `ClientProfileOverride` rows on the client's current KYC case and overlaid on the KYC form when the page is read (`applyOverrides` in `compliance-client-profile.ts`). The approved, locked KYC form, its revisions and its exports are not changed.
+    - `PROFILE_FIELDS` is the allow-list of editable fields per section. Dates must be `YYYY-MM-DD` and percentages 0–100. Lists (nationality, position, legal form) are comma-separated.
+    - Every edit writes an `AuditLog` entry (`ComplianceClient`, action `CLIENT_PROFILE_FIELD_EDITED`, from/to, person, KYC number). Edited values show an "edited" marker.
+    - Officer (`KycManager`) rows get new ids when a form is saved again, so an officer edit falls back to the officer's original name when its row id no longer matches.
+    - One person can be listed in several places (shareholder, director, UBO). Each row is edited separately; a shareholder marked as UBO is the same row on both tabs.
+- **Current KYC and re-KYC**
+  - `Client.currentKycCaseId` records the client's current KYC. It is set on activation (`CONVERT_TO_CLIENT`) and on re-KYC approval. Clients activated earlier fall back to the old rule (latest activated case with a form), so no backfill is needed.
+  - **KYC & Documents → KYC history** lists every case with Current / Onboarding / Re-KYC markers. For an active client, **Start re-KYC** calls `POST /api/compliance/clients/:id/rekyc` (compliance Edit).
+  - That creates a new `KycCase` with `purpose = REKYC` and `previousKycCaseId`, and a new KYC number. The form is prefilled from the current profile with client-page edits applied (`KycService.createRekycCase`): Sections A–E are copied; Section F documents, the G declaration and H review start empty, and uploaded-file names are not copied.
+  - Only one re-KYC can be open per client; the client row is locked while one is created.
+  - The re-KYC goes through the normal documents → AML → approvals workflow. At final approval (`afterKycFinal`) it does not wait for Operations' engagement decision and needs no engagement letter. In the same transaction:
+    - it becomes the current KYC and the case moves to `CLIENT_ACTIVE`;
+    - risk and CDD are taken from the approved re-KYC (reclassification > internal review > CRRF, as on activation);
+    - `lastReviewDate` becomes now and `nextReviewDate` is recalculated by risk;
+    - ID expiry records are synced;
+    - an audit entry (`CLIENT_REKYC_COMPLETED`) and a `CLIENT_ACTIVATED` notification are written.
+  - Earlier KYC cases, their documents and revisions are unchanged and stay openable. After a re-KYC is approved, the page shows the re-KYC's own values.
+  - Client-page edits made on the previous KYC after the re-KYC was started are not in its prefilled form, so on approval they are carried over to the new KYC (`carryOverProfileEdits` / `carryOverOverrides`). They match the same row id, else the person's name, because manager ids change. Edits for people no longer in the form are skipped; the `CLIENT_REKYC_COMPLETED` audit records `editsCarriedOver` and `editsSkipped`.
+  - While a re-KYC is open, the profile panels warn that page edits are kept but are not seen by the re-KYC reviewers.
+  - Onboarding cases behave exactly as before.
+- **Separate QID / passport with expiry**
+  - People (shareholders, UBOs, managers, key contact) now have `qidNumber`, `qidExpiry`, `passportNumber` and `passportExpiry`; either number is enough. The KYC form editor has the four fields; Section B rows store them in JSON, managers in new `KycManager` columns.
+  - `identityNumber` stays the single printed and screened value. For people with split values it is derived on save as `QID: … / Passport: …` (`common/person-identity.ts`, mirrored in `frontend/src/utils/person-identity.ts`). Corporate shareholders keep the CR number there.
+  - **Existing data is not converted.** Older combined values stay in `identityNumber` and are shown as "QID / Passport (earlier entry)" on the client page and in the KYC editor until someone enters the QID or passport number.
+  - The completeness message now reads "QID or passport number".
+  - The enquiry's key-contact QID and passport numbers and expiry dates are now carried into Section E when the KYC case is created.
+  - Exports print the derived value in the existing ID column; expiry dates are not printed.
+  - **Expiry alerts:** a person's QID or passport expiry date creates or updates a `ClientExpiryItem` with a `sourceKey` (`syncIdentityExpiryItems`). This happens on every profile edit, on activation and on re-KYC approval; one record per document number, using the latest date.
+    - Records whose person or document is gone are deactivated, not deleted. Manual Expiry records are untouched.
+    - A synced record cannot be edited in the Expiry tab; change the date on the person instead.
+    - The existing reminder sweep notifies QID and passport at 60 and 30 days and when expired (no 90-day reminder). CR and other company documents keep 90/60/30/expired. Each milestone is still claimed once in `ComplianceReminder`, and a new expiry date starts a new set.
+    - The notification asks staff to upload the renewed copy (CDD tab) and update the date.
+- **Migration** `20261117100000_client_profile_rekyc_identity` is additive only:
+  - `KycCasePurpose` enum;
+  - nullable columns `Client.currentKycCaseId`, `ClientExpiryItem.sourceKey`, `KycCase.previousKycCaseId`, and `KycCase.purpose` (default `ONBOARDING`);
+  - the four `KycManager` ID columns;
+  - the `ClientProfileOverride` table;
+  - a unique index on `(clientId, sourceKey)`.
+
+  Existing rows keep their values. It has been applied to the local development database only (2026-11-17, after a `pg_dump` backup), not to staging or production. Deploy: back up the database and uploads, then `npm exec -w backend -- prisma migrate deploy`, then restart both workspaces.
+- **Smaller UI changes:**
+  - Expiry tab: synced rows show "From person details" instead of Edit/Archive, and the tab text explains the 60/30-day rule.
+  - The case stepper of a re-KYC hides "Convert to client" and ends at "Current KYC".
+- **Verification (local):**
+  - `npm run build` passed.
+  - `node backend/scripts/check-compliance-clients.cjs` passed. It is extended for: overlay without changing the form, officer-name fallback, ID split and earlier entry, expiry dedupe/sync/deactivation, the 60/30 rule, edit endpoint scoping/allow-list/validation/audit, edits applied to the current KYC rather than an open re-KYC, re-KYC prefill, and re-KYC versus onboarding final approval.
+  - All other backend and frontend `check-*.cjs` scripts pass. The exception is `frontend/scripts/check-dashboard-ui.cjs`, which still looks for the `/clients` sidebar link removed on 2026-11-10; that is unrelated and was not changed here.
+  - Word rendering of both export samples with `QID: … / Passport: …` values: the text wraps inside the existing ID column, there is no overflow, and the standard sample keeps 4 pages.
+- **Browser check (local database, Company Admin, client Demo Pearl Trading W.L.L., CL-2026-0006):**
+  - **Register:** the Industry edit saved and was audited with from/to; a duplicate client code was refused with the name of the client using it.
+  - **Shareholders:** the individual shows split QID/passport plus the earlier combined value, and the corporate shows a CR number. Entering a QID number and expiry saved with "edited" markers and an expiry badge ("44 days left"). One Expiry record was created for the person listed as both shareholder and UBO, and the existing manual records were untouched.
+  - **Reminders:** a live reminder run sent exactly one 60-day notification with the renewal wording; a second run sent none.
+  - **Officers:** a director passport edit saved.
+  - **Start re-KYC:** created KYC-2026-0015 (Re-KYC, from KYC-2026-0013). The form was prefilled with the page edits and the derived identity, and the declaration was empty. The history shows the in-progress banner, the old KYC stays Current, and a second start was refused.
+  - **Audit:** audit rows were written for each action.
+  - **Re-KYC approval end to end** (the role steps went through the app's API as the AML Supervisor, DMLRO and MLRO test accounts; the results were checked in the browser):
+    - KYC-2026-0015 was prepared (document, declaration, Section H Medium/RDD, screening of all 7 parties including the derived `QID: …` / `Passport: …` IDs, CRRF), then submitted, DMLRO-approved and MLRO-approved.
+    - It went straight to `CLIENT_ACTIVE` with no engagement step, and became Current.
+    - The client moved High/EDD → Medium/RDD, last review became 17 Nov 2026 and next review 17 Nov 2028. No new engagement was created. A "Re-KYC approved" notification was sent.
+  - **Problem found and fixed:** in that first run, page edits made while the re-KYC was open (director QID expiry and passport expiry) disappeared from the current view after approval, and their Expiry record was deactivated. The carry-over above fixes this.
+  - **Fix verified with a second cycle (KYC-2026-0016):** passport number and expiry were edited on the Secretary card while the re-KYC was open (the warning showed). After approval, both are still shown as edited on the new current KYC, the Expiry record is active, and the audit shows `editsCarriedOver: 2`.
+  - **Left in the local database:**
+    - CL-2026-0006 has three KYCs: 0013 onboarding, then re-KYCs 0015 and 0016 (current); risk is now Medium/RDD.
+    - Test edits, synced Expiry records (including one inactive passport from the first run), reminder and approval notifications, and test PDFs on the re-KYC cases.
+- **Not verified:**
+  - the re-KYC approval screens themselves (Section H forms) as each role in the browser; the role decisions were made through the same API those screens call;
+  - SEF routing for a High-risk re-KYC;
+  - roles other than Company Admin for the page edits;
+  - staging and production.
+
 ## Country of Incorporation on Proposed-Company Enquiries (2026-11-15)
 
 - **Before:** line 4 of the Preliminary KYC ("Country of incorporation") was fixed text that always printed "-". There was no field for it.

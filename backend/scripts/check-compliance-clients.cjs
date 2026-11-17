@@ -12,6 +12,7 @@ const { ClientsService } = require('../dist/clients/clients.service');
 const { KycService } = require('../dist/kyc/kyc.service');
 const { AccessControlService, ACCESS_AREAS } = require('../dist/access-control/access-control.service');
 const profile = require('../dist/compliance-clients/compliance-client-profile');
+const { syncIdentityExpiryItems } = require('../dist/compliance-clients/identity-expiry-sync');
 const { nextReviewDateFor, nextClientCode, nextEngagementNumber, legacyClientCode, onboardingRiskProfile } = require('../dist/common/client-compliance');
 
 // Synthetic persistence only: never connects to the configured database.
@@ -227,7 +228,8 @@ async function checkActivation() {
   const fakeThis = {
     text: KycService.prototype.text,
     prisma: { $transaction: async (callback) => callback(tx) },
-    audit: async (_tx, _user, tenantId, entityType, entityId, metadata) => { state.audits.push({ tenantId, entityType, entityId, metadata }); }
+    audit: async (_tx, _user, tenantId, entityType, entityId, metadata) => { state.audits.push({ tenantId, entityType, entityId, metadata }); },
+    syncClientIdentityExpiry: async (_tx, _user, synced) => { state.expirySyncedFor = synced.id; }
   };
   const kycCase = {
     id: 'k1', tenantId: 'tenant-a', clientId: 'c1', title: 'Synthetic KYC', kycNumber: 'KYC-2026-0007',
@@ -238,6 +240,8 @@ async function checkActivation() {
   assert.equal(state.client.status, 'ACTIVE');
   const year = new Date().getFullYear();
   assert.equal(state.client.clientCode, `CL-${year}-0043`, 'A code conflict retries with the next free client code');
+  assert.equal(state.client.currentKycCaseId, 'k1', 'The activated KYC becomes the current KYC');
+  assert.equal(state.expirySyncedFor, 'k1', 'Activation keeps ID expiry records in step');
   assert.equal(state.client.riskLevel, 'HIGH');
   assert.equal(state.client.cddType, 'ENHANCED');
   assert.equal(state.client.email, 'primary@example.invalid');
@@ -334,7 +338,210 @@ async function checkProfileMapping() {
   assert.equal(indirect.identityNumber, '00123', 'Identity numbers keep leading zeros');
   assert.deepEqual(mapped.officers[0].roles.sort(), ['DIRECTOR', 'SECRETARY', 'SIGNATORY']);
   assert.deepEqual(mapped.officers[1].roles, ['SEF']);
-  assert.equal(mapped.keyContact, null, 'An empty key-contact section is reported as missing');
+  assert.equal(mapped.keyContact.fullName, null, 'An empty key-contact section has no values but can be filled in');
+  assert.equal(mapped.keyContact.ref.section, 'KEY_CONTACT');
+}
+
+// Client-page edits overlay the approved KYC form without changing it; QID / passport are separate with expiries.
+async function checkProfileEdits() {
+  const form = {
+    version: 1, status: 'FINAL', updatedAt: new Date('2026-11-01'),
+    sectionA: { legalName: 'Synthetic W.L.L.', legalForm: 'Other', legalFormOther: 'Branch' },
+    sectionB: {
+      shareholders: [
+        { id: 's1', fullName: 'Old Owner', shareholderType: 'Individual', identityNumber: '28412345678', isUbo: true, shareholderPercentage: 100 },
+        { id: 's2', fullName: 'Corp Ltd', shareholderType: 'Corporate Entity', identityNumber: 'CR-1' }
+      ],
+      ubos: []
+    },
+    sectionC: { managers: [{ id: 'new-id-after-resave', fullName: 'Board Member', position: 'Director', qidNumber: '111', qidExpiry: new Date('2027-01-10T00:00:00Z') }] },
+    sectionE: { fullName: 'Contact', passportNumber: 'P1', passportExpiry: '2026-12-20' }
+  };
+  const frozen = JSON.stringify(form);
+  const overrides = [
+    { section: 'COMPANY', rowId: '', rowLabel: null, field: 'legalForm', value: 'LLC' },
+    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'fullName', value: 'New Owner' },
+    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'qidNumber', value: '28499999999' },
+    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'qidExpiry', value: '2027-01-05' },
+    // Officer ids change when a form is saved again: the edit falls back to the name it was made on.
+    { section: 'OFFICER', rowId: 'old-id', rowLabel: 'Board Member', field: 'passportNumber', value: 'X9' },
+    { section: 'OFFICER', rowId: 'old-id', rowLabel: 'Board Member', field: 'passportExpiry', value: '2026-12-01' },
+    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'notAllowed', value: 'ignored' }
+  ];
+  const mapped = profile.profileFromForm(form, overrides);
+  assert.equal(JSON.stringify(form), frozen, 'The KYC form itself is not changed');
+  assert.equal(mapped.company.legalForm, 'LLC', '"Other" text is cleared when the legal form is edited');
+  const owner = mapped.shareholders[0];
+  assert.equal(owner.fullName, 'New Owner');
+  assert.equal(owner.qidNumber, '28499999999');
+  assert.equal(owner.identityNumber, 'QID: 28499999999', 'The printed identity is derived from the split values');
+  assert.equal(owner.legacyIdentity, '28412345678', 'The earlier combined value is still shown');
+  assert.equal(mapped.ubos[0].fullName, 'New Owner', 'A shareholder UBO shows the edited shareholder row');
+  assert.deepEqual(mapped.ubos[0].ref, { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'New Owner' });
+  assert.equal(mapped.shareholders[1].identityNumber, 'CR-1', 'Corporate shareholders keep the CR number');
+  assert.equal(mapped.shareholders[1].legacyIdentity, null);
+  const officer = mapped.officers[0];
+  assert.equal(officer.passportNumber, 'X9');
+  assert.equal(officer.qidExpiry, '2027-01-10', 'Stored manager dates are read as dates');
+  assert.equal(officer.identityNumber, 'QID: 111 / Passport: X9');
+  assert.equal(mapped.keyContact.passportExpiry, '2026-12-20');
+
+  const expiries = profile.identityExpiries(mapped);
+  const keys = expiries.map((item) => item.sourceKey).sort();
+  assert.deepEqual(keys, ['person:PASSPORT:P1', 'person:PASSPORT:X9', 'person:QID:111', 'person:QID:28499999999'],
+    'One expiry per document; the owner listed as shareholder and UBO is not duplicated');
+  assert.equal(expiries.find((item) => item.sourceKey === 'person:QID:28499999999').holderRole, 'Shareholder, UBO');
+
+  // Expiry sync: create, update, deactivate; manual records untouched.
+  const items = [
+    { id: 'manual', clientId: 'c1', tenantId: 'tenant-a', sourceKey: null, isActive: true },
+    { id: 'gone', clientId: 'c1', tenantId: 'tenant-a', sourceKey: 'person:QID:OLD', isActive: true, expiryDate: new Date('2026-12-01'), holderName: 'x', holderRole: 'x', documentNumber: 'OLD' }
+  ];
+  const audits = [];
+  const tx = {
+    clientExpiryItem: {
+      findMany: async ({ where }) => items.filter((item) => item.clientId === where.clientId && item.tenantId === where.tenantId && item.sourceKey !== null),
+      create: async ({ data }) => { items.push({ id: `i${items.length}`, ...data }); },
+      update: async ({ where, data }) => Object.assign(items.find((item) => item.id === where.id), data),
+      updateMany: async ({ where, data }) => items.filter((item) => where.id.in.includes(item.id)).forEach((item) => Object.assign(item, data))
+    },
+    auditLog: { create: async ({ data }) => audits.push(data) }
+  };
+  const summary = await syncIdentityExpiryItems(tx, { id: 'c1', tenantId: 'tenant-a' }, 'aml-user', expiries);
+  assert.deepEqual(summary, { created: 4, updated: 0, deactivated: 1 });
+  assert.equal(items.find((item) => item.id === 'gone').isActive, false, 'A document no longer on the profile is deactivated, not deleted');
+  assert.equal(items.find((item) => item.id === 'manual').isActive, true);
+  assert.equal(audits[0].metadata.action, 'IDENTITY_EXPIRY_SYNC');
+  const again = await syncIdentityExpiryItems(tx, { id: 'c1', tenantId: 'tenant-a' }, 'aml-user', expiries);
+  assert.deepEqual(again, { created: 0, updated: 0, deactivated: 0 }, 'A repeated sync changes nothing');
+
+  // QID / passport alerts start at 60 days; company documents keep the 90-day reminder.
+  const day = 86400000;
+  const sent = [];
+  const reminderPrisma = {
+    client: { findMany: async () => [] },
+    clientRiskChange: { findMany: async () => [] },
+    clientExpiryItem: {
+      findMany: async () => [
+        { id: 'q80', tenantId: 'tenant-a', clientId: 'c1', documentType: 'QID', holderName: 'A', expiryDate: new Date(Date.now() + 80 * day), client: { name: 'Synthetic', clientCode: null } },
+        { id: 'p50', tenantId: 'tenant-a', clientId: 'c1', documentType: 'PASSPORT', holderName: 'B', expiryDate: new Date(Date.now() + 50 * day), client: { name: 'Synthetic', clientCode: null } },
+        { id: 'cr80', tenantId: 'tenant-a', clientId: 'c1', documentType: 'CR', holderName: 'Synthetic', expiryDate: new Date(Date.now() + 80 * day), client: { name: 'Synthetic', clientCode: null } }
+      ]
+    },
+    complianceReminder: { create: (args) => args },
+    notification: { create: (args) => args },
+    $transaction: async (ops) => { sent.push(ops[0].data.entityId); return ops; }
+  };
+  await new ComplianceRemindersService(reminderPrisma).sweep('tenant-a');
+  assert.deepEqual(sent.sort(), ['cr80', 'p50'], 'No 90-day reminder for QID or passport');
+
+  // Edit endpoint: tenant scoped, field allow-list, audited, stored on the current KYC, expiry kept in step.
+  const stored = [];
+  const editAudits = [];
+  const synced = [];
+  const kycCases = [
+    { id: 'k-new', kycNumber: 'KYC-2026-0009', status: 'SUPERVISOR_REVIEW_PENDING', serviceId: null, kycForm: { id: 'f2' } },
+    { id: 'k-cur', kycNumber: 'KYC-2026-0003', status: 'CLIENT_ACTIVE', serviceId: 'svc', kycForm: { id: 'f1' } }
+  ];
+  const editPrisma = {
+    client: { findFirst: async ({ where }) => (where.tenantId === 'tenant-a' ? { id: 'c1', tenantId: 'tenant-a', name: 'Synthetic', status: 'ACTIVE', currentKycCaseId: 'k-cur', kycCases } : null) },
+    clientProfileOverride: {
+      findMany: async ({ where }) => stored.filter((row) => row.kycCaseId === where.kycCaseId),
+      upsert: async ({ where, create, update }) => {
+        const key = where.kycCaseId_section_rowId_field;
+        const found = stored.find((row) => row.kycCaseId === key.kycCaseId && row.section === key.section && row.rowId === key.rowId && row.field === key.field);
+        if (found) Object.assign(found, update); else stored.push(create);
+      }
+    },
+    auditLog: { create: async ({ data }) => editAudits.push(data) },
+    clientExpiryItem: { findMany: async () => [], create: async ({ data }) => synced.push(data), update: async () => null, updateMany: async () => null },
+    $transaction: async (callback) => callback(editPrisma)
+  };
+  const snapshots = [];
+  const editService = new ComplianceClientsService(editPrisma, { formSnapshot: async (id) => { snapshots.push(id); return form; } });
+  editService.findOne = async () => 'refreshed';
+  assert.equal(await editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'passportExpiry', value: '2027-03-01' }), 'refreshed');
+  assert.equal(snapshots[0], 'k-cur', 'Edits apply to the current KYC, not a re-KYC still in review');
+  assert.equal(stored[0].tenantId, 'tenant-a');
+  assert.equal(stored[0].rowLabel, 'Old Owner');
+  assert.equal(editAudits[0].entityType, 'ComplianceClient');
+  assert.equal(editAudits[0].metadata.action, 'CLIENT_PROFILE_FIELD_EDITED');
+  assert.equal(editAudits[0].metadata.to, '2027-03-01');
+  assert.ok(synced.some((item) => item.documentType === 'PASSPORT' && item.holderName === 'Old Owner'), 'A new passport expiry creates an Expiry record');
+  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'isUbo', value: 'true' }), /cannot be edited/);
+  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's2', field: 'qidNumber', value: '1' }), /individuals/);
+  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'qidExpiry', value: '05/01/2027' }), /YYYY-MM-DD/);
+  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'shareholderPercentage', value: '120' }), /between 0 and 100/);
+  await assert.rejects(editService.updateProfileField({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'COMPANY', field: 'legalName', value: 'x' }), /not found/);
+
+  // Re-KYC is started from the current KYC with the edits applied.
+  let rekyc = null;
+  const rekycService = new ComplianceClientsService(editPrisma, {
+    formSnapshot: async () => form,
+    createRekycCase: async (user, client, source, effective) => { rekyc = { client, source, effective }; return { id: 'k-next', kycNumber: 'KYC-2026-0010' }; }
+  });
+  assert.deepEqual(await rekycService.startRekyc(actor, 'c1'), { id: 'k-next', kycNumber: 'KYC-2026-0010' });
+  assert.deepEqual(rekyc.source, { id: 'k-cur', kycNumber: 'KYC-2026-0003', serviceId: 'svc' });
+  assert.equal(rekyc.effective.sectionB.shareholders[0].passportExpiry, '2027-03-01', 'The re-KYC is prefilled with client-page edits');
+}
+
+// Final approval of a re-KYC makes it the current KYC without an engagement decision; onboarding is unchanged.
+async function checkRekycCompletion() {
+  const run = async (purpose) => {
+    const state = { client: { id: 'c1', tenantId: 'tenant-a', name: 'Synthetic', riskLevel: 'LOW', cddType: 'SIMPLIFIED', currentKycCaseId: 'k-old' }, statuses: [], notices: [], audits: [] };
+    const tx = {
+      kycCase: { findUniqueOrThrow: async () => ({ purpose, clientId: 'c1', kycNumber: 'KYC-2026-0010' }) },
+      client: { findUniqueOrThrow: async () => ({ ...state.client }), update: async ({ data }) => Object.assign(state.client, data) },
+      riskReclassification: { findFirst: async () => null },
+      kycInternalReview: { findFirst: async () => ({ riskClassification: 'HIGH', dueDiligenceType: 'ENHANCED' }) },
+      crrfRecord: { findFirst: async () => ({ riskRating: 'HIGH' }) }
+    };
+    const fakeThis = {
+      completeRekyc: KycService.prototype.completeRekyc,
+      notifyReadyForClientConversion: async () => state.notices.push('convert'),
+      recordStatus: async (_tx, from, _user, to) => state.statuses.push([from.status, to]),
+      syncClientIdentityExpiry: async () => { state.synced = true; },
+      carryOverProfileEdits: async (_tx, _user, _case, previous) => { state.carriedFrom = previous; return { editsCarriedOver: 2, editsSkipped: [] }; },
+      audit: async (_tx, _user, _tenant, _type, _id, metadata) => state.audits.push(metadata),
+      createNotification: async (_tx, _case, type, title) => state.notices.push(`${type}:${title}`)
+    };
+    await KycService.prototype.afterKycFinal.call(fakeThis, tx, actor, { id: 'k-new', tenantId: 'tenant-a', title: 'Synthetic Re-KYC' });
+    return state;
+  };
+  const rekyc = await run('REKYC');
+  assert.equal(rekyc.client.currentKycCaseId, 'k-new');
+  assert.equal(rekyc.client.riskLevel, 'HIGH', 'Risk and CDD come from the approved re-KYC');
+  assert.equal(rekyc.client.cddType, 'ENHANCED');
+  assert.equal(years(new Date(), rekyc.client.nextReviewDate), 1, 'The next review restarts from the re-KYC approval');
+  assert.deepEqual(rekyc.statuses, [['KYC_FINAL_APPROVED', 'CLIENT_ACTIVE']]);
+  assert.ok(!rekyc.notices.includes('convert'), 'A re-KYC is not sent to Operations for client conversion');
+  assert.ok(rekyc.synced);
+  assert.equal(rekyc.audits[0].action, 'CLIENT_REKYC_COMPLETED');
+  assert.equal(rekyc.audits[0].previousKycCaseId, 'k-old');
+  assert.equal(rekyc.carriedFrom, 'k-old', 'Edits made on the previous KYC during the re-KYC are carried over');
+  assert.equal(rekyc.audits[0].editsCarriedOver, 2);
+
+  // Carry-over matching: same row id for shareholders, the person's name for officers (their ids change).
+  const late = [
+    { section: 'COMPANY', rowId: '', rowLabel: null, field: 'website', value: 'example.test' },
+    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'qidExpiry', value: '2027-02-01' },
+    { section: 'OFFICER', rowId: 'old-manager-id', rowLabel: 'Board Member', field: 'passportExpiry', value: '2030-11-07' },
+    { section: 'OFFICER', rowId: 'renamed-id', rowLabel: 'Original Name', field: 'qidNumber', value: '1' },
+    { section: 'OFFICER', rowId: 'gone-id', rowLabel: 'Left The Company', field: 'qidNumber', value: '2' }
+  ];
+  const previous = [...late, { section: 'OFFICER', rowId: 'renamed-id', rowLabel: 'Original Name', field: 'fullName', value: 'New Name' }];
+  const { carried, skipped } = profile.carryOverOverrides(late, previous, {
+    sectionB: { shareholders: [{ id: 's1', fullName: 'Old Owner' }], ubos: [] },
+    sectionC: { managers: [{ id: 'fresh-1', fullName: 'Board Member' }, { id: 'fresh-2', fullName: 'New Name' }] }
+  });
+  assert.deepEqual(carried.map((item) => `${item.section}|${item.rowId}|${item.field}`), [
+    'COMPANY||website', 'SHAREHOLDER|s1|qidExpiry', 'OFFICER|fresh-1|passportExpiry', 'OFFICER|fresh-2|qidNumber'
+  ]);
+  assert.deepEqual(skipped.map((item) => item.rowLabel), ['Left The Company'], 'Edits for people no longer listed are skipped and reported');
+
+  const onboarding = await run('ONBOARDING');
+  assert.deepEqual(onboarding.notices, ['convert']);
+  assert.equal(onboarding.client.currentKycCaseId, 'k-old', 'Onboarding approval still waits for the engagement decision');
 }
 
 async function checkProfileAccess() {
@@ -352,7 +559,8 @@ async function checkProfileAccess() {
     legalDocument: { findMany: async ({ where }) => { assert.equal(where.tenantId, 'tenant-a'); return []; } },
     riskReclassification: { findMany: async () => [] },
     crrfRecord: { findFirst: async () => ({ riskRating: 'HIGH', updatedAt: new Date(), internalComment: 'confidential', documents: [] }) },
-    kycInternalReview: { findFirst: async () => null }
+    kycInternalReview: { findFirst: async () => null },
+    clientProfileOverride: { findMany: async () => [] }
   };
   const kycService = { formSnapshot: async (caseId) => { seen.snapshotCase = caseId; return null; } };
   const accessFor = (crrfAllowed) => ({ allows: async () => crrfAllowed, allowsByDefault: () => false });
@@ -611,6 +819,8 @@ async function main() {
   await checkMonitoring();
   await checkDocuments();
   await checkProfileMapping();
+  await checkProfileEdits();
+  await checkRekycCompletion();
   await checkProfileAccess();
   await checkReviewCycle();
   await checkRiskProfile();
@@ -620,7 +830,7 @@ async function main() {
   await checkClientsIntake();
   await checkActivation();
   await checkAccess();
-  console.log('Compliance client checks passed: review cycle, risk/CDD precedence, filters and tenant scoping, audited status/CDD updates, xlsx export, profile mapping and CRRF access, client document folders, risk approval (four eyes), periodic reviews, screening alerts, expiry and one-time reminders, prospect intake, CL-YYYY-NNNN codes with retry, and access defaults (synthetic persistence).');
+  console.log('Compliance client checks passed: review cycle, risk/CDD precedence, filters and tenant scoping, audited status/CDD updates, xlsx export, profile mapping and CRRF access, client-page edits overlaid on the KYC with audit, separate QID/passport with expiry sync and 60/30-day alerts, re-KYC prefill, client document folders, risk approval (four eyes), periodic reviews, screening alerts, expiry and one-time reminders, prospect intake, CL-YYYY-NNNN codes with retry, and access defaults (synthetic persistence).');
 }
 
 main().catch((error) => {

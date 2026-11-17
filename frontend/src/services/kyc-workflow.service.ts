@@ -243,6 +243,9 @@ export type StatusHistory = {
 };
 
 export type KycCase = {
+  // REKYC: periodic re-KYC of an existing client; it becomes the current KYC on approval, with no conversion step.
+  purpose?: 'ONBOARDING' | 'REKYC';
+  previousKycCaseId?: string | null;
   reviewFeedback?: Array<{
     id: string;
     stage: string;
