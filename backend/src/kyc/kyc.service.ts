@@ -881,7 +881,8 @@ export class KycService {
       ReviewDecision.RETURN_TO_SUPERVISOR,
       'DMLRO_FINAL_APPROVE' as ReviewDecision
     ];
-    if (decisionsRequiringReason.includes(decision) && !reason && !conditions) {
+    // hasComment ignores empty rich-text markup such as "<p></p>", so an untouched editor is not accepted as a reason.
+    if (decisionsRequiringReason.includes(decision) && !hasComment(reason) && !hasComment(conditions)) {
       throw new BadRequestException('Provide DMLRO comments, reason, or conditions for this decision');
     }
 
@@ -935,7 +936,7 @@ export class KycService {
       ReviewDecision.RETURN_TO_DMLRO,
       ReviewDecision.SEND_TO_SEF
     ];
-    if (decisionsRequiringReason.includes(decision) && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions)) {
+    if (decisionsRequiringReason.includes(decision) && !hasComment(dto.reason) && !hasComment(dto.conditions)) {
       throw new BadRequestException('Provide a reason or conditions for this MLRO decision');
     }
 
@@ -1047,7 +1048,7 @@ export class KycService {
     await this.assertPreviousStageComplete(id, ReviewStage.SEF);
 
     const sefDecisionsRequiringReason: ReviewDecision[] = [ReviewDecision.APPROVE_WITH_CONDITIONS, ReviewDecision.RETURN_TO_MLRO, ReviewDecision.REJECT];
-    if (sefDecisionsRequiringReason.includes(decision) && !this.optionalText(dto.reason) && !this.optionalText(dto.conditions)) {
+    if (sefDecisionsRequiringReason.includes(decision) && !hasComment(dto.reason) && !hasComment(dto.conditions)) {
       throw new BadRequestException('Provide SEF reason or conditions for this decision');
     }
 

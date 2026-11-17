@@ -971,6 +971,11 @@ function filledRows<T>(rows: Array<[string, T]>) {
 }
 
 // A label ending in " *" is a required field: the star is drawn in red, as on the enquiry form.
+// True when a plain or rich-text value has visible text; an untouched rich-text editor holds markup like "<p></p>".
+function hasTypedText(value: unknown) {
+  return String(value ?? '').replace(/<[^>]*>/g, '').replace(/&nbsp;|[\s​-‍﻿]/g, '').length > 0;
+}
+
 function labelText(label: string) {
   return label.endsWith(' *') ? <>{label.slice(0, -2)}<span className="text-red-600" aria-hidden="true"> *</span></> : label;
 }
@@ -1188,13 +1193,19 @@ export function KycFormEditorPage() {
     if (!id) return;
     const sectionH = form.sectionH || {};
     const decision = sectionH.dmlroDecision || 'APPROVE';
-    const reason = sectionH.dmlroReason || sectionH.dmlroComments || '';
+    const reason = [sectionH.dmlroReason, sectionH.dmlroComments].find(hasTypedText) || '';
     const conditions = sectionH.dmlroConditions || '';
-    if (!sectionH.dmlroName || !sectionH.dmlroDate || (!sectionH.dmlroSignatureDataUrl && !sectionH.dmlroSignatureFileName)) {
+    // Returning the file only needs a typed reason; name, date and signature are required for approvals.
+    const isReturn = ['REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'].includes(decision);
+    if (isReturn && !reason) {
+      setError('Type the reason for returning the file to AML Supervisor before submitting.');
+      return;
+    }
+    if (!isReturn && (!sectionH.dmlroName || !sectionH.dmlroDate || (!sectionH.dmlroSignatureDataUrl && !sectionH.dmlroSignatureFileName))) {
       setError('Complete the DMLRO name, date, and signature before submitting the DMLRO decision.');
       return;
     }
-    if (['APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'].includes(decision) && !reason && !conditions) {
+    if (['APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE'].includes(decision) && !reason && !conditions) {
       setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
@@ -1218,7 +1229,8 @@ export function KycFormEditorPage() {
           reason,
           conditions
         },
-        formalComments: latestSectionH.dmlroComments || ''
+        // The backend requires DMLRO comments; for a return the typed reason serves as the comment.
+        formalComments: hasTypedText(latestSectionH.dmlroComments) || !isReturn ? latestSectionH.dmlroComments || '' : reason
       });
       const [caseData, formData] = await Promise.all([getKycCase(id), getKycForm(id)]);
       const normalized = normalizeForm(formData, caseData);
@@ -1239,16 +1251,23 @@ export function KycFormEditorPage() {
     const decision = sectionH.mlroDecision || 'APPROVE';
     const finalRiskClassification = sectionH.mlroFinalRiskClassification || sectionH.riskClassification || '';
     const riskExplanation = sectionH.mlroRiskExplanation || sectionH.mlroComments || '';
+    // Returning the file only needs a typed reason; name, date, signature and risk fields are required for other decisions.
+    const isReturn = ['RETURN_TO_DMLRO', 'REQUEST_ADDITIONAL_INFORMATION'].includes(decision);
+    const returnReason = hasTypedText(sectionH.mlroComments);
 
-    if (!sectionH.mlroName || !sectionH.mlroDate || (!sectionH.mlroSignatureDataUrl && !sectionH.mlroSignatureFileName)) {
-      setError('Complete the MLRO name, date, and signature before submitting the final decision.');
-      return;
-    }
     if (!decision) {
       setError('Select the MLRO final decision before submitting.');
       return;
     }
-    if (!finalRiskClassification || !riskExplanation) {
+    if (isReturn && !returnReason) {
+      setError(decision === 'RETURN_TO_DMLRO' ? 'Type the reason for returning the file to DMLRO before submitting.' : 'Type the additional information requested before submitting.');
+      return;
+    }
+    if (!isReturn && (!sectionH.mlroName || !sectionH.mlroDate || (!sectionH.mlroSignatureDataUrl && !sectionH.mlroSignatureFileName))) {
+      setError('Complete the MLRO name, date, and signature before submitting the final decision.');
+      return;
+    }
+    if (!isReturn && (!finalRiskClassification || !riskExplanation)) {
       setError('Select the final risk classification and add a risk explanation before submitting the final decision.');
       return;
     }
@@ -1268,7 +1287,8 @@ export function KycFormEditorPage() {
         decision,
         reason: latestSectionH.mlroComments || latestSectionH.mlroRiskExplanation || latestSectionH.mlroConditions || '',
         conditions: latestSectionH.mlroConditions || '',
-        finalRiskClassification,
+        // A return does not reclassify risk unless the MLRO explained a new classification.
+        finalRiskClassification: isReturn && !sectionH.mlroRiskExplanation ? '' : finalRiskClassification,
         previousRiskClassification: latestSectionH.riskClassification || '',
         riskReasonCategory: latestSectionH.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT',
         riskExplanation,
@@ -1301,8 +1321,14 @@ export function KycFormEditorPage() {
     if (!id) return;
     const sectionH = form.sectionH || {};
     const decision = sectionH.sefDecision || 'APPROVE';
+    // Returning to MLRO only needs a typed reason; name, date and signature are required for other decisions.
+    const isReturn = decision === 'RETURN_TO_MLRO';
 
-    if (!sectionH.sefName || !sectionH.sefDate || (!sectionH.sefSignatureDataUrl && !sectionH.sefSignatureFileName)) {
+    if (isReturn && !hasTypedText(sectionH.sefConditions) && !hasTypedText(sectionH.sefComments)) {
+      setError('Type the reason for returning the file to MLRO before submitting.');
+      return;
+    }
+    if (!isReturn && (!sectionH.sefName || !sectionH.sefDate || (!sectionH.sefSignatureDataUrl && !sectionH.sefSignatureFileName))) {
       setError('Complete the SEF name, date, and signature before submitting the management decision.');
       return;
     }
@@ -1320,7 +1346,7 @@ export function KycFormEditorPage() {
       const latestSectionH = saved.sectionH || sectionH;
       await decideSefReview(id, {
         decision,
-        reason: latestSectionH.sefComments || latestSectionH.sefConditions || '',
+        reason: [latestSectionH.sefComments, latestSectionH.sefConditions].find(hasTypedText) || '',
         conditions: latestSectionH.sefConditions || '',
         data: {
           reviewerName: latestSectionH.sefName || '',
@@ -2327,10 +2353,10 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
           <Field label="DMLRO approval conditions" value={data.dmlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroConditions', value)} textarea wide />
         ) : null}
         {data.dmlroDecision === 'REQUEST_ADDITIONAL_INFORMATION' ? (
-          <Field label="Additional information requested from AML Supervisor" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
+          <Field label="Additional information requested from AML Supervisor *" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
         ) : null}
         {data.dmlroDecision === 'RETURN_TO_SUPERVISOR' ? (
-          <Field label="Reason for returning to AML Supervisor" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
+          <Field label="Reason for returning to AML Supervisor *" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
         ) : null}
         <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroComments', value)} textarea wide />
       </>
@@ -2345,7 +2371,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Select label="Risk reason category" value={data.mlroRiskReasonCategory || 'PROFESSIONAL_JUDGEMENT'} options={riskReasonCategoryOptions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskReasonCategory', value)} />
         <Field label="Risk explanation" value={data.mlroRiskExplanation} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskExplanation', value)} textarea wide />
         <Field label="Conditions" value={data.mlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroConditions', value)} textarea wide />
-        <Field label="MLRO comments" value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroComments', value)} textarea wide />
+        <Field label={data.mlroDecision === 'RETURN_TO_DMLRO' ? 'MLRO comments - reason for returning to DMLRO *' : data.mlroDecision === 'REQUEST_ADDITIONAL_INFORMATION' ? 'MLRO comments - additional information requested *' : 'MLRO comments'} value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroComments', value)} textarea wide />
       </>
     ) : null}
     {showSef ? (
@@ -2358,7 +2384,7 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
           <Field label="SEF approval conditions" value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
         ) : null}
         {data.sefDecision === 'REJECT' || data.sefDecision === 'RETURN_TO_MLRO' ? (
-          <Field label={data.sefDecision === 'RETURN_TO_MLRO' ? 'Return reason for MLRO' : 'SEF rejection reason'} value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
+          <Field label={data.sefDecision === 'RETURN_TO_MLRO' ? 'Return reason for MLRO *' : 'SEF rejection reason'} value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
         ) : null}
         <Field label="SEF comments" value={data.sefComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefComments', value)} textarea wide />
       </>
