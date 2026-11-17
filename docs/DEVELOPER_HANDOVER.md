@@ -48,7 +48,17 @@ Design confirmed with the user on 2026-11-17: edits are kept on the client recor
     - The file is stored as a `ClientDocument` in the new default CDD folder **Identity Documents** (`key: identity`, created automatically for every company). It uses the same upload checks, storage, viewer and audit as other client documents.
     - The row carries `personKey` (normalized full name), `personName`, `identityType`, `documentNumber` and `documentExpiry`, so the same person listed in several roles shares the copies.
     - A new number or expiry updates the person through the audited profile edit. That keeps the Expiry record in step and restarts the 60/30-day reminders for the new date; a new document number replaces the old number's Expiry record.
-  - Copies uploaded with the KYC ("QID / Passport copies") are one bundle per KYC case, not per person. The cards link to them in KYC & Documents instead of splitting them.
+  - **Card layout:** each ID section has a QID box and a passport box.
+    - Each box shows a status badge (Valid, Expires in N days at 60/30 days, Expired, No expiry date) and the number and expiry with their pencils. These pencils replace the number/expiry pencils in the card's field grid.
+    - It also shows the current copy (file, upload date, uploader) with View copy.
+    - The button reads "Replace copy" when a copy exists (the old one moves to Earlier copies) and "Upload copy" when none does.
+  - **KYC uploads for the person:** the box lists KYC legal documents that belong to the person (`kycIdentityDocumentsFor`):
+    - role-based types matched to the person's roles across all tabs: Identity Proof - Director (also managers/signatories), Identity Proof - Authorized Secretary, Identity Proof - SEF, Identity Proof - UBO, and Key Contact QID / Passport attachment;
+    - shared ID uploads whose file name contains at least two parts of the person's name.
+
+    Each has View and "Use as QID" / "Use as passport". `POST /api/compliance/clients/:id/identity-documents/from-kyc` (`legalDocumentId`, `section`, `rowId`, `identityType`) reads the file through `KycService.getLegalDocumentFile` (KYC access checks) and copies it into the person's ID copies with the note "From KYC-… (type)". The KYC file is unchanged.
+  - The remaining shared uploads ("QID / Passport copies", "Passport") are one bundle per KYC case for everyone. They are counted with a link to KYC & Documents.
+  - A copy stored without a new number or expiry records the person's current values.
   - Copies can be removed (soft delete) from the CDD tab's Identity Documents folder.
   - **Migration** `20261117120000_client_identity_documents`: additive nullable `ClientDocument` columns and an index on `(clientId, personKey)`.
   - **Verified locally** (Company Admin, CL-2026-0006):
@@ -58,7 +68,9 @@ Design confirmed with the user on 2026-11-17: edits are kept on the client recor
     - the passport Expiry record moved to the new number and date;
     - the files appear in CDD → Identity Documents;
     - a copy uploaded for a shareholder also shows on the same person's director card;
-    - synthetic checks for scoping and validation.
+    - on abc-new, the key contact's three "Key Contact QID / Passport attachment" files were listed in the box, and "Use as passport" stored one as the passport copy (View copy and Replace copy then shown);
+    - synthetic checks for scoping and validation, including that only this client's KYC files in the same company can be linked.
+    - Not exercised with real role-based files on a client that has directors, because none in the local database has both; that matching is covered by the rule above only.
 - **Migration** `20261117100000_client_profile_rekyc_identity` is additive only:
   - `KycCasePurpose` enum;
   - nullable columns `Client.currentKycCaseId`, `ClientExpiryItem.sourceKey`, `KycCase.previousKycCaseId`, and `KycCase.purpose` (default `ONBOARDING`);

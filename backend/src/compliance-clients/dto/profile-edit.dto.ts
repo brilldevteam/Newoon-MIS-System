@@ -47,3 +47,10 @@ export class UploadIdentityDocumentDto {
   @MaxLength(10)
   expiryDate?: string;
 }
+
+// Uses a file uploaded on one of the client's KYC cases as a person's QID / passport copy.
+export class LinkKycIdentityDocumentDto extends UploadIdentityDocumentDto {
+  @IsString()
+  @MaxLength(100)
+  legalDocumentId!: string;
+}

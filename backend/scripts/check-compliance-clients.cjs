@@ -493,6 +493,26 @@ async function checkProfileEdits() {
   await assert.rejects(idService.uploadIdentityDocument({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'QID' }, [file]), /not found/);
   assert.equal(profile.personKey('  samer   saleh '), 'SAMER SALEH');
 
+  // Using a KYC upload as a person's copy: only this client's KYC files in this company, read through KYC access.
+  const linkCalls = [];
+  const linkPrisma = {
+    client: { findFirst: async ({ where }) => (where.tenantId === 'tenant-a' ? { id: 'c1', tenantId: 'tenant-a' } : null) },
+    legalDocument: {
+      findFirst: async ({ where }) => (where.id === 'ld-1' && where.tenantId === 'tenant-a' && where.kycCase.clientId === 'c1'
+        ? { id: 'ld-1', kycCaseId: 'k-cur', documentType: 'Identity Proof - Director', kycCase: { kycNumber: 'KYC-2026-0003' } } : null)
+    }
+  };
+  const linkService = new ComplianceClientsService(linkPrisma, {
+    getLegalDocumentFile: async (_user, caseId, documentId) => { linkCalls.push(`${caseId}/${documentId}`); return { fileName: 'qid.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4') }; }
+  });
+  linkService.uploadIdentityDocument = async (_user, _id, input, files, note) => ({ input, file: files[0].originalname, note });
+  const linked = await linkService.linkKycIdentityDocument(actor, 'c1', { legalDocumentId: 'ld-1', section: 'OFFICER', rowId: 'm1', identityType: 'QID' });
+  assert.deepEqual(linkCalls, ['k-cur/ld-1'], 'The KYC file is read through the KYC service');
+  assert.equal(linked.file, 'qid.pdf');
+  assert.equal(linked.note, 'From KYC-2026-0003 (Identity Proof - Director)');
+  await assert.rejects(linkService.linkKycIdentityDocument(actor, 'c1', { legalDocumentId: 'other-client-doc', section: 'OFFICER', identityType: 'QID' }), /not found/);
+  await assert.rejects(linkService.linkKycIdentityDocument({ ...actor, tenantId: 'tenant-b' }, 'c1', { legalDocumentId: 'ld-1', section: 'OFFICER', identityType: 'QID' }), /not found/);
+
   // Re-KYC is started from the current KYC with the edits applied.
   let rekyc = null;
   const rekycService = new ComplianceClientsService(editPrisma, {

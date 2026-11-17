@@ -8,7 +8,7 @@ import { standardDocumentKinds, uploadInterceptorOptions } from '../common/secur
 import { RequestUser } from '../common/types/request-user.type';
 import { ComplianceClientQuery, ComplianceClientsService } from './compliance-clients.service';
 import { UploadedClientFile } from './compliance-documents.service';
-import { UpdateProfileFieldDto, UploadIdentityDocumentDto } from './dto/profile-edit.dto';
+import { LinkKycIdentityDocumentDto, UpdateProfileFieldDto, UploadIdentityDocumentDto } from './dto/profile-edit.dto';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
 
 // Access follows the "compliance" area of the role matrix (see RolesGuard): GET needs view, PATCH needs edit.
@@ -57,6 +57,12 @@ export class ComplianceClientsController {
     @UploadedFiles() files: UploadedClientFile[]
   ) {
     return this.complianceClientsService.uploadIdentityDocument(user, id, body, files || []);
+  }
+
+  // Uses an ID file uploaded on one of the client's KYC cases as a person's QID / passport copy.
+  @Post(':id/identity-documents/from-kyc')
+  linkKycIdentityDocument(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: LinkKycIdentityDocumentDto) {
+    return this.complianceClientsService.linkKycIdentityDocument(user, id, dto);
   }
 
   // Starts a periodic re-KYC prefilled from the current profile; earlier KYCs are kept as history.

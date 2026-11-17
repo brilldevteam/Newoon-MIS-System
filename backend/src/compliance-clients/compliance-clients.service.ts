@@ -272,7 +272,8 @@ export class ComplianceClientsService {
   async uploadIdentityDocument(
     user: RequestUser, id: string,
     input: { section?: string; rowId?: string; identityType?: string; documentNumber?: string; expiryDate?: string },
-    files: UploadedClientFile[]
+    files: UploadedClientFile[],
+    sourceNote?: string
   ) {
     if (!this.documents) throw new BadRequestException('Document uploads are not available.');
     const identityType = input.identityType === 'QID' || input.identityType === 'PASSPORT' ? input.identityType : null;
@@ -295,20 +296,47 @@ export class ComplianceClientsService {
     if (!fullName) throw new BadRequestException('Enter the name of the person before uploading an ID copy.');
     const documentNumber = this.optionalText(input.documentNumber)?.slice(0, 100) || null;
     const expiry = this.profileValue('date', input.expiryDate);
+    const prefix = identityType === 'QID' ? 'qid' : 'passport';
+    // Without new values the copy records the number and expiry the person currently has.
+    const current = (field: string) => {
+      const override = overrides.find((item) => item.section === section && item.rowId === rowId && item.field === field);
+      return override ? text(override.value) : text(row[field]);
+    };
+    const copyNumber = documentNumber || current(`${prefix}Number`);
+    const copyExpiry = expiry || current(`${prefix}Expiry`)?.slice(0, 10) || null;
     const section_ = await this.documents.sectionByKey(client.tenantId, 'identity');
     const label = identityType === 'QID' ? 'QID' : 'Passport';
     await this.documents.storeFiles(user, client, section_, files, {
       title: `${label} copy - ${fullName}`.slice(0, 200),
-      notes: [documentNumber && `${label} no. ${documentNumber}`, expiry && `expires ${expiry}`].filter(Boolean).join(', ') || null,
+      notes: [sourceNote, copyNumber && `${label} no. ${copyNumber}`, copyExpiry && `expires ${copyExpiry}`].filter(Boolean).join(', ') || null,
       identity: {
         personKey: personKey(fullName), personName: fullName, identityType,
-        documentNumber, documentExpiry: expiry ? new Date(`${expiry}T00:00:00.000Z`) : null
+        documentNumber: copyNumber, documentExpiry: copyExpiry ? new Date(`${copyExpiry}T00:00:00.000Z`) : null
       }
     });
-    const prefix = identityType === 'QID' ? 'qid' : 'passport';
     if (documentNumber) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Number`, value: documentNumber });
     if (expiry) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Expiry`, value: expiry });
     return this.findOne(user, id);
+  }
+
+  // Uses a QID / passport file uploaded on one of this client's KYC cases as a person's copy. The file is copied into
+  // the Identity Documents folder (the KYC file is unchanged); reading it goes through the KYC access checks.
+  async linkKycIdentityDocument(
+    user: RequestUser, id: string,
+    input: { legalDocumentId?: string; section?: string; rowId?: string; identityType?: string; documentNumber?: string; expiryDate?: string }
+  ) {
+    if (!this.kycService) throw new BadRequestException('KYC documents are not available.');
+    const client = await this.prisma.client.findFirst({ where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE }, select: { id: true, tenantId: true } });
+    if (!client) throw new NotFoundException('Compliance client not found');
+    const legal = await this.prisma.legalDocument.findFirst({
+      where: { id: this.optionalText(input.legalDocumentId) || '', tenantId: client.tenantId, storagePath: { not: null }, kycCase: { clientId: client.id } },
+      select: { id: true, kycCaseId: true, documentType: true, kycCase: { select: { kycNumber: true } } }
+    });
+    if (!legal) throw new NotFoundException('KYC document not found for this client.');
+    const file = await this.kycService.getLegalDocumentFile(user, legal.kycCaseId, legal.id);
+    return this.uploadIdentityDocument(user, id, input, [
+      { originalname: file.fileName, mimetype: file.mimeType || undefined, size: file.content.length, buffer: file.content }
+    ], `From ${legal.kycCase.kycNumber} (${legal.documentType})`);
   }
 
   // Starts a periodic re-KYC prefilled from the current profile (including edits made on this page). The earlier

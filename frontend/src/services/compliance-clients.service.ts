@@ -225,6 +225,13 @@ export function uploadIdentityDocument(
   return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents`, data, { timeout: 120000 }).then((response) => response.data);
 }
 
+export function linkKycIdentityDocument(
+  clientId: string,
+  payload: { legalDocumentId: string; section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT' }
+) {
+  return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, rowId: payload.rowId || undefined }).then((response) => response.data);
+}
+
 export function startComplianceRekyc(id: string) {
   return api.post<{ id: string; kycNumber: string }>(`/compliance/clients/${id}/rekyc`).then((response) => response.data);
 }

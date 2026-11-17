@@ -17,6 +17,7 @@ import {
   ProfileRef,
   startComplianceRekyc,
   updateComplianceProfileField,
+  personKey,
   ClientDocumentFolders as Folders,
   ComplianceClientDetail,
   complianceStatusLabels,
@@ -109,35 +110,27 @@ function profileItem(
   };
 }
 
-function daysUntil(value: string) {
-  const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
-  return Math.floor((date.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+// QID / passport numbers and expiry dates are edited in the ID documents box; only an older combined value shows here.
+function identityItems(_editing: ProfileEditing, person: PersonIdentity & { ref: ProfileRef }): EditableItem[] {
+  return person.legacyIdentity
+    ? [{ label: 'QID / Passport (earlier entry)', value: <span>{person.legacyIdentity}<span className="block text-xs text-slate-500">Recorded as one value on an older KYC. Enter it as the QID or passport number in ID documents below.</span></span>, wide: true }]
+    : [];
 }
 
-function ExpiryValue({ value }: { value: string }) {
-  const days = daysUntil(value);
-  const badge = days < 0
-    ? <Badge className="bg-rose-50 text-rose-700 ring-rose-200">Expired</Badge>
-    : days <= 30
-      ? <Badge className="bg-rose-50 text-rose-700 ring-rose-200">{`${days} days left`}</Badge>
-      : days <= 60
-        ? <Badge className="bg-amber-50 text-amber-700 ring-amber-200">{`${days} days left`}</Badge>
-        : null;
-  return <span className="inline-flex flex-wrap items-center gap-2">{formatDate(value)}{badge}</span>;
-}
-
-function identityItems(editing: ProfileEditing, person: PersonIdentity & { ref: ProfileRef }): EditableItem[] {
-  return [
-    profileItem(editing, person.ref, 'QID number', person.qidNumber, 'qidNumber', 'text', person.qidNumber),
-    profileItem(editing, person.ref, 'QID expiry', person.qidExpiry ? <ExpiryValue value={person.qidExpiry} /> : null, 'qidExpiry', 'date', person.qidExpiry,
-      { hint: 'Alerts are sent 60 and 30 days before expiry and when expired.' }),
-    profileItem(editing, person.ref, 'Passport number', person.passportNumber, 'passportNumber', 'text', person.passportNumber),
-    profileItem(editing, person.ref, 'Passport expiry', person.passportExpiry ? <ExpiryValue value={person.passportExpiry} /> : null, 'passportExpiry', 'date', person.passportExpiry,
-      { hint: 'Alerts are sent 60 and 30 days before expiry and when expired.' }),
-    ...(person.legacyIdentity
-      ? [{ label: 'QID / Passport (earlier entry)', value: <span>{person.legacyIdentity}<span className="block text-xs text-slate-500">Recorded as one value on an older KYC. Enter it as QID or passport above.</span></span> }]
-      : [])
-  ];
+// Roles of each person across the tabs, so KYC ID files named for a role reach the right cards.
+function rolesByPerson(profile: ComplianceClientDetail['profile']) {
+  const roles: Record<string, string[]> = {};
+  const add = (name: string | null, role: string) => {
+    const key = personKey(name);
+    if (!key) return;
+    roles[key] = [...new Set([...(roles[key] || []), role])];
+  };
+  if (!profile) return roles;
+  profile.shareholders.forEach((party) => add(party.fullName, party.isUbo ? 'UBO' : 'SHAREHOLDER'));
+  profile.ubos.forEach((party) => add(party.fullName, 'UBO'));
+  profile.officers.forEach((officer) => officer.roles.forEach((role) => add(officer.fullName, role)));
+  add(profile.keyContact.fullName, 'KEY_CONTACT');
+  return roles;
 }
 
 function PartyCards({ parties, empty, editing, kind }: { parties: ProfileParty[]; empty: string; editing: ProfileEditing; kind: 'shareholder' | 'ubo' }) {
@@ -327,8 +320,18 @@ export function ComplianceClientDetailsPage() {
     ids: {
       clientId: client.id,
       canEdit: canEdit && Boolean(profile),
+      canOpenKyc,
       documents: data.identityDocuments || [],
-      kycCopies: data.legalDocuments.filter((document) => /qid|passport/i.test(document.documentType)).length,
+      kycDocuments: data.legalDocuments,
+      kycNumbers: Object.fromEntries(data.kycCases.map((kycCase) => [kycCase.id, kycCase.kycNumber])),
+      rolesByPerson: rolesByPerson(profile),
+      saveField: async (ref, field, value) => {
+        const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
+        setData(next);
+        showToast('Saved.', 'success');
+        loadMonitoring();
+      },
+      isEdited: (ref, field) => data.editedFields.includes(`${ref.section}|${ref.rowId}|${field}`),
       onUploaded: (next) => {
         setData(next);
         loadMonitoring();
