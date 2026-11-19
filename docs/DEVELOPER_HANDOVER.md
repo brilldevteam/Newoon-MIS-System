@@ -1,5 +1,14 @@
 # Newoon MIS Developer Handover
 
+## KYC Export Date from the Preliminary KYC (2026-11-19)
+
+- **Symptom:** a KYC made from a Preliminary KYC (for example a proposed company finalised with "Use Preliminary KYC as final") downloaded with a blank "Date:" at the top and "Date: -" in Section A, although the Preliminary KYC shows its date.
+- **Cause:** the export prints the KYC form's Section A `date`, an optional field that enquiry conversion never filled.
+- **Fix:** `KycService.serializeForm` returns `sectionA.date` = the entered KYC date, otherwise the Preliminary KYC's completion date (`preliminaryKyc.completedAt`, date part in UTC, as the Preliminary PDF prints it). An entered date always wins. The KYC form screen shows the same date, and saving the form stores it. Nothing is written to the database on read.
+- **Unchanged:** standard KYCs without a Preliminary KYC, and the client declaration (Section G) date, which stays blank when the client never completed the declaration.
+- **Check:** `node backend/scripts/check-kyc-export-date.cjs` covers the fallback, an entered date winning, a standard KYC, and the HTML and DOCX outputs.
+- **Not verified:** Word rendering of the DOCX (the Word automation hung on this machine), and the server. Layout is unchanged; only the date value is now filled.
+
 ## Resubmit to DMLRO "Internal server error" (2026-11-19)
 
 - **Symptom:** after DMLRO returned a KYC file, **Resubmit KYC File to DMLRO** showed "Internal server error". Nothing was saved, so after a refresh the AML Supervisor comments box was empty again.
