@@ -7,10 +7,11 @@ import { ComplianceDocumentsService } from './compliance-documents.service';
 import { ComplianceMonitoringController, ComplianceRemindersController } from './compliance-monitoring.controller';
 import { ComplianceMonitoringService } from './compliance-monitoring.service';
 import { ComplianceRemindersService } from './compliance-reminders.service';
+import { IdDocumentReaderService } from './id-document-reader.service';
 
 @Module({
   imports: [KycModule],
   controllers: [ComplianceClientsController, ComplianceDocumentsController, ComplianceMonitoringController, ComplianceRemindersController],
-  providers: [ComplianceClientsService, ComplianceDocumentsService, ComplianceMonitoringService, ComplianceRemindersService]
+  providers: [ComplianceClientsService, ComplianceDocumentsService, ComplianceMonitoringService, ComplianceRemindersService, IdDocumentReaderService]
 })
 export class ComplianceClientsModule {}

@@ -70,6 +70,11 @@ export type ComplianceClientPage = {
 };
 
 export type ComplianceClientUpdate = {
+  name?: string;
+  clientCode?: string;
+  registrationNumber?: string;
+  country?: string;
+  industry?: string;
   cddType?: CddType | 'NONE';
   jurisdiction?: ClientJurisdiction | 'NONE';
   email?: string;
@@ -89,42 +94,70 @@ export function listComplianceClients(filters: ComplianceClientFilters) {
 
 export type OfficerRole = 'DIRECTOR' | 'MANAGER' | 'SECRETARY' | 'SEF' | 'SIGNATORY' | 'OTHER';
 
-export type ProfileParty = {
+export type ProfileSection = 'COMPANY' | 'SHAREHOLDER' | 'UBO' | 'OFFICER' | 'KEY_CONTACT';
+export type ProfileRef = { section: ProfileSection; rowId: string; rowLabel: string | null };
+
+export type PersonIdentity = {
+  identityNumber: string | null;
+  qidNumber: string | null;
+  qidExpiry: string | null;
+  passportNumber: string | null;
+  passportExpiry: string | null;
+  // Combined "QID / Passport" value from an older KYC that has not been split yet.
+  legacyIdentity: string | null;
+};
+
+export type ProfileParty = PersonIdentity & {
+  ref: ProfileRef;
   id: string | null;
   fullName: string;
   partyType: string | null;
+  isCorporate: boolean;
   nationality: string | null;
-  identityNumber: string | null;
   dateOfBirth: string | null;
   address: string | null;
   percentage: string | null;
+  percentageField: 'shareholderPercentage' | 'uboInterestPercentage';
   isUbo: boolean;
   linkedCompany: string | null;
 };
 
-export type ProfileOfficer = {
+export type ProfileOfficer = PersonIdentity & {
+  ref: ProfileRef;
   id: string | null;
   fullName: string;
   positions: string[];
   roles: OfficerRole[];
   entityName: string | null;
   nationality: string | null;
-  identityNumber: string | null;
   dateOfBirth: string | null;
   address: string | null;
   isAuthorizedSignatory: boolean;
+};
+
+export type ProfileKeyContact = PersonIdentity & {
+  ref: ProfileRef;
+  fullName: string | null;
+  position: string | null;
+  nationality: string | null;
+  mobileNumber: string | null;
+  email: string | null;
 };
 
 export type ComplianceClientDetail = {
   client: ComplianceClient & { industry: string | null };
   contacts: Array<{ id: string; name: string; email: string | null; phone: string | null; position: string | null; isPrimary: boolean }>;
   engagements: Array<{ id: string; engagementNumber: string; serviceName: string; description: string | null; status: string; startDate: string | null; endDate: string | null; kycCaseId: string | null; createdAt: string }>;
-  kycCases: Array<{ id: string; kycNumber: string; title: string; status: string; createdAt: string; updatedAt: string; serviceName: string | null; hasForm: boolean }>;
+  kycCases: Array<{
+    id: string; kycNumber: string; title: string; status: string; createdAt: string; updatedAt: string; serviceName: string | null; hasForm: boolean;
+    purpose: 'ONBOARDING' | 'REKYC'; previousKycCaseId: string | null;
+  }>;
   profileCase: { id: string; kycNumber: string; status: string } | null;
   profile: {
     formVersion: number;
     formStatus: string;
     formUpdatedAt: string;
+    editCount: number;
     company: Record<
       | 'legalName' | 'legalForm' | 'commercialRegistrationNo' | 'countryOfIncorporation' | 'dateOfIncorporation' | 'registeredOfficeAddress'
       | 'telephone' | 'email' | 'website' | 'businessNature' | 'relatedIndustry' | 'licenseActivities' | 'taxIdentificationNo' | 'prospectiveServices',
@@ -133,8 +166,10 @@ export type ComplianceClientDetail = {
     shareholders: ProfileParty[];
     ubos: ProfileParty[];
     officers: ProfileOfficer[];
-    keyContact: { fullName: string | null; position: string | null; nationality: string | null; identityNumber: string | null; mobileNumber: string | null; email: string | null } | null;
+    keyContact: ProfileKeyContact;
   } | null;
+  editedFields: string[];
+  identityDocuments: IdentityDocument[];
   legalDocuments: Array<{ id: string; kycCaseId: string; documentType: string; fileName: string; mimeType: string | null; createdAt: string }>;
   riskHistory: Array<{
     id: string; kycCaseId: string; previousRisk: ClientRiskLevel | null; newRisk: ClientRiskLevel; reasonCategory: string; explanation: string; effectiveDate: string;
@@ -151,6 +186,80 @@ export function getComplianceClient(id: string) {
 
 export function updateComplianceClient(id: string, payload: ComplianceClientUpdate) {
   return api.patch<ComplianceClient>(`/compliance/clients/${id}`, payload).then((response) => response.data);
+}
+
+export function updateComplianceProfileField(id: string, payload: { section: ProfileSection; rowId?: string; field: string; value: string | null }) {
+  return api.patch<ComplianceClientDetail>(`/compliance/clients/${id}/profile`, payload).then((response) => response.data);
+}
+
+// A QID or passport copy uploaded from a person's details; personKey is the person's normalized full name.
+export type IdentityDocument = {
+  id: string;
+  personKey: string;
+  personName: string | null;
+  identityType: 'QID' | 'PASSPORT';
+  documentNumber: string | null;
+  documentExpiry: string | null;
+  fileName: string;
+  mimeType: string | null;
+  createdAt: string;
+  uploadedBy: { id: string; firstName: string; lastName: string; email: string } | null;
+};
+
+// Same normalization as the backend (personKey in compliance-client-profile.ts).
+export function personKey(fullName: string | null | undefined) {
+  return (fullName || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+export function uploadIdentityDocument(
+  clientId: string,
+  payload: { section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT'; documentNumber?: string; expiryDate?: string; file: File }
+) {
+  const data = new FormData();
+  data.append('section', payload.section);
+  if (payload.rowId) data.append('rowId', payload.rowId);
+  data.append('identityType', payload.identityType);
+  if (payload.documentNumber?.trim()) data.append('documentNumber', payload.documentNumber.trim());
+  if (payload.expiryDate) data.append('expiryDate', payload.expiryDate);
+  data.append('files', payload.file);
+  return api.post<ComplianceClientDetail>(`/compliance/clients/${clientId}/identity-documents`, data, { timeout: 120000 }).then((response) => response.data);
+}
+
+// What the server read from a QID / passport file's machine-readable lines; used only to pre-fill the upload form.
+export type IdentityDocumentReading =
+  | { found: false; message: string }
+  | {
+      found: true;
+      format: 'TD3' | 'TD1';
+      documentType: string;
+      issuingCountry: string;
+      documentNumber: string | null;
+      documentNumberCheck: 'OK' | 'CORRECTED' | 'FAILED';
+      expiryDate: string | null;
+      expiryValid: boolean;
+      nameOnDocument: string;
+      nationality: string;
+      typeMatches: boolean;
+    };
+
+export function readIdentityDocument(clientId: string, identityType: 'QID' | 'PASSPORT', file: File) {
+  const data = new FormData();
+  data.append('identityType', identityType);
+  data.append('files', file);
+  return api.post<IdentityDocumentReading>(`/compliance/clients/${clientId}/identity-documents/read`, data, { timeout: 120000 }).then((response) => response.data);
+}
+
+export function linkKycIdentityDocument(
+  clientId: string,
+  payload: { legalDocumentId: string; section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT' }
+) {
+  return api
+    .post<ComplianceClientDetail & { readFromDocument: { documentNumber: string; expiryDate: string } | null }>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, rowId: payload.rowId || undefined }, { timeout: 120000 })
+    .then((response) => response.data);
+}
+
+export function startComplianceRekyc(id: string) {
+  return api.post<{ id: string; kycNumber: string }>(`/compliance/clients/${id}/rekyc`).then((response) => response.data);
 }
 
 export async function exportComplianceClients(filters: ComplianceClientFilters) {
@@ -218,7 +327,7 @@ export function deleteClientDocument(clientId: string, documentId: string, reaso
   return api.post<ClientDocumentFolders>(`/compliance/clients/${clientId}/documents/${documentId}/delete`, { reason: reason?.trim() || undefined }).then((response) => response.data);
 }
 
-export async function viewClientDocument(clientId: string, document: ClientDocument) {
+export async function viewClientDocument(clientId: string, document: Pick<ClientDocument, 'id' | 'mimeType' | 'fileName'>) {
   const response = await api.get(`/compliance/clients/${clientId}/documents/${document.id}/view`, { responseType: 'blob' });
   const blob = new Blob([response.data], { type: document.mimeType || response.data.type || 'application/octet-stream' });
   const url = window.URL.createObjectURL(blob);

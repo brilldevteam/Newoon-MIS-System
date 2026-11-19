@@ -1,38 +1,126 @@
 import { beneficialOwners } from '../common/ownership';
+import { hasSplitIdentity, identitySummary, withDerivedIdentity } from '../common/person-identity';
 
-// Maps a serialized KYC form (KycService.formSnapshot) to the read-only client profile shown on the compliance
-// client page. Pure functions only, so the mapping can be checked without a database.
+// Maps a serialized KYC form (KycService.formSnapshot) to the client profile shown on the compliance client page.
+// Edits made on that page (ClientProfileOverride) are overlaid on the form rows first, so the approved KYC form is
+// never changed. Pure functions only, so the mapping can be checked without a database.
 
 type Rec = Record<string, unknown>;
 
 export type OfficerRole = 'DIRECTOR' | 'MANAGER' | 'SECRETARY' | 'SEF' | 'SIGNATORY' | 'OTHER';
+export type ProfileSection = 'COMPANY' | 'SHAREHOLDER' | 'UBO' | 'OFFICER' | 'KEY_CONTACT';
+export type FieldKind = 'text' | 'longtext' | 'date' | 'list' | 'percent' | 'email';
+type FieldSpec = { kind: FieldKind; clears?: string[] };
 
-export type ProfileParty = {
+export type ProfileRef = { section: ProfileSection; rowId: string; rowLabel: string | null };
+
+export type PersonIdentity = {
+  identityNumber: string | null;
+  qidNumber: string | null;
+  qidExpiry: string | null;
+  passportNumber: string | null;
+  passportExpiry: string | null;
+  // Combined "QID / Passport" value from an older KYC that has not been split into QID and passport yet.
+  legacyIdentity: string | null;
+};
+
+export type ProfileParty = PersonIdentity & {
+  ref: ProfileRef;
   id: string | null;
   fullName: string;
   partyType: string | null;
+  isCorporate: boolean;
   nationality: string | null;
-  identityNumber: string | null;
   dateOfBirth: string | null;
   address: string | null;
   percentage: string | null;
+  percentageField: 'shareholderPercentage' | 'uboInterestPercentage';
   isUbo: boolean;
   linkedCompany: string | null;
 };
 
-export type ProfileOfficer = {
+export type ProfileOfficer = PersonIdentity & {
+  ref: ProfileRef;
   id: string | null;
   fullName: string;
   positions: string[];
   roles: OfficerRole[];
   entityName: string | null;
   nationality: string | null;
-  identityNumber: string | null;
   dateOfBirth: string | null;
   address: string | null;
   isAuthorizedSignatory: boolean;
 };
 
+export type ProfileOverride = { section: string; rowId: string; rowLabel: string | null; field: string; value: string | null };
+
+const ID_FIELDS: Record<string, FieldSpec> = {
+  qidNumber: { kind: 'text' },
+  qidExpiry: { kind: 'date' },
+  passportNumber: { kind: 'text' },
+  passportExpiry: { kind: 'date' }
+};
+
+// Every value the client page can edit, by section, with the raw KYC form field it overlays.
+export const PROFILE_FIELDS: Record<ProfileSection, Record<string, FieldSpec>> = {
+  COMPANY: {
+    legalName: { kind: 'text' },
+    legalForm: { kind: 'list', clears: ['legalFormOther'] },
+    commercialRegistrationNo: { kind: 'text' },
+    countryOfIncorporation: { kind: 'list', clears: ['countryOfIncorporationOther'] },
+    dateOfIncorporation: { kind: 'date' },
+    registeredOfficeAddress: { kind: 'longtext' },
+    telephone: { kind: 'text' },
+    email: { kind: 'email' },
+    website: { kind: 'text' },
+    businessNature: { kind: 'list', clears: ['businessNatureOther'] },
+    relatedIndustry: { kind: 'list', clears: ['relatedIndustryOther'] },
+    licenseActivities: { kind: 'longtext' },
+    taxIdentificationNo: { kind: 'text' },
+    prospectiveService: { kind: 'list', clears: ['prospectiveServiceOther'] }
+  },
+  SHAREHOLDER: {
+    fullName: { kind: 'text' },
+    nationality: { kind: 'list', clears: ['nationalityOther'] },
+    dateOfBirth: { kind: 'date' },
+    residenceAddress: { kind: 'longtext', clears: ['address'] },
+    shareholderPercentage: { kind: 'percent' },
+    uboInterestPercentage: { kind: 'percent' },
+    identityNumber: { kind: 'text' },
+    ...ID_FIELDS
+  },
+  UBO: {
+    fullName: { kind: 'text' },
+    nationality: { kind: 'list', clears: ['nationalityOther'] },
+    dateOfBirth: { kind: 'date' },
+    residenceAddress: { kind: 'longtext', clears: ['address'] },
+    uboInterestPercentage: { kind: 'percent' },
+    ...ID_FIELDS
+  },
+  OFFICER: {
+    fullName: { kind: 'text' },
+    entityName: { kind: 'text' },
+    nationality: { kind: 'list' },
+    address: { kind: 'longtext' },
+    dateOfBirth: { kind: 'date' },
+    position: { kind: 'list', clears: ['positionOther'] },
+    ...ID_FIELDS
+  },
+  KEY_CONTACT: {
+    fullName: { kind: 'text' },
+    position: { kind: 'list', clears: ['positionOther'] },
+    nationality: { kind: 'list', clears: ['nationalityOther'] },
+    mobileNumber: { kind: 'text' },
+    email: { kind: 'email' },
+    ...ID_FIELDS
+  }
+};
+
+export function profileFieldSpec(section: string, field: string): FieldSpec | null {
+  return (PROFILE_FIELDS as Record<string, Record<string, FieldSpec>>)[section]?.[field] || null;
+}
+
+const LEGACY_KEY = '_legacyIdentity';
 const record = (value: unknown): Rec => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Rec) : {});
 const rows = (value: unknown): Rec[] => (Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') as Rec[] : []);
 
@@ -65,6 +153,128 @@ const percentage = (value: unknown) => {
   return result === null ? null : result.replace(/%$/, '');
 };
 
+// Links uploaded QID / passport copies to a person: the same name on several tabs shares the copies.
+export function personKey(fullName: string | null | undefined) {
+  return (fullName || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+export function rowKey(row: Rec, index: number) {
+  return text(row.id) || `#${index}`;
+}
+
+function identity(row: Rec, corporate = false): PersonIdentity {
+  const split = hasSplitIdentity(row);
+  return {
+    identityNumber: corporate ? text(row.identityNumber) : identitySummary(row),
+    qidNumber: text(row.qidNumber),
+    qidExpiry: isoDate(row.qidExpiry),
+    passportNumber: text(row.passportNumber),
+    passportExpiry: isoDate(row.passportExpiry),
+    legacyIdentity: corporate ? null : text(row[LEGACY_KEY]) || (split ? null : text(row.identityNumber))
+  };
+}
+
+function setValue(target: Rec, field: string, spec: FieldSpec, value: string | null) {
+  if (spec.kind === 'list') target[field] = value ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
+  else if (spec.kind === 'date') target[field] = value || null;
+  else target[field] = value ?? '';
+  for (const key of spec.clears || []) target[key] = '';
+}
+
+function findRow(original: Rec[], override: ProfileOverride) {
+  const byId = original.findIndex((row, index) => rowKey(row, index) === override.rowId);
+  if (byId >= 0 || !override.rowLabel) return byId;
+  // KYC manager rows get new ids whenever the form is saved again; fall back to the name the edit was made on.
+  const label = override.rowLabel.trim().toLowerCase();
+  return original.findIndex((row) => (text(row.fullName) || '').toLowerCase() === label);
+}
+
+// Returns a copy of the form with the client-page edits applied; the input is not changed.
+export function applyOverrides<T extends { sectionA: unknown; sectionB: unknown; sectionC: unknown; sectionE: unknown }>(form: T, overrides: ProfileOverride[]): T {
+  if (!overrides.length) return form;
+  const a: Rec = { ...record(form.sectionA) };
+  const e: Rec = { ...record(form.sectionE) };
+  const b = record(form.sectionB);
+  const c = record(form.sectionC);
+  const lists: Record<'SHAREHOLDER' | 'UBO' | 'OFFICER', { original: Rec[]; copy: Rec[] }> = {
+    SHAREHOLDER: { original: rows(b.shareholders), copy: [] },
+    UBO: { original: rows(b.ubos), copy: [] },
+    OFFICER: { original: rows(c.managers), copy: [] }
+  };
+  for (const list of Object.values(lists)) list.copy = list.original.map((row) => ({ ...row }));
+  const touched = new Set<Rec>();
+
+  for (const override of overrides) {
+    const spec = profileFieldSpec(override.section, override.field);
+    if (!spec) continue;
+    let target: Rec | undefined;
+    if (override.section === 'COMPANY') target = a;
+    else if (override.section === 'KEY_CONTACT') target = e;
+    else {
+      const list = lists[override.section as keyof typeof lists];
+      const index = findRow(list.original, override);
+      target = index >= 0 ? list.copy[index] : undefined;
+    }
+    if (!target) continue;
+    if (override.field in ID_FIELDS && !hasSplitIdentity(target) && text(target.identityNumber) && target[LEGACY_KEY] === undefined) {
+      target[LEGACY_KEY] = text(target.identityNumber);
+    }
+    setValue(target, override.field, spec, override.value);
+    touched.add(target);
+  }
+
+  const derive = (row: Rec) => (touched.has(row) ? withDerivedIdentity(row) : row);
+  return {
+    ...form,
+    sectionA: a,
+    sectionB: { ...b, shareholders: lists.SHAREHOLDER.copy.map(derive), ubos: lists.UBO.copy.map(derive) },
+    sectionC: { ...c, managers: lists.OFFICER.copy.map(derive) },
+    sectionE: derive(e)
+  };
+}
+
+// Client-page edits made on the previous KYC after a re-KYC was prefilled are not in the re-KYC form. When the
+// re-KYC becomes current they are carried over as edits on it, pointed at the matching row of the new form
+// (same row id, else the same person's name, since KYC manager rows get new ids). Edits whose row is no longer
+// in the new form are skipped and reported.
+export function carryOverOverrides(
+  late: ProfileOverride[], previous: ProfileOverride[],
+  form: { sectionB: unknown; sectionC: unknown }
+): { carried: ProfileOverride[]; skipped: ProfileOverride[] } {
+  const lists: Record<string, Rec[]> = {
+    SHAREHOLDER: rows(record(form.sectionB).shareholders),
+    UBO: rows(record(form.sectionB).ubos),
+    OFFICER: rows(record(form.sectionC).managers)
+  };
+  const carried: ProfileOverride[] = [];
+  const skipped: ProfileOverride[] = [];
+  for (const override of late) {
+    if (!profileFieldSpec(override.section, override.field)) continue;
+    const list = lists[override.section];
+    if (!list) {
+      carried.push({ ...override, rowId: '' });
+      continue;
+    }
+    const names = [override.rowLabel, previous.find((other) => other.section === override.section && other.rowId === override.rowId && other.field === 'fullName')?.value]
+      .map((name) => (name || '').trim().toLowerCase())
+      .filter(Boolean);
+    let index = override.section === 'OFFICER' ? -1 : list.findIndex((row, position) => rowKey(row, position) === override.rowId);
+    if (index < 0) index = list.findIndex((row) => names.includes((text(row.fullName) || '').toLowerCase()));
+    if (index < 0) {
+      skipped.push(override);
+      continue;
+    }
+    carried.push({ ...override, rowId: rowKey(list[index], index), rowLabel: text(list[index].fullName) });
+  }
+  return { carried, skipped };
+}
+
+// Removes overlay bookkeeping before rows are written into a new (re-KYC) form.
+export function stripOverlayKeys(row: Rec): Rec {
+  const { [LEGACY_KEY]: _legacy, ...rest } = row;
+  return rest;
+}
+
 export function companyDetails(sectionA: unknown) {
   const a = record(sectionA);
   return {
@@ -86,38 +296,54 @@ export function companyDetails(sectionA: unknown) {
 }
 
 export function shareholderParties(sectionB: unknown): ProfileParty[] {
-  return rows(record(sectionB).shareholders).map((row) => ({
-    id: text(row.id),
-    fullName: text(row.fullName) || 'Unnamed shareholder',
-    partyType: text(row.shareholderType),
-    nationality: optionText(row.nationality, row.nationalityOther),
-    identityNumber: text(row.identityNumber),
-    dateOfBirth: isoDate(row.dateOfBirth),
-    address: text(row.residenceAddress) || text(row.address),
-    percentage: percentage(row.shareholderPercentage ?? row.ownershipPercentage),
-    isUbo: Boolean(row.isUbo),
-    linkedCompany: text(row.linkedClientName)
-  }));
+  return rows(record(sectionB).shareholders).map((row, index) => {
+    const isCorporate = row.shareholderType === 'Corporate Entity';
+    return {
+      ref: { section: 'SHAREHOLDER', rowId: rowKey(row, index), rowLabel: text(row.fullName) },
+      id: text(row.id),
+      fullName: text(row.fullName) || 'Unnamed shareholder',
+      partyType: text(row.shareholderType),
+      isCorporate,
+      nationality: optionText(row.nationality, row.nationalityOther),
+      dateOfBirth: isoDate(row.dateOfBirth),
+      address: text(row.residenceAddress) || text(row.address),
+      percentage: percentage(row.shareholderPercentage ?? row.ownershipPercentage),
+      percentageField: 'shareholderPercentage',
+      isUbo: Boolean(row.isUbo),
+      linkedCompany: text(row.linkedClientName),
+      ...identity(row, isCorporate)
+    };
+  });
 }
 
 // Same merge the KYC preview and exports use: natural-person shareholders marked as UBO plus separately entered UBOs.
+// Edits go to the row the owner comes from (the shareholder row, or the separate UBO row).
 export function uboParties(sectionB: unknown): ProfileParty[] {
   const b = record(sectionB);
   const shareholders = rows(b.shareholders);
-  return beneficialOwners(shareholders, rows(b.ubos)).map((row) => {
+  const manual = rows(b.ubos);
+  return beneficialOwners(shareholders, manual).map((row) => {
+    const shareholderIndex = shareholders.indexOf(row);
+    const manualIndex = shareholderIndex >= 0 ? -1 : manual.findIndex((ubo) => ubo === row || (text(ubo.id) && ubo.id === row.id));
+    const ref: ProfileRef = shareholderIndex >= 0
+      ? { section: 'SHAREHOLDER', rowId: rowKey(row, shareholderIndex), rowLabel: text(row.fullName) }
+      : { section: 'UBO', rowId: rowKey(manual[manualIndex] || row, Math.max(manualIndex, 0)), rowLabel: text(row.fullName) };
     const parent = shareholders.find((party) => text(party.id) && (party.id === row.parentRowId || party.id === row.sourceShareholderId));
     const parentIsCompany = parent && parent.shareholderType === 'Corporate Entity';
     return {
+      ref,
       id: text(row.id),
       fullName: text(row.fullName) || 'Unnamed beneficial owner',
       partyType: 'Beneficial owner',
+      isCorporate: false,
       nationality: optionText(row.nationality, row.nationalityOther),
-      identityNumber: text(row.identityNumber),
       dateOfBirth: isoDate(row.dateOfBirth),
       address: text(row.residenceAddress) || text(row.address),
       percentage: percentage(row.uboInterestPercentage ?? row.ownershipPercentage ?? row.shareholderPercentage),
+      percentageField: 'uboInterestPercentage',
       isUbo: true,
-      linkedCompany: parentIsCompany ? text(parent.fullName) : text(row.linkedClientName)
+      linkedCompany: parentIsCompany ? text(parent.fullName) : text(row.linkedClientName),
+      ...identity(row)
     };
   });
 }
@@ -137,47 +363,93 @@ export function officerRoles(positions: string[], isAuthorizedSignatory: boolean
 }
 
 export function officers(sectionC: unknown): ProfileOfficer[] {
-  return rows(record(sectionC).managers).map((row) => {
+  return rows(record(sectionC).managers).map((row, index) => {
     const positions = optionList(row.position, row.positionOther);
     const isAuthorizedSignatory = Boolean(row.isAuthorizedSignatory);
     return {
+      ref: { section: 'OFFICER', rowId: rowKey(row, index), rowLabel: text(row.fullName) },
       id: text(row.id),
       fullName: text(row.fullName) || 'Unnamed officer',
       positions,
       roles: officerRoles(positions, isAuthorizedSignatory),
       entityName: text(row.entityName),
       nationality: optionText(row.nationality) || text(row.nationalityAndAddress),
-      identityNumber: text(row.identityNumber),
       dateOfBirth: isoDate(row.dateOfBirth),
       address: text(row.address),
-      isAuthorizedSignatory
+      isAuthorizedSignatory,
+      ...identity(row)
     };
   });
 }
 
 export function keyContact(sectionE: unknown) {
   const e = record(sectionE);
-  const contact = {
+  return {
+    ref: { section: 'KEY_CONTACT' as const, rowId: '', rowLabel: null },
     fullName: text(e.fullName),
     position: optionText(e.position, e.positionOther),
     nationality: optionText(e.nationality, e.nationalityOther),
-    identityNumber: text(e.identityNumber),
     mobileNumber: text(e.mobileNumber),
-    email: text(e.email)
+    email: text(e.email),
+    ...identity(e)
   };
-  return Object.values(contact).some(Boolean) ? contact : null;
 }
 
-export function profileFromForm(form: { sectionA: unknown; sectionB: unknown; sectionC: unknown; sectionE: unknown; version: number; status: string; updatedAt: Date } | null) {
+type FormLike = { sectionA: unknown; sectionB: unknown; sectionC: unknown; sectionE: unknown; version: number; status: string; updatedAt: Date };
+
+export function profileFromForm(form: FormLike | null, overrides: ProfileOverride[] = []) {
   if (!form) return null;
+  const effective = applyOverrides(form, overrides);
   return {
     formVersion: form.version,
     formStatus: form.status,
     formUpdatedAt: form.updatedAt,
-    company: companyDetails(form.sectionA),
-    shareholders: shareholderParties(form.sectionB),
-    ubos: uboParties(form.sectionB),
-    officers: officers(form.sectionC),
-    keyContact: keyContact(form.sectionE)
+    editCount: overrides.length,
+    company: companyDetails(effective.sectionA),
+    shareholders: shareholderParties(effective.sectionB),
+    ubos: uboParties(effective.sectionB),
+    officers: officers(effective.sectionC),
+    keyContact: keyContact(effective.sectionE)
   };
+}
+
+export type IdentityExpiry = {
+  sourceKey: string;
+  documentType: 'QID' | 'PASSPORT';
+  documentNumber: string | null;
+  expiryDate: string;
+  holderName: string;
+  holderRole: string;
+};
+
+const normal = (value: string | null) => (value || '').replace(/\s+/g, '').toUpperCase();
+
+// QID and passport expiry dates of everyone on the profile, one per document. The same person can appear as
+// shareholder, UBO and officer; the latest expiry date entered for a document number is used.
+export function identityExpiries(profile: ReturnType<typeof profileFromForm>): IdentityExpiry[] {
+  if (!profile) return [];
+  const people: Array<{ name: string; role: string; id: PersonIdentity }> = [
+    ...profile.shareholders.filter((party) => !party.isCorporate).map((party) => ({ name: party.fullName, role: 'Shareholder', id: party })),
+    ...profile.ubos.map((party) => ({ name: party.fullName, role: 'UBO', id: party })),
+    ...profile.officers.map((officer) => ({ name: officer.fullName, role: officer.positions.join(', ') || 'Officer', id: officer })),
+    ...(profile.keyContact.fullName ? [{ name: profile.keyContact.fullName, role: 'Key contact', id: profile.keyContact }] : [])
+  ];
+  const result = new Map<string, IdentityExpiry>();
+  for (const person of people) {
+    for (const [documentType, number, expiry] of [
+      ['QID', person.id.qidNumber, person.id.qidExpiry],
+      ['PASSPORT', person.id.passportNumber, person.id.passportExpiry]
+    ] as const) {
+      if (!expiry || Number.isNaN(new Date(expiry).getTime())) continue;
+      const sourceKey = `person:${documentType}:${number ? normal(number) : `name:${normal(person.name)}`}`;
+      const existing = result.get(sourceKey);
+      if (!existing) {
+        result.set(sourceKey, { sourceKey, documentType, documentNumber: number, expiryDate: expiry, holderName: person.name, holderRole: person.role });
+        continue;
+      }
+      if (!existing.holderRole.split(', ').includes(person.role)) existing.holderRole = `${existing.holderRole}, ${person.role}`;
+      if (expiry > existing.expiryDate) existing.expiryDate = expiry;
+    }
+  }
+  return [...result.values()];
 }

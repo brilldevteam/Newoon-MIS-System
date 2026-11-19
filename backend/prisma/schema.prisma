@@ -45,6 +45,7 @@ model Tenant {
   clientReviews ClientReview[]
   clientExpiryItems ClientExpiryItem[]
   complianceReminders ComplianceReminder[]
+  clientProfileOverrides ClientProfileOverride[]
   kycCases      KycCase[]
   documents     Document[]
   legalDocuments LegalDocument[]
@@ -255,6 +256,11 @@ enum KycCaseStatus {
   CLIENT_ACTIVE
   CLIENT_REJECTED
   CLIENT_ON_HOLD
+}
+
+enum KycCasePurpose {
+  ONBOARDING
+  REKYC
 }
 
 enum ProposalStatus {
@@ -535,6 +541,8 @@ model Client {
   nextReviewDate     DateTime?
   activatedAt        DateTime?
   statusReason       String?
+  // KYC case whose form is the client's current profile (set on activation and on re-KYC approval).
+  currentKycCaseId   String?
   contacts           ClientContact[]
   enquiries          Enquiry[]
   kycCases           KycCase[]
@@ -545,6 +553,7 @@ model Client {
   riskChanges        ClientRiskChange[]
   reviews            ClientReview[]
   expiryItems        ClientExpiryItem[]
+  profileOverrides   ClientProfileOverride[]
   notifications      Notification[]
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
@@ -616,6 +625,13 @@ model ClientDocument {
   uploadedBy   User?                 @relation("ClientDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
   screeningId  String?
   screening    ClientScreening?      @relation(fields: [screeningId], references: [id], onDelete: SetNull)
+  // QID / passport copies uploaded from a person's details: personKey is the normalized full name, so the same
+  // person listed as shareholder and director shares the copies. Number and expiry are those of this copy.
+  personKey      String?
+  personName     String?
+  identityType   String?
+  documentNumber String?
+  documentExpiry DateTime?
   deletedAt    DateTime?
   deletedById  String?
   deleteReason String?
@@ -624,6 +640,7 @@ model ClientDocument {
 
   @@index([tenantId])
   @@index([clientId, sectionId])
+  @@index([clientId, personKey])
   @@index([screeningId])
 }
 
@@ -758,12 +775,40 @@ model ClientExpiryItem {
   expiryDate     DateTime
   notes          String?
   isActive       Boolean                  @default(true)
+  // Set on records kept in step with a person's QID / passport expiry on the client profile; null for manual records.
+  sourceKey      String?
   createdById    String?
   updatedById    String?
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
 
+  @@unique([clientId, sourceKey])
   @@index([tenantId, expiryDate])
+  @@index([clientId])
+}
+
+// Field edits made on the compliance client page. They overlay the approved KYC form of the profile case without
+// changing it; a re-KYC is prefilled with the overlaid values. section/rowId/field address a value in the form.
+model ClientProfileOverride {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kycCaseId   String
+  kycCase     KycCase  @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  section     String
+  rowId       String   @default("")
+  // Full name of the row when first edited; matches officer rows whose ids changed after a form re-save.
+  rowLabel    String?
+  field       String
+  value       String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([kycCaseId, section, rowId, field])
+  @@index([tenantId])
   @@index([clientId])
 }
 
@@ -849,6 +894,12 @@ model KycCase {
   service           ClientService?         @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   title             String
   kycNumber         String
+  // REKYC cases refresh an existing client's KYC; earlier cases are kept as history.
+  purpose           KycCasePurpose         @default(ONBOARDING)
+  previousKycCaseId String?
+  previousKycCase   KycCase?               @relation("KycCaseRekyc", fields: [previousKycCaseId], references: [id], onDelete: SetNull)
+  rekycCases        KycCase[]              @relation("KycCaseRekyc")
+  profileOverrides  ClientProfileOverride[]
   status            KycCaseStatus          @default(INQUIRY_RECEIVED)
   proposalStatus    ProposalStatus         @default(NOT_REQUIRED)
   createdById       String?
@@ -1034,6 +1085,10 @@ model KycManager {
   address               String?
   dateOfBirth           DateTime?
   identityNumber        String?
+  qidNumber             String?
+  qidExpiry             DateTime?
+  passportNumber        String?
+  passportExpiry        DateTime?
   position              String?
   isAuthorizedSignatory Boolean  @default(false)
   sortOrder             Int      @default(0)

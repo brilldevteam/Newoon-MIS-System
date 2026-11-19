@@ -508,7 +508,7 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
   return (
     <Card
       title="Expiry tracking"
-      description="Passports, QIDs and company documents with expiry dates. Reminders go out at 90, 60 and 30 days and on expiry."
+      description="Passports, QIDs and company documents with expiry dates. Reminders go out at 60 and 30 days for QIDs and passports (90, 60 and 30 days for company documents) and on expiry. QID and passport dates entered on a person's details appear here automatically."
       action={canEdit && !editing ? <button type="button" onClick={() => setEditing({ value: { ...emptyExpiry } })} className={`${primaryButton} inline-flex items-center gap-1.5`}><Plus className="h-4 w-4" />Add document</button> : undefined}
     >
       {editing ? (
@@ -583,8 +583,14 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
                   <td className="py-2 pr-4">{item.isActive ? <Badge className={expiryTone[item.expiryState].className}>{expiryTone[item.expiryState].label}</Badge> : <Badge className="bg-slate-100 text-slate-600 ring-slate-200">Archived</Badge>}</td>
                   {canEdit ? (
                     <td className="whitespace-nowrap py-2 text-right">
-                      <button type="button" onClick={() => setEditing({ id: item.id, value: toPayload(item, item.isActive) })} className="text-xs font-medium text-brand-700 hover:text-brand-800">Edit</button>
-                      <button type="button" disabled={busy} onClick={() => setActive(item, !item.isActive)} className="ml-3 text-xs font-medium text-slate-500 hover:text-slate-700">{item.isActive ? 'Archive' : 'Restore'}</button>
+                      {item.sourceKey ? (
+                        <span className="text-xs text-slate-500" title="Change this date with the pencil on the person's QID / passport details">From person details</span>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => setEditing({ id: item.id, value: toPayload(item, item.isActive) })} className="text-xs font-medium text-brand-700 hover:text-brand-800">Edit</button>
+                          <button type="button" disabled={busy} onClick={() => setActive(item, !item.isActive)} className="ml-3 text-xs font-medium text-slate-500 hover:text-slate-700">{item.isActive ? 'Archive' : 'Restore'}</button>
+                        </>
+                      )}
                     </td>
                   ) : null}
                 </tr>

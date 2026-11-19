@@ -7,11 +7,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 60 * 1000;
 const DEFAULT_INTERVAL_HOURS = 6;
 const PENDING_APPROVAL_REMINDER_DAYS = 3;
+const PERSONAL_ID_TYPES: string[] = ['QID', 'PASSPORT'];
 
 const dateKey = (value: Date) => value.toISOString().slice(0, 10);
 
 // Periodic sweep that turns due dates into notifications: reviews due within 30 days or overdue, tracked documents
-// expiring within 90/60/30 days or expired, and risk changes waiting for approval for more than three days.
+// expiring within 90/60/30 days (QID and passport: 60/30) or expired, and risk changes waiting for approval for more than three days.
 // Each milestone is notified once: a ComplianceReminder row is claimed first (unique key), so repeated runs and
 // several server processes never send the same reminder twice. Set COMPLIANCE_REMINDERS_ENABLED=false to disable.
 @Injectable()
@@ -69,13 +70,14 @@ export class ComplianceRemindersService implements OnApplicationBootstrap, OnApp
       });
       for (const item of expiring) {
         const state = expiryState(item.expiryDate, now);
-        if (state === 'VALID') continue;
+        // QID and passport alerts start at 60 days; company documents also get the 90-day reminder.
+        if (state === 'VALID' || (state === 'DUE_90' && PERSONAL_ID_TYPES.includes(item.documentType))) continue;
         const document = item.documentType === 'OTHER' ? item.documentLabel || 'Document' : item.documentType.replace('_', ' ');
         created += await this.remind(item.tenantId, 'EXPIRY', item.id, `${state}:${dateKey(item.expiryDate)}`, {
           clientId: item.clientId,
           type: NotificationType.COMPLIANCE_DOCUMENT_EXPIRING,
           title: `${state === 'EXPIRED' ? 'Document expired' : 'Document expiring'}: ${item.client.name}`,
-          message: `${document} of ${item.holderName} for ${label(item.client)} ${state === 'EXPIRED' ? 'expired' : 'expires'} on ${dateKey(item.expiryDate)}.`
+          message: `${document} of ${item.holderName} for ${label(item.client)} ${state === 'EXPIRED' ? 'expired' : 'expires'} on ${dateKey(item.expiryDate)}. Upload the renewed copy and update the expiry date.`
         });
       }
 

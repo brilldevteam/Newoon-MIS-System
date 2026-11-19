@@ -251,6 +251,9 @@ export class ComplianceMonitoringService {
       if (itemId) {
         const existing = await tx.clientExpiryItem.findFirst({ where: { id: itemId, clientId: client.id, tenantId: client.tenantId } });
         if (!existing) throw new NotFoundException('Expiry record not found.');
+        if (existing.sourceKey) {
+          throw new BadRequestException(`This date comes from ${existing.holderName}'s QID / passport on the client profile. Change it there with the pencil icon.`);
+        }
         await tx.clientExpiryItem.update({ where: { id: existing.id }, data });
         await this.audit(tx, user, client.tenantId, 'ClientExpiryItem', existing.id, 'UPDATE', { clientId: client.id, documentType: data.documentType, expiryDate, isActive: data.isActive });
       } else {

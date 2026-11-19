@@ -1,14 +1,23 @@
-import { ArrowLeft, Eye, FileText, Mail, MapPin, Phone, ShieldCheck } from 'lucide-react';
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Eye, FileText, Mail, MapPin, Phone, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ClientDocumentFolders } from '../components/ClientDocumentFolders';
+import { EditableFields, EditableItem, EditConfig, EditKind } from '../components/EditableFields';
+import { IdentityDocumentsBlock, IdentityDocumentsContext } from '../components/IdentityDocumentsBlock';
 import { ExpiryPanel, ReviewsPanel, ScreeningPanel } from '../components/ComplianceMonitoringPanels';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
 import { getApiErrorMessage } from '../services/api';
 import {
   cddLabels,
+  CddType,
   ClientJurisdiction,
+  ComplianceClientUpdate,
+  PersonIdentity,
+  ProfileRef,
+  startComplianceRekyc,
+  updateComplianceProfileField,
+  personKey,
   ClientDocumentFolders as Folders,
   ComplianceClientDetail,
   complianceStatusLabels,
@@ -47,7 +56,6 @@ const roleLabels: Record<OfficerRole, string> = {
   SIGNATORY: 'Signatory',
   OTHER: 'Other'
 };
-const inputClass = 'w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100';
 
 function formatDate(value: string | null | undefined) {
   if (!value) return '—';
@@ -75,28 +83,62 @@ function Panel({ title, description, action, children }: { title: string; descri
 }
 
 function Fields({ items }: { items: Array<[string, ReactNode]> }) {
-  return (
-    <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
-      {items.map(([label, value]) => (
-        <div key={label} className="min-w-0">
-          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-          <dd className="mt-1 break-words text-sm text-slate-900">{value === null || value === undefined || value === '' ? <span className="text-slate-400">Not captured</span> : value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <EditableFields items={items.map(([label, value]) => ({ label, value }))} />;
 }
 
 function Empty({ children }: { children: ReactNode }) {
   return <p className="rounded-md border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">{children}</p>;
 }
 
-function PartyCards({ parties, empty }: { parties: ProfileParty[]; empty: string }) {
+type ProfileEditing = {
+  canEdit: boolean;
+  edited: Set<string>;
+  ids: IdentityDocumentsContext;
+  save: (ref: ProfileRef, field: string, value: string | null) => Promise<void>;
+};
+
+// Builds one editable item for a value taken from the client's KYC profile.
+function profileItem(
+  editing: ProfileEditing, ref: ProfileRef, label: string, display: ReactNode, field: string, kind: EditKind, initial: string | null | undefined,
+  extra: Partial<EditConfig> = {}
+): EditableItem {
+  return {
+    label,
+    value: display,
+    edited: editing.edited.has(`${ref.section}|${ref.rowId}|${field}`),
+    edit: editing.canEdit ? { kind, initial, ...extra, onSave: (value) => editing.save(ref, field, value) } : null
+  };
+}
+
+// QID / passport numbers and expiry dates are edited in the ID documents box; only an older combined value shows here.
+function identityItems(_editing: ProfileEditing, person: PersonIdentity & { ref: ProfileRef }): EditableItem[] {
+  return person.legacyIdentity
+    ? [{ label: 'QID / Passport (earlier entry)', value: <span>{person.legacyIdentity}<span className="block text-xs text-slate-500">Recorded as one value on an older KYC. Enter it as the QID or passport number in ID documents below.</span></span>, wide: true }]
+    : [];
+}
+
+// Roles of each person across the tabs, so KYC ID files named for a role reach the right cards.
+function rolesByPerson(profile: ComplianceClientDetail['profile']) {
+  const roles: Record<string, string[]> = {};
+  const add = (name: string | null, role: string) => {
+    const key = personKey(name);
+    if (!key) return;
+    roles[key] = [...new Set([...(roles[key] || []), role])];
+  };
+  if (!profile) return roles;
+  profile.shareholders.forEach((party) => add(party.fullName, party.isUbo ? 'UBO' : 'SHAREHOLDER'));
+  profile.ubos.forEach((party) => add(party.fullName, 'UBO'));
+  profile.officers.forEach((officer) => officer.roles.forEach((role) => add(officer.fullName, role)));
+  add(profile.keyContact.fullName, 'KEY_CONTACT');
+  return roles;
+}
+
+function PartyCards({ parties, empty, editing, kind }: { parties: ProfileParty[]; empty: string; editing: ProfileEditing; kind: 'shareholder' | 'ubo' }) {
   if (!parties.length) return <Empty>{empty}</Empty>;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {parties.map((party, index) => (
-        <article key={party.id || `${party.fullName}-${index}`} className="rounded-lg border border-slate-200 p-4">
+        <article key={`${party.ref.section}-${party.ref.rowId}-${index}`} className="rounded-lg border border-slate-200 p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="break-words font-semibold text-slate-900">{party.fullName}</h3>
@@ -108,12 +150,18 @@ function PartyCards({ parties, empty }: { parties: ProfileParty[]; empty: string
             </div>
           </div>
           <div className="mt-4">
-            <Fields items={[
-              ['Nationality', party.nationality],
-              ['QID / Passport No.', party.identityNumber],
-              ['Date of birth', party.dateOfBirth ? formatDate(party.dateOfBirth) : null],
-              ['Address', party.address]
+            <EditableFields columns={2} items={[
+              profileItem(editing, party.ref, party.isCorporate ? 'Company name' : 'Full name', party.fullName, 'fullName', 'text', party.fullName, { required: true }),
+              profileItem(editing, party.ref, party.isCorporate ? 'Country' : 'Nationality', party.nationality, 'nationality', 'list', party.nationality,
+                { hint: 'Separate several with commas.' }),
+              ...(party.isCorporate
+                ? [profileItem(editing, party.ref, 'CR number', party.identityNumber, 'identityNumber', 'text', party.identityNumber)]
+                : identityItems(editing, party)),
+              profileItem(editing, party.ref, party.isCorporate ? 'Date of incorporation' : 'Date of birth', party.dateOfBirth ? formatDate(party.dateOfBirth) : null, 'dateOfBirth', 'date', party.dateOfBirth),
+              profileItem(editing, party.ref, kind === 'ubo' ? 'UBO interest %' : 'Shareholding %', party.percentage ? `${party.percentage}%` : null, party.percentageField, 'percent', party.percentage),
+              profileItem(editing, party.ref, 'Address', party.address, 'residenceAddress', 'longtext', party.address)
             ]} />
+            {!party.isCorporate ? <IdentityDocumentsBlock person={party} context={editing.ids} /> : null}
           </div>
         </article>
       ))}
@@ -121,12 +169,12 @@ function PartyCards({ parties, empty }: { parties: ProfileParty[]; empty: string
   );
 }
 
-function OfficerCards({ officers, empty }: { officers: ProfileOfficer[]; empty: string }) {
+function OfficerCards({ officers, empty, editing }: { officers: ProfileOfficer[]; empty: string; editing: ProfileEditing }) {
   if (!officers.length) return <Empty>{empty}</Empty>;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {officers.map((officer, index) => (
-        <article key={officer.id || `${officer.fullName}-${index}`} className="rounded-lg border border-slate-200 p-4">
+        <article key={`${officer.ref.rowId}-${index}`} className="rounded-lg border border-slate-200 p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="break-words font-semibold text-slate-900">{officer.fullName}</h3>
@@ -139,13 +187,18 @@ function OfficerCards({ officers, empty }: { officers: ProfileOfficer[]; empty: 
             </div>
           </div>
           <div className="mt-4">
-            <Fields items={[
-              ['Nationality', officer.nationality],
-              ['QID / Passport No.', officer.identityNumber],
-              ['Date of birth', officer.dateOfBirth ? formatDate(officer.dateOfBirth) : null],
-              ['Address', officer.address],
-              ['Authorized signatory', officer.isAuthorizedSignatory ? 'Yes' : 'No']
+            <EditableFields columns={2} items={[
+              profileItem(editing, officer.ref, 'Full name', officer.fullName, 'fullName', 'text', officer.fullName, { required: true }),
+              profileItem(editing, officer.ref, 'Position', officer.positions.join(', ') || null, 'position', 'list', officer.positions.join(', '),
+                { hint: 'Separate several with commas. The position decides the tab (Director, Secretary, SEF).' }),
+              profileItem(editing, officer.ref, 'Entity name', officer.entityName, 'entityName', 'text', officer.entityName),
+              profileItem(editing, officer.ref, 'Nationality', officer.nationality, 'nationality', 'list', officer.nationality, { hint: 'Separate several with commas.' }),
+              ...identityItems(editing, officer),
+              profileItem(editing, officer.ref, 'Date of birth', officer.dateOfBirth ? formatDate(officer.dateOfBirth) : null, 'dateOfBirth', 'date', officer.dateOfBirth),
+              profileItem(editing, officer.ref, 'Address', officer.address, 'address', 'longtext', officer.address),
+              { label: 'Authorized signatory', value: officer.isAuthorizedSignatory ? 'Yes' : 'No' }
             ]} />
+            <IdentityDocumentsBlock person={officer} context={editing.ids} />
           </div>
         </article>
       ))}
@@ -257,9 +310,44 @@ export function ComplianceClientDetailsPage() {
   if (!data) return null;
 
   const { client, profile, profileCase } = data;
+  const openRekyc = data.kycCases.find((kycCase) => kycCase.purpose === 'REKYC' && !CLOSED_REKYC_STATUSES.includes(kycCase.status));
   const sourceNote = profileCase
-    ? `From KYC ${profileCase.kycNumber}${profile ? ` (form version ${profile.formVersion}, updated ${formatDate(profile.formUpdatedAt)})` : ''}`
+    ? `From current KYC ${profileCase.kycNumber}${profile ? ` (form version ${profile.formVersion}, updated ${formatDate(profile.formUpdatedAt)})` : ''}.${canEdit ? ' Edits here are audited and do not change the approved KYC.' : ''}${openRekyc && canEdit ? ` Re-KYC ${openRekyc.kycNumber} is in progress: edits made here are kept when it is approved, but its reviewers do not see them, so also enter them in the re-KYC form.` : ''}`
     : 'No KYC case with a form is linked to this client.';
+  const editing: ProfileEditing = {
+    canEdit: canEdit && Boolean(profile),
+    edited: new Set(data.editedFields),
+    ids: {
+      clientId: client.id,
+      canEdit: canEdit && Boolean(profile),
+      canOpenKyc,
+      documents: data.identityDocuments || [],
+      kycDocuments: data.legalDocuments,
+      kycNumbers: Object.fromEntries(data.kycCases.map((kycCase) => [kycCase.id, kycCase.kycNumber])),
+      rolesByPerson: rolesByPerson(profile),
+      saveField: async (ref, field, value) => {
+        const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
+        setData(next);
+        showToast('Saved.', 'success');
+        loadMonitoring();
+      },
+      isEdited: (ref, field) => data.editedFields.includes(`${ref.section}|${ref.rowId}|${field}`),
+      onUploaded: (next) => {
+        setData(next);
+        loadMonitoring();
+        loadFolders();
+      },
+      openKycDocuments: () => setSearchParams({ tab: 'documents' }, { replace: true })
+    },
+    save: async (ref, field, value) => {
+      const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
+      setData(next);
+      showToast('Saved.', 'success');
+      // QID / passport dates feed the Expiry tab.
+      loadMonitoring();
+    }
+  };
+  const companyRef: ProfileRef = { section: 'COMPANY', rowId: '', rowLabel: null };
   const activeEngagements = data.engagements.filter((engagement) => engagement.status === 'IN_PROGRESS' || engagement.status === 'PENDING').length;
 
   async function openDocument(document: ComplianceClientDetail['legalDocuments'][number]) {
@@ -345,7 +433,7 @@ export function ComplianceClientDetailsPage() {
       {activeTab === 'overview' ? (
         <div className="grid gap-6 xl:grid-cols-3">
           <div className="space-y-6 xl:col-span-2">
-            <RegisterDetails data={data} canEdit={canEdit} onSaved={load} />
+            <RegisterDetails data={data} canEdit={canEdit} onSaved={load} onRiskChange={() => setSearchParams({ tab: 'reviews' }, { replace: true })} />
             <Panel title="Risk history" description="Risk reclassifications recorded on this client's KYC cases.">
               {data.riskHistory.length ? (
                 <ul className="divide-y divide-slate-100">
@@ -368,7 +456,7 @@ export function ComplianceClientDetailsPage() {
             </Panel>
           </div>
           <div className="space-y-6">
-            <Panel title="Onboarding assessment" description={sourceNote}>
+            <Panel title="Current KYC assessment" description={sourceNote}>
               <Fields items={[
                 ['Risk at review', data.internalReview?.riskClassification ? riskLabels[data.internalReview.riskClassification] : null],
                 ['CDD at review', data.internalReview?.dueDiligenceType ? cddLabels[data.internalReview.dueDiligenceType] : null],
@@ -382,13 +470,18 @@ export function ComplianceClientDetailsPage() {
               ) : null}
             </Panel>
             <Panel title="Key communication person">
-              {profile?.keyContact ? (
-                <Fields items={[
-                  ['Name', profile.keyContact.fullName],
-                  ['Position', profile.keyContact.position],
-                  ['Mobile', profile.keyContact.mobileNumber],
-                  ['Email', profile.keyContact.email]
+              {profile ? (
+                <>
+                <EditableFields columns={2} items={[
+                  profileItem(editing, profile.keyContact.ref, 'Name', profile.keyContact.fullName, 'fullName', 'text', profile.keyContact.fullName),
+                  profileItem(editing, profile.keyContact.ref, 'Position', profile.keyContact.position, 'position', 'list', profile.keyContact.position),
+                  profileItem(editing, profile.keyContact.ref, 'Mobile', profile.keyContact.mobileNumber, 'mobileNumber', 'text', profile.keyContact.mobileNumber),
+                  profileItem(editing, profile.keyContact.ref, 'Email', profile.keyContact.email, 'email', 'email', profile.keyContact.email),
+                  profileItem(editing, profile.keyContact.ref, 'Nationality', profile.keyContact.nationality, 'nationality', 'list', profile.keyContact.nationality),
+                  ...identityItems(editing, profile.keyContact as PersonIdentity & { ref: ProfileRef })
                 ]} />
+                {profile.keyContact.fullName ? <IdentityDocumentsBlock person={profile.keyContact} context={editing.ids} /> : null}
+                </>
               ) : data.contacts.length ? (
                 <ul className="space-y-3 text-sm">
                   {data.contacts.map((contact) => (
@@ -409,21 +502,21 @@ export function ComplianceClientDetailsPage() {
       {activeTab === 'company' ? (
         <Panel title="Company details" description={sourceNote}>
           {profile ? (
-            <Fields items={[
-              ['Legal name', profile.company.legalName],
-              ['Legal form', profile.company.legalForm],
-              ['CR / QFC number', profile.company.commercialRegistrationNo || client.registrationNumber],
-              ['Country of incorporation', profile.company.countryOfIncorporation],
-              ['Date of incorporation', profile.company.dateOfIncorporation ? formatDate(profile.company.dateOfIncorporation) : null],
-              ['Tax identification no.', profile.company.taxIdentificationNo],
-              ['Registered office address', profile.company.registeredOfficeAddress],
-              ['Telephone', profile.company.telephone],
-              ['Email', profile.company.email],
-              ['Website', profile.company.website],
-              ['Nature of business', profile.company.businessNature],
-              ['Related industry', profile.company.relatedIndustry],
-              ['Licensed activities', profile.company.licenseActivities],
-              ['Services requested', profile.company.prospectiveServices]
+            <EditableFields items={[
+              profileItem(editing, companyRef, 'Legal name', profile.company.legalName, 'legalName', 'text', profile.company.legalName),
+              profileItem(editing, companyRef, 'Legal form', profile.company.legalForm, 'legalForm', 'list', profile.company.legalForm),
+              profileItem(editing, companyRef, 'CR / QFC number', profile.company.commercialRegistrationNo || client.registrationNumber, 'commercialRegistrationNo', 'text', profile.company.commercialRegistrationNo),
+              profileItem(editing, companyRef, 'Country of incorporation', profile.company.countryOfIncorporation, 'countryOfIncorporation', 'list', profile.company.countryOfIncorporation),
+              profileItem(editing, companyRef, 'Date of incorporation', profile.company.dateOfIncorporation ? formatDate(profile.company.dateOfIncorporation) : null, 'dateOfIncorporation', 'date', profile.company.dateOfIncorporation),
+              profileItem(editing, companyRef, 'Tax identification no.', profile.company.taxIdentificationNo, 'taxIdentificationNo', 'text', profile.company.taxIdentificationNo),
+              profileItem(editing, companyRef, 'Registered office address', profile.company.registeredOfficeAddress, 'registeredOfficeAddress', 'longtext', profile.company.registeredOfficeAddress),
+              profileItem(editing, companyRef, 'Telephone', profile.company.telephone, 'telephone', 'text', profile.company.telephone),
+              profileItem(editing, companyRef, 'Email', profile.company.email, 'email', 'email', profile.company.email),
+              profileItem(editing, companyRef, 'Website', profile.company.website, 'website', 'text', profile.company.website),
+              profileItem(editing, companyRef, 'Nature of business', profile.company.businessNature, 'businessNature', 'list', profile.company.businessNature, { hint: 'Separate several with commas.' }),
+              profileItem(editing, companyRef, 'Related industry', profile.company.relatedIndustry, 'relatedIndustry', 'list', profile.company.relatedIndustry, { hint: 'Separate several with commas.' }),
+              profileItem(editing, companyRef, 'Licensed activities', profile.company.licenseActivities, 'licenseActivities', 'longtext', profile.company.licenseActivities),
+              profileItem(editing, companyRef, 'Services requested', profile.company.prospectiveServices, 'prospectiveService', 'list', profile.company.prospectiveServices, { hint: 'Separate several with commas.' })
             ]} />
           ) : (
             <Empty>No KYC form data is available for this client yet.</Empty>
@@ -433,64 +526,37 @@ export function ComplianceClientDetailsPage() {
 
       {activeTab === 'officers' ? (
         <Panel title="Directors & managers" description={`Board members, managers and authorized signatories. ${sourceNote}`}>
-          <OfficerCards officers={directors} empty="No directors or managers recorded in the KYC form." />
+          <OfficerCards officers={directors} editing={editing} empty="No directors or managers recorded in the KYC form." />
         </Panel>
       ) : null}
 
       {activeTab === 'shareholders' ? (
         <Panel title="Shareholders" description={`Ownership structure. ${sourceNote}`}>
-          <PartyCards parties={profile?.shareholders || []} empty="No shareholders recorded in the KYC form." />
+          <PartyCards parties={profile?.shareholders || []} editing={editing} kind="shareholder" empty="No shareholders recorded in the KYC form." />
         </Panel>
       ) : null}
 
       {activeTab === 'secretary' ? (
         <Panel title="Company secretary" description={`Officers whose position includes Secretary. ${sourceNote}`}>
-          <OfficerCards officers={secretaries} empty="No company secretary recorded in the KYC form." />
+          <OfficerCards officers={secretaries} editing={editing} empty="No company secretary recorded in the KYC form." />
         </Panel>
       ) : null}
 
       {activeTab === 'sef' ? (
         <Panel title="Senior Executive Functions" description={`Officers whose position is SEF / Senior Executive Function. ${sourceNote}`}>
-          <OfficerCards officers={sefs} empty="No SEF recorded in the KYC form." />
+          <OfficerCards officers={sefs} editing={editing} empty="No SEF recorded in the KYC form." />
         </Panel>
       ) : null}
 
       {activeTab === 'ubos' ? (
         <Panel title="Ultimate beneficial owners" description={`Same beneficial-owner list as the KYC form and exports. ${sourceNote}`}>
-          <PartyCards parties={profile?.ubos || []} empty="No beneficial owners recorded in the KYC form." />
+          <PartyCards parties={profile?.ubos || []} editing={editing} kind="ubo" empty="No beneficial owners recorded in the KYC form." />
         </Panel>
       ) : null}
 
       {activeTab === 'documents' ? (
         <div className="space-y-6">
-          <Panel title="KYC cases" description="All KYC cases for this client, newest first.">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="py-2 pr-4">KYC no.</th>
-                    <th className="py-2 pr-4">Service</th>
-                    <th className="py-2 pr-4">Status</th>
-                    <th className="py-2 pr-4">Opened</th>
-                    <th className="py-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {data.kycCases.map((kycCase) => (
-                    <tr key={kycCase.id}>
-                      <td className="whitespace-nowrap py-2 pr-4 font-mono text-xs">{kycCase.kycNumber}{profileCase?.id === kycCase.id ? <span className="ml-2 font-sans text-xs text-brand-700">Profile source</span> : null}</td>
-                      <td className="py-2 pr-4 text-slate-600">{kycCase.serviceName || kycCase.title}</td>
-                      <td className="py-2 pr-4 text-slate-600">{kycStatusLabel(kycCase.status)}</td>
-                      <td className="whitespace-nowrap py-2 pr-4 text-slate-600">{formatDate(kycCase.createdAt)}</td>
-                      <td className="py-2 text-right">
-                        {canOpenKyc ? <Link className="text-sm font-medium text-brand-700 hover:text-brand-800" to={`/kyc/${kycCase.id}`}>Open</Link> : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
+          <KycHistory data={data} canEdit={canEdit} canOpenKyc={canOpenKyc} onStarted={load} />
           <Panel title="Legal & KYC documents" description="Files uploaded on this client's KYC cases. Client-level files are in the CDD, Monitoring and Compliance Docs tabs.">
             {data.legalDocuments.length ? (
               <ul className="divide-y divide-slate-100">
@@ -677,87 +743,161 @@ function HeaderStat({ label, value, tone }: { label: string; value: string; tone
   );
 }
 
-function RegisterDetails({ data, canEdit, onSaved }: { data: ComplianceClientDetail; canEdit: boolean; onSaved: () => void }) {
+function RegisterDetails({ data, canEdit, onSaved, onRiskChange }: { data: ComplianceClientDetail; canEdit: boolean; onSaved: () => void; onRiskChange: () => void }) {
   const { client } = data;
   const { showToast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ jurisdiction: client.jurisdiction || '', email: client.email || '', phone: client.phone || '', address: client.address || '' });
 
-  useEffect(() => {
-    setForm({ jurisdiction: client.jurisdiction || '', email: client.email || '', phone: client.phone || '', address: client.address || '' });
-  }, [client.jurisdiction, client.email, client.phone, client.address]);
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    try {
-      await updateComplianceClient(client.id, {
-        jurisdiction: (form.jurisdiction || 'NONE') as ClientJurisdiction | 'NONE',
-        email: form.email.trim(),
-        phone: form.phone.trim(),
-        address: form.address.trim()
-      });
-      showToast('Register details saved.', 'success');
-      setEditing(false);
-      onSaved();
-    } catch (requestError) {
-      showToast(getApiErrorMessage(requestError, 'Unable to save register details.'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  }
+  // Each register value saves on its own through the audited PATCH /compliance/clients/:id.
+  const item = (label: string, value: ReactNode, field: keyof ComplianceClientUpdate, kind: EditKind, initial: string | null | undefined, extra: Partial<EditConfig> = {}): EditableItem => ({
+    label,
+    value,
+    edit: canEdit
+      ? {
+          kind,
+          initial,
+          ...extra,
+          onSave: async (next) => {
+            const payload = (field === 'jurisdiction' || field === 'cddType' ? next || 'NONE' : next ?? '') as never;
+            await updateComplianceClient(client.id, { [field]: payload } as ComplianceClientUpdate);
+            showToast(`${label} saved.`, 'success');
+            onSaved();
+          }
+        }
+      : null
+  });
 
   return (
-    <Panel
-      title="Register details"
-      description="Compliance register fields for this client. Risk changes go through the review workflow."
-      action={canEdit && !editing ? (
-        <button type="button" onClick={() => setEditing(true)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
-          Edit
-        </button>
-      ) : undefined}
-    >
-      {editing ? (
-        <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
-          <label className="text-sm font-medium text-slate-700">
-            Jurisdiction
-            <select value={form.jurisdiction} onChange={(event) => setForm({ ...form, jurisdiction: event.target.value })} className={`${inputClass} mt-1`}>
-              <option value="">Not set</option>
-              {(Object.keys(jurisdictionLabels) as ClientJurisdiction[]).map((key) => <option key={key} value={key}>{jurisdictionLabels[key]}</option>)}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Email
-            <input type="email" maxLength={254} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className={`${inputClass} mt-1`} />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Phone
-            <input maxLength={40} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} className={`${inputClass} mt-1`} />
-          </label>
-          <label className="text-sm font-medium text-slate-700 sm:col-span-2">
-            Address
-            <textarea maxLength={500} rows={2} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} className={`${inputClass} mt-1`} />
-          </label>
-          <div className="flex justify-end gap-2 sm:col-span-2">
-            <button type="button" onClick={() => setEditing(false)} className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-            <button type="submit" disabled={saving} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60">{saving ? 'Saving...' : 'Save'}</button>
-          </div>
-        </form>
-      ) : (
-        <Fields items={[
-          ['Client code', client.clientCode],
-          ['Jurisdiction', client.jurisdiction ? jurisdictionLabels[client.jurisdiction] : null],
-          ['CDD type', client.cddType ? cddLabels[client.cddType] : null],
-          ['Email', client.email],
-          ['Phone', client.phone],
-          ['Address', client.address],
-          ['Status reason', client.statusReason],
-          ['Latest service', client.latestEngagement?.serviceName || null],
-          ['Country', client.country]
-        ]} />
-      )}
+    <Panel title="Register details" description="Compliance register fields for this client. Use the pencil to change a value. Risk changes go through the review workflow.">
+      <EditableFields items={[
+        item('Client code', client.clientCode, 'clientCode', 'text', client.clientCode, { required: true, maxLength: 40, hint: 'Must be unique, for example CL-2026-0001.' }),
+        item('Client name', client.name, 'name', 'text', client.name, { required: true, maxLength: 200 }),
+        item('CR / QFC number', client.registrationNumber, 'registrationNumber', 'text', client.registrationNumber, { maxLength: 100 }),
+        item('Jurisdiction', client.jurisdiction ? jurisdictionLabels[client.jurisdiction] : null, 'jurisdiction', 'select', client.jurisdiction || '', {
+          options: [{ value: '', label: 'Not set' }, ...(Object.keys(jurisdictionLabels) as ClientJurisdiction[]).map((key) => ({ value: key, label: jurisdictionLabels[key] }))]
+        }),
+        item('CDD type', client.cddType ? cddLabels[client.cddType] : null, 'cddType', 'select', client.cddType || '', {
+          options: [{ value: '', label: 'Not set' }, ...(Object.keys(cddLabels) as CddType[]).map((key) => ({ value: key, label: cddLabels[key] }))]
+        }),
+        {
+          label: 'Risk level',
+          value: (
+            <span className="inline-flex flex-wrap items-center gap-2">
+              {client.riskLevel ? riskLabels[client.riskLevel] : 'Pending'}
+              {canEdit ? (
+                <button type="button" onClick={onRiskChange} className="text-xs font-medium text-brand-700 hover:text-brand-800">
+                  Request change
+                </button>
+              ) : null}
+            </span>
+          )
+        },
+        item('Email', client.email, 'email', 'email', client.email, { maxLength: 254 }),
+        item('Phone', client.phone, 'phone', 'text', client.phone, { maxLength: 40 }),
+        item('Address', client.address, 'address', 'longtext', client.address, { maxLength: 500 }),
+        item('Country', client.country, 'country', 'text', client.country, { maxLength: 100 }),
+        item('Industry', client.industry, 'industry', 'text', client.industry, { maxLength: 200 }),
+        item('Status reason', client.statusReason, 'statusReason', 'longtext', client.statusReason, { maxLength: 1000 }),
+        { label: 'Latest service', value: client.latestEngagement?.serviceName || null }
+      ]} />
     </Panel>
   );
 }
 
+const CLOSED_REKYC_STATUSES = ['CLIENT_ACTIVE', 'CLIENT_REJECTED', 'MLRO_REJECTED', 'SEF_REJECTED'];
+
+function KycHistory({ data, canEdit, canOpenKyc, onStarted }: { data: ComplianceClientDetail; canEdit: boolean; canOpenKyc: boolean; onStarted: () => void }) {
+  const { showToast } = useToast();
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const { client, profileCase } = data;
+  const openRekyc = data.kycCases.find((kycCase) => kycCase.purpose === 'REKYC' && !CLOSED_REKYC_STATUSES.includes(kycCase.status));
+  const canStart = canEdit && client.status === 'ACTIVE' && Boolean(profileCase) && !openRekyc;
+
+  async function start() {
+    setStarting(true);
+    try {
+      const created = await startComplianceRekyc(client.id);
+      showToast(`Re-KYC ${created.kycNumber} started, prefilled from the current KYC.`, 'success');
+      setConfirming(false);
+      if (canOpenKyc) navigate(`/kyc/${created.id}`);
+      else onStarted();
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to start the re-KYC.'), 'error');
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const caseNumber = (id: string | null) => data.kycCases.find((kycCase) => kycCase.id === id)?.kycNumber;
+
+  return (
+    <Panel
+      title="KYC history"
+      description="Every KYC for this client, newest first. The current KYC feeds this page; earlier KYCs are kept unchanged."
+      action={canStart && !confirming ? (
+        <button type="button" onClick={() => setConfirming(true)} className="inline-flex items-center gap-1.5 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700">
+          <RefreshCw className="h-3.5 w-3.5" />
+          Start re-KYC
+        </button>
+      ) : undefined}
+    >
+      {confirming ? (
+        <div className="mb-4 rounded-md border border-brand-200 bg-brand-50 p-3 text-sm text-slate-700">
+          <p>
+            A new KYC case is created for {client.name}, prefilled with the current details from {profileCase?.kycNumber}, including edits made on this page.
+            Upload the new documents and send it through the normal AML review. When it is approved it becomes the current KYC; {profileCase?.kycNumber} stays here as history.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button type="button" disabled={starting} onClick={start} className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60">
+              {starting ? 'Starting...' : 'Start re-KYC'}
+            </button>
+            <button type="button" disabled={starting} onClick={() => setConfirming(false)} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {openRekyc ? (
+        <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Re-KYC {openRekyc.kycNumber} is in progress ({kycStatusLabel(openRekyc.status)}). It becomes the current KYC when it is approved.
+          {canOpenKyc ? <Link to={`/kyc/${openRekyc.id}`} className="ml-2 font-medium underline">Open</Link> : null}
+        </p>
+      ) : null}
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <thead className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="py-2 pr-4">KYC no.</th>
+              <th className="py-2 pr-4">Type</th>
+              <th className="py-2 pr-4">Service</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2 pr-4">Opened</th>
+              <th className="py-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {data.kycCases.map((kycCase) => (
+              <tr key={kycCase.id}>
+                <td className="whitespace-nowrap py-2 pr-4 font-mono text-xs">
+                  {kycCase.kycNumber}
+                  {profileCase?.id === kycCase.id ? <Badge className="ml-2 bg-emerald-50 font-sans text-emerald-700 ring-emerald-200">Current</Badge> : null}
+                </td>
+                <td className="py-2 pr-4 text-slate-600">
+                  {kycCase.purpose === 'REKYC' ? 'Re-KYC' : 'Onboarding'}
+                  {kycCase.previousKycCaseId && caseNumber(kycCase.previousKycCaseId) ? <span className="block text-xs text-slate-400">from {caseNumber(kycCase.previousKycCaseId)}</span> : null}
+                </td>
+                <td className="py-2 pr-4 text-slate-600">{kycCase.serviceName || kycCase.title}</td>
+                <td className="py-2 pr-4 text-slate-600">{kycStatusLabel(kycCase.status)}</td>
+                <td className="whitespace-nowrap py-2 pr-4 text-slate-600">{formatDate(kycCase.createdAt)}</td>
+                <td className="py-2 text-right">
+                  {canOpenKyc ? <Link className="text-sm font-medium text-brand-700 hover:text-brand-800" to={`/kyc/${kycCase.id}`}>Open</Link> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
