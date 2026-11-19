@@ -38,8 +38,10 @@ async function main() {
   assert.ok(xml.includes('19/11/2026') && xml.includes('2026-11-19'), 'DOCX prints the letter date and the Section A date');
 
   const output = path.join(os.tmpdir(), 'newoon-kyc-date-preview'); fs.mkdirSync(output, { recursive: true });
-  fs.writeFileSync(path.join(output, 'kyc-date.docx'), docx);
-  fs.writeFileSync(path.join(output, 'kyc-date.html'), html);
+  // Preview copies only; a copy left open in Word (locked) must not fail the check.
+  for (const [name, content] of [['kyc-date.docx', docx], ['kyc-date.html', html]]) {
+    try { fs.writeFileSync(path.join(output, name), content); } catch (error) { console.warn(`Preview ${name} not written (${error.code || error.message}); close it if it is open.`); }
+  }
   console.log(`KYC export date checks passed: Preliminary KYC date fallback, entered date wins, standard KYC unchanged, declaration not invented, HTML and DOCX. Synthetic previews: ${output}`);
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
