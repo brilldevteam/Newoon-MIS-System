@@ -647,6 +647,9 @@ export class KycService {
       if (!hasComment(formalComments)) throw new BadRequestException('Enter AML Supervisor comments on the submission page before submitting to DMLRO.');
       const submitted = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.SUPERVISOR, { formalComments, data: { ...(review || {}), amlClarificationFindings: formalComments } });
       await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', submitted.id, { action: 'REVIEW_SUBMITTED', stage: ReviewStage.SUPERVISOR, routedTo: ReviewStage.DMLRO });
+      // Tasks are unique per (case, stage, status). A resubmission after DMLRO returned the file still has the first
+      // round's COMPLETED Supervisor task, so clear it before completing this one (as submitReviewAndRoute does).
+      await this.clearReviewTaskStatus(tx, id, ReviewStage.SUPERVISOR, ReviewTaskStatus.COMPLETED);
       await tx.internalReviewTask.updateMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } }, data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id } });
       await tx.kycCase.update({
         where: { id },
@@ -742,6 +745,8 @@ export class KycService {
       await tx.kycCaseStatusHistory.create({
         data: { tenantId: kycCase.tenantId, kycCaseId: id, fromStatus: kycCase.status, toStatus: KycCaseStatus.RETURNED_TO_BD, changedById: user.id, note: `Returned to BD: ${note}` }
       });
+      // Same uniqueness rule: a second return to BD must not collide with the first round's RETURNED task.
+      await this.clearReviewTaskStatus(tx, id, ReviewStage.SUPERVISOR, ReviewTaskStatus.RETURNED);
       await tx.internalReviewTask.updateMany({
         where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
         data: { status: ReviewTaskStatus.RETURNED, completedAt: new Date(), updatedBy: user.id }
@@ -899,6 +904,9 @@ export class KycService {
       return this.prisma.$transaction(async (tx) => {
         const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.DMLRO, dto);
         await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_APPROVED, 'DMLRO final approval recorded during MLRO absence');
+        // Clear earlier rounds' COMPLETED tasks of the stages being completed (tasks are unique per case, stage and status).
+        const openStages = await tx.internalReviewTask.findMany({ where: { tenantId: kycCase.tenantId, kycCaseId: id, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } }, select: { stage: true } });
+        for (const stage of new Set(openStages.map((task) => task.stage))) await this.clearReviewTaskStatus(tx, id, stage, ReviewTaskStatus.COMPLETED);
         await tx.internalReviewTask.updateMany({
           where: { tenantId: kycCase.tenantId, kycCaseId: id, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
           data: { status: ReviewTaskStatus.COMPLETED, completedAt: new Date(), updatedBy: user.id }
@@ -965,6 +973,7 @@ export class KycService {
         // Re-check inside the transaction so a DMLRO decision made at the same moment wins and this one is refused.
         const current = await tx.kycCase.findFirst({ where: { id, tenantId: kycCase.tenantId }, select: { status: true } });
         if (!current || !this.isDmlroStageStatus(current.status)) throw new BadRequestException('The case changed during this action. Refresh before trying again.');
+        await this.clearReviewTaskStatus(tx, id, ReviewStage.DMLRO, ReviewTaskStatus.CANCELLED);
         await tx.internalReviewTask.updateMany({
           where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.DMLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
           data: { status: ReviewTaskStatus.CANCELLED, completedAt: new Date(), updatedBy: user.id }
