@@ -1,5 +1,25 @@
 # Newoon MIS Developer Handover
 
+## Parent Companies in the Enquiry Ownership Step (2026-11-19)
+
+- **Why:** clients with layered groups, for example a Qatar company owned by a UK company, owned by a US holding company, owned by a US parent, could record only the direct shareholder. Adding the upper companies as extra shareholders pushed the total to 200%.
+- **Data shape (no migration):** a `Corporate Entity` row in `details.preliminaryKyc.shareholders` may set `parentRowId` to another company row. That row is a **parent company** and owns `ownershipPercentage` % of the company it points to. Rows without a valid parent are direct shareholders of the client company. This is the same `parentRowId` tree the full KYC form already uses, and `convertToKyc` already maps it into the KYC party tree. Older enquiries have no parent links and behave as before.
+- **Shared rules:** `backend/src/common/preliminary-ownership-chain.ts` and `frontend/src/utils/preliminary-ownership-chain.ts` must stay identical apart from line 1. The check script compares them.
+  - Only direct shareholders must total 100%.
+  - The owners of one company (parent companies plus beneficial owners linked through it) may not exceed 100%.
+  - Parent links to a missing, non-company, self or circular row are cleared on save (`preliminaryKycData`) and treated as direct everywhere else.
+  - Percentages accept `50`, `50%` and `50,5`, as `ownershipPercentageValue` does.
+- **Editor (`PreliminaryOwnershipEditor`):**
+  - Company cards have **Add parent company** and a **Shareholder of** select. The select never offers a company's own parent companies, so cycles can't be made.
+  - Cards are listed top-down with indentation.
+  - Removing a company, or switching it to Person, moves its parent companies up one level instead of deleting them.
+  - Beneficial owners can link through a company at any level. The form shows the indirect UBO % calculated along the chain, with a **Use** button. It's a suggestion; the saved `uboPercentage` is still entered by the user.
+- **Outputs:** Section B in the live preview, `PreliminaryKycDocument` and the server PDF (`preliminary-pdf.ts`) lists the chain as 1, 1.1, 1.1.1, adds a **Shareholder of** column and shows **Total direct ownership %**.
+- **Checks:**
+  - `node backend/scripts/check-preliminary-ownership-chain.cjs`: helpers with frontend/backend parity, submit rules, save sanitizing and PDF HTML.
+  - `node frontend/scripts/check-preliminary-ownership-chain-ui.cjs`: drives the editor at 1440px and 390px and saves screenshots to `%TEMP%/newoon-ownership-chain-preview`.
+- **Not covered by automated checks:** an end-to-end enquiry → KYC conversion against a database. The conversion code path is the existing `parentRowId` mapping, now also passed through `chainParentId`.
+
 ## Country of Incorporation on Proposed-Company Enquiries (2026-11-15)
 
 - **Before:** line 4 of the Preliminary KYC ("Country of incorporation") was fixed text that always printed "-". There was no field for it.
