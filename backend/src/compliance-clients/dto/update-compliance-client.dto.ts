@@ -2,6 +2,31 @@ import { IsEmail, IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'clas
 
 export class UpdateComplianceClientDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  clientCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  registrationNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  industry?: string;
+
+  @IsOptional()
   @IsIn(['SIMPLIFIED', 'REGULAR', 'ENHANCED', 'NONE'])
   cddType?: 'SIMPLIFIED' | 'REGULAR' | 'ENHANCED' | 'NONE';
 

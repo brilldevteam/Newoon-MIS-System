@@ -57,11 +57,14 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
   const stage = kycStageIndex(status);
   const caseUrl = `/kyc/${kycCase.id}`;
   const stopped = STOPPED[status];
+  const isRekyc = kycCase.purpose === 'REKYC';
+  // A re-KYC skips the conversion step: approval makes it the client's current KYC.
+  const stages = STAGES.map((name, index) => ({ name, index })).filter((item) => !(isRekyc && item.name === 'Convert to client'));
 
   return (
     <section aria-label="Case progress" className="rounded-lg border border-slate-200 bg-white p-4 sm:p-5">
       <ol className="flex flex-wrap items-center gap-x-1 gap-y-2 text-xs font-semibold">
-        {STAGES.map((name, index) => {
+        {stages.map(({ name, index }, position) => {
           const done = stage > index || status === 'CLIENT_ACTIVE';
           const current = stage === index && status !== 'CLIENT_ACTIVE';
           return (
@@ -70,10 +73,10 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
                 aria-current={current ? 'step' : undefined}
                 className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${done ? 'bg-emerald-50 text-emerald-700' : current ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500'}`}
               >
-                {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="tabular-nums">{index + 1}</span>}
-                {name}
+                {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : <span className="tabular-nums">{position + 1}</span>}
+                {name === 'Client active' && isRekyc ? 'Current KYC' : name}
               </span>
-              {index < STAGES.length - 1 ? <ArrowRight className="h-3 w-3 shrink-0 text-slate-300" /> : null}
+              {position < stages.length - 1 ? <ArrowRight className="h-3 w-3 shrink-0 text-slate-300" /> : null}
             </li>
           );
         })}
@@ -84,6 +87,10 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
 
   function NextStep() {
     const owner = kycStatusOwner(status);
+
+    if (status === 'CLIENT_ACTIVE' && isRekyc) {
+      return <Notice tone="done" text="Re-KYC complete. This is now the client's current KYC; the earlier KYC is kept as history under Compliance → Compliance Clients." />;
+    }
 
     if (status === 'CLIENT_ACTIVE') {
       return <Notice tone="done" text="All done. The client is active, and ongoing checks continue under Compliance → Compliance Clients." />;
@@ -115,7 +122,7 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
     if (stage === 3) {
       const roles = status === 'SEF_APPROVED' ? ['SEF', 'AML_SUPERVISOR', 'DMLRO', 'MLRO'] : ['AML_SUPERVISOR', 'DMLRO', 'MLRO', ...(isPreliminary ? ['AML_TEAM'] : [])];
       if (!hasAnyRole(user, [...roles, ...ADMIN])) return <Waiting owner={owner || 'AML Supervisor / MLRO'} text={kycNextStep(status)} />;
-      return <Todo title="Your next step" intro={`The KYC is approved. Confirm it as the final KYC in "Final KYC Decision" below. Choose "${isPreliminary ? 'Use Preliminary KYC as final' : 'Use approved KYC as final'}", or open an amendment if something must change. Operations is then told to convert it to a client.`} action={{ label: 'Go to Final KYC Decision', onClick: () => onJump('final-kyc-decision') }} />;
+      return <Todo title="Your next step" intro={`The KYC is approved. Confirm it as the final KYC in "Final KYC Decision" below. Choose "${isPreliminary ? 'Use Preliminary KYC as final' : 'Use approved KYC as final'}", or open an amendment if something must change. ${isRekyc ? 'It then becomes the current KYC of the client.' : 'Operations is then told to convert it to a client.'}`} action={{ label: 'Go to Final KYC Decision', onClick: () => onJump('final-kyc-decision') }} />;
     }
 
     if (stage === 4) {

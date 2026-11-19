@@ -2,6 +2,9 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Int
 import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
+import { withDerivedIdentity } from '../common/person-identity';
+import { carryOverOverrides, identityExpiries, profileFromForm, stripOverlayKeys } from '../compliance-clients/compliance-client-profile';
+import { syncIdentityExpiryItems } from '../compliance-clients/identity-expiry-sync';
 import { complianceValidationError } from '../common/kyc-compliance';
 import { kycFormCompletenessIssues, kycFormCompletenessMessage } from '../common/kyc-form-completeness';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
@@ -1323,6 +1326,8 @@ export class KycService {
               email: client.email ?? primary?.email ?? null,
               phone: client.phone ?? primary?.phone ?? null,
               registrationNumber: client.registrationNumber?.trim() ? client.registrationNumber : kycRegistrationNumber,
+              // The activated KYC becomes the client's current profile; a later re-KYC replaces it.
+              currentKycCaseId: kycCase.id,
               // Completed onboarding counts as the client's latest review.
               lastReviewDate: now,
               nextReviewDate: nextReviewDateFor(riskLevel, now)
@@ -1349,6 +1354,7 @@ export class KycService {
               }
             });
           }
+          await this.syncClientIdentityExpiry(tx, user, kycCase);
           await this.audit(tx, user, kycCase.tenantId, 'Client', client.id, {
             action: 'CLIENT_ACTIVATED_FOR_COMPLIANCE',
             kycCaseId: kycCase.id,
@@ -1565,7 +1571,7 @@ export class KycService {
       });
       await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
       await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action });
-      await this.notifyReadyForClientConversion(tx, kycCase);
+      await this.afterKycFinal(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
     });
   }
@@ -1589,8 +1595,135 @@ export class KycService {
     await tx.kycForm.update({ where: { kycCaseId: kycCase.id }, data: { status: 'FINAL', isLocked: true, updatedBy: user.id } });
     await this.recordStatus(tx, kycCase, user, KycCaseStatus.KYC_FINAL_APPROVED, note);
     await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action: 'KYC_MARKED_FINAL_ON_APPROVAL' });
-    await this.notifyReadyForClientConversion(tx, kycCase);
+    await this.afterKycFinal(tx, user, kycCase);
     return true;
+  }
+
+  // An onboarding KYC waits for Operations to convert it to a client. A re-KYC of an existing client needs no
+  // engagement decision: approval makes it the client's current KYC straight away.
+  private async afterKycFinal(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; title: string }) {
+    const meta = await tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, select: { purpose: true, clientId: true, kycNumber: true } });
+    if (meta.purpose !== 'REKYC') return this.notifyReadyForClientConversion(tx, kycCase);
+    return this.completeRekyc(tx, user, { ...kycCase, clientId: meta.clientId, kycNumber: meta.kycNumber });
+  }
+
+  private async completeRekyc(
+    tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; title: string; clientId: string; kycNumber: string }
+  ) {
+    const client = await tx.client.findUniqueOrThrow({ where: { id: kycCase.clientId } });
+    const now = new Date();
+    const profile = await onboardingRiskProfile(tx, kycCase.id, kycCase.tenantId);
+    const riskLevel = profile.riskLevel || client.riskLevel;
+    const cddType = profile.cddType || client.cddType;
+    const nextReviewDate = nextReviewDateFor(riskLevel, now);
+    await tx.client.update({
+      where: { id: client.id },
+      data: { currentKycCaseId: kycCase.id, riskLevel, cddType, lastReviewDate: now, nextReviewDate }
+    });
+    await this.recordStatus(tx, { ...kycCase, status: KycCaseStatus.KYC_FINAL_APPROVED }, user, KycCaseStatus.CLIENT_ACTIVE,
+      'Re-KYC approved; the client profile now uses this KYC. Earlier KYCs are kept as history.');
+    const carriedOver = await this.carryOverProfileEdits(tx, user, kycCase, client.currentKycCaseId);
+    await this.syncClientIdentityExpiry(tx, user, kycCase);
+    await this.audit(tx, user, kycCase.tenantId, 'Client', client.id, {
+      action: 'CLIENT_REKYC_COMPLETED', kycCaseId: kycCase.id, previousKycCaseId: client.currentKycCaseId, riskLevel, cddType, ...carriedOver
+    });
+    await this.createNotification(tx, kycCase, NotificationType.CLIENT_ACTIVATED, `Re-KYC approved: ${client.name}`,
+      `${kycCase.kycNumber} is approved and is now the current KYC (next review ${nextReviewDate ? nextReviewDate.toISOString().slice(0, 10) : 'not scheduled'}).`);
+  }
+
+  // Edits made on the client page while the re-KYC was in progress went onto the previous KYC; keep them current.
+  private async carryOverProfileEdits(
+    tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; clientId: string }, previousCaseId: string | null
+  ) {
+    if (!previousCaseId || previousCaseId === kycCase.id) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
+    const rekyc = await tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, select: { createdAt: true } });
+    const select = { section: true, rowId: true, rowLabel: true, field: true, value: true, updatedAt: true } as const;
+    const previous = await tx.clientProfileOverride.findMany({ where: { kycCaseId: previousCaseId, tenantId: kycCase.tenantId }, orderBy: { updatedAt: 'asc' }, select });
+    const late = previous.filter((override) => override.updatedAt > rekyc.createdAt);
+    if (!late.length) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
+    const form = await tx.kycForm.findUnique({ where: { kycCaseId: kycCase.id }, include: this.formInclude() });
+    if (!form) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
+    const { carried, skipped } = carryOverOverrides(late, previous, this.serializeForm(form));
+    for (const override of carried) {
+      await tx.clientProfileOverride.upsert({
+        where: { kycCaseId_section_rowId_field: { kycCaseId: kycCase.id, section: override.section, rowId: override.rowId, field: override.field } },
+        update: { value: override.value, rowLabel: override.rowLabel, updatedById: user.id },
+        create: {
+          tenantId: kycCase.tenantId, clientId: kycCase.clientId, kycCaseId: kycCase.id, section: override.section,
+          rowId: override.rowId, rowLabel: override.rowLabel, field: override.field, value: override.value, updatedById: user.id
+        }
+      });
+    }
+    return { editsCarriedOver: carried.length, editsSkipped: skipped.map((override) => `${override.section} ${override.rowLabel || ''} ${override.field}`.replace(/\s+/g, ' ')) };
+  }
+
+  // Expiry records follow the QID / passport dates of the case's form, including client-page edits made on it.
+  private async syncClientIdentityExpiry(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; clientId: string }) {
+    const form = await tx.kycForm.findUnique({ where: { kycCaseId: kycCase.id }, include: this.formInclude() });
+    if (!form) return;
+    const overrides = await tx.clientProfileOverride.findMany({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId } });
+    const profile = profileFromForm(this.serializeForm(form), overrides);
+    await syncIdentityExpiryItems(tx, { id: kycCase.clientId, tenantId: kycCase.tenantId }, user.id, identityExpiries(profile));
+  }
+
+  // Starts a periodic re-KYC for an onboarded client: a new KYC case (purpose REKYC) whose form is prefilled from
+  // the client's current profile (sections A-E, with client-page edits applied). Documents, declaration and
+  // internal review start empty. Earlier cases are not changed. The caller checks access and tenant scope.
+  async createRekycCase(
+    user: RequestUser,
+    client: { id: string; tenantId: string; name: string },
+    source: { id: string; kycNumber: string; serviceId: string | null },
+    form: { sectionA: unknown; sectionB: unknown; sectionC: unknown; sectionD: unknown; sectionE: unknown }
+  ) {
+    const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {});
+    // File names belong to the earlier case's uploads, so they are not carried over.
+    const withoutFiles = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => !/FileNames?$/.test(key)));
+    const { reference: _reference, formVariant: _variant, preliminaryKyc: _preliminary, ...sectionA } = withoutFiles(record(form.sectionA));
+    const sectionB = record(form.sectionB);
+    const personRows = (value: unknown) => this.asArray<RowPayload>(value).map((row) => stripOverlayKeys(row) as RowPayload);
+    const shareholders = personRows(sectionB.shareholders).filter((row) => this.hasRowValue(row));
+    const ubos = personRows(sectionB.ubos).filter((row) => this.hasRowValue(row));
+    const managers = personRows(record(form.sectionC).managers).filter((row) => this.text(row.fullName).trim());
+    const sectionD = withoutFiles(record(form.sectionD));
+    const sectionE = stripOverlayKeys(record(form.sectionE));
+
+    return this.prisma.$transaction(async (tx) => {
+      // One re-KYC at a time per client; lock the client row so two clicks cannot both start one.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Client" WHERE "id" = ${client.id} AND "tenantId" = ${client.tenantId} FOR UPDATE`);
+      const open = await tx.kycCase.findFirst({
+        where: {
+          clientId: client.id, tenantId: client.tenantId, purpose: 'REKYC',
+          status: { notIn: [KycCaseStatus.CLIENT_ACTIVE, KycCaseStatus.CLIENT_REJECTED, KycCaseStatus.MLRO_REJECTED, KycCaseStatus.SEF_REJECTED] }
+        },
+        select: { kycNumber: true }
+      });
+      if (open) throw new BadRequestException(`Re-KYC ${open.kycNumber} is already in progress for this client. Complete it before starting another.`);
+
+      const kycNumber = await this.nextKycNumber(tx, client.tenantId);
+      const status = source.serviceId ? KycCaseStatus.LEGAL_DOCUMENTS_PENDING : KycCaseStatus.INQUIRY_RECEIVED;
+      const kycCase = await tx.kycCase.create({
+        data: {
+          tenantId: client.tenantId, clientId: client.id, serviceId: source.serviceId, title: `${client.name} Re-KYC`, kycNumber, status,
+          purpose: 'REKYC', previousKycCaseId: source.id, createdById: user.id
+        }
+      });
+      await tx.kycCaseStatusHistory.create({
+        data: { tenantId: client.tenantId, kycCaseId: kycCase.id, toStatus: status, changedById: user.id, note: `Periodic re-KYC started, prefilled from ${source.kycNumber}` }
+      });
+      const created = await tx.kycForm.create({ data: { tenantId: client.tenantId, kycCaseId: kycCase.id, createdBy: user.id, updatedBy: user.id } });
+      const section = (sectionKey: KycFormSectionKey, data: Record<string, unknown>) => tx.kycSectionData.create({
+        data: { tenantId: client.tenantId, kycCaseId: kycCase.id, kycFormId: created.id, sectionKey, data: this.jsonValue(data), createdBy: user.id, updatedBy: user.id }
+      });
+      await section(KycFormSectionKey.GENERAL_COMPANY, sectionA);
+      await section(KycFormSectionKey.OWNERSHIP, { ...sectionB, shareholders, ubos });
+      await section(KycFormSectionKey.MANAGEMENT, { savedAt: new Date().toISOString() });
+      await section(KycFormSectionKey.COMPLIANCE_RISK, sectionD);
+      await section(KycFormSectionKey.COMMUNICATION_PERSON, sectionE);
+      await this.writeOwnershipRows(tx, created, kycCase.id, user.id, shareholders, ubos);
+      await this.writeManagerRows(tx, created, kycCase.id, user.id, managers);
+      await this.audit(tx, user, client.tenantId, 'KycCase', kycCase.id, { action: 'REKYC_STARTED', clientId: client.id, previousKycCaseId: source.id, kycNumber });
+      return { id: kycCase.id, kycNumber };
+    }, { timeout: 60000 });
   }
 
   // Operations (and the reviewer roles) see CLIENT_READY_FOR_ACTIVATION; it opens the KYC case,
@@ -1696,7 +1829,7 @@ export class KycService {
     const guarded = (section: Record<string, unknown>) => ({ ...section, expectedVersion: payload.version });
     if (payload.sectionA) await this.saveSectionData(user, id, KycFormSectionKey.GENERAL_COMPANY, guarded(payload.sectionA));
     if (payload.sectionD) await this.saveSectionData(user, id, KycFormSectionKey.COMPLIANCE_RISK, guarded(payload.sectionD));
-    if (payload.sectionE) await this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, guarded(payload.sectionE));
+    if (payload.sectionE) await this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, guarded(withDerivedIdentity(payload.sectionE)));
     if (payload.sectionG) await this.saveSectionData(user, id, KycFormSectionKey.CLIENT_DECLARATION, guarded(payload.sectionG));
     if (payload.sectionB) await this.saveOwnership(user, id, guarded(payload.sectionB));
     if (payload.sectionC) await this.saveManagers(user, id, guarded(payload.sectionC));
@@ -1717,7 +1850,7 @@ export class KycService {
 
   saveSectionE(user: RequestUser, id: string, dto: Record<string, unknown>) {
     this.validateEmail(dto.email);
-    return this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, dto);
+    return this.saveSectionData(user, id, KycFormSectionKey.COMMUNICATION_PERSON, withDerivedIdentity(dto));
   }
 
   saveSectionG(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -1726,8 +1859,8 @@ export class KycService {
 
   async saveOwnership(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], dto.expectedVersion);
-    const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row));
-    const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row));
+    const rows = this.asArray<RowPayload>(dto.shareholders).filter((row) => this.hasRowValue(row)).map((row) => withDerivedIdentity(row));
+    const ubos = this.asArray<RowPayload>(dto.ubos).filter((row) => this.hasRowValue(row)).map((row) => withDerivedIdentity(row));
     for (const ubo of ubos) {
       if (ubo.parentRowId && !rows.some((party) => party.id === ubo.parentRowId && party.shareholderType === 'Corporate Entity')) {
         throw new BadRequestException('Link each indirect beneficial owner to a corporate shareholder in this form.');
@@ -1774,44 +1907,7 @@ export class KycService {
         }
       });
 
-      if (rows.length) {
-        await tx.kycShareholder.createMany({
-          data: rows.map((row, index) => ({
-            tenantId: form.tenantId,
-            kycCaseId: id,
-            kycFormId: form.id,
-            fullName: this.requiredText(row.fullName, 'Party full name'),
-            nationality: this.optionText(row.nationality, row.nationalityOther),
-            dateOfBirth: this.dateValue(row.dateOfBirth),
-            identityNumber: this.optionalText(row.identityNumber),
-            ownershipPercentage: this.decimalValue(row.shareholderPercentage ?? row.ownershipPercentage),
-            residenceAddress: this.optionalText(row.residenceAddress),
-            sortOrder: index,
-            createdBy: user.id,
-            updatedBy: user.id
-          }))
-        });
-      }
-
-      if (ubos.length) {
-        await tx.kycUbo.createMany({
-          data: ubos.map((row, index) => ({
-            tenantId: form.tenantId,
-            kycCaseId: id,
-            kycFormId: form.id,
-            fullName: this.requiredText(row.fullName, 'Beneficial person full name'),
-            nationality: this.optionalText(row.nationality),
-            dateOfBirth: this.dateValue(row.dateOfBirth),
-            identityNumber: this.optionalText(row.identityNumber),
-            ownershipPercentage: this.decimalValue(row.uboInterestPercentage ?? row.ownershipPercentage),
-            residenceAddress: this.optionalText(row.residenceAddress),
-            notes: this.optionalText(row.notes),
-            sortOrder: index,
-            createdBy: user.id,
-            updatedBy: user.id
-          }))
-        });
-      }
+      await this.writeOwnershipRows(tx, form, id, user.id, rows, ubos);
 
       await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
@@ -1821,7 +1917,7 @@ export class KycService {
 
   async saveManagers(user: RequestUser, id: string, dto: Record<string, unknown>) {
     const form = await this.requireWritableForm(user, id, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN'], dto.expectedVersion);
-    const rows = this.asArray<RowPayload>(dto.managers).filter((row) => this.hasRowValue(row));
+    const rows = this.asArray<RowPayload>(dto.managers).filter((row) => this.hasRowValue(row)).map((row) => withDerivedIdentity(row));
 
     await this.prisma.$transaction(async (tx) => {
       await tx.kycManager.deleteMany({ where: { kycFormId: form.id } });
@@ -1839,32 +1935,82 @@ export class KycService {
         }
       });
 
-      if (rows.length) {
-        await tx.kycManager.createMany({
-          data: rows.map((row, index) => ({
-            tenantId: form.tenantId,
-            kycCaseId: id,
-            kycFormId: form.id,
-            fullName: this.requiredText(row.fullName, 'Manager full name'),
-            entityName: this.optionalText(row.entityName),
-            nationalityAndAddress: this.optionalText(row.nationalityAndAddress),
-            nationality: this.optionalText(row.nationality),
-            address: this.optionalText(row.address),
-            dateOfBirth: this.dateValue(row.dateOfBirth),
-            identityNumber: this.optionalText(row.identityNumber),
-            position: this.optionText(row.position, row.positionOther),
-            isAuthorizedSignatory: Boolean(row.isAuthorizedSignatory),
-            sortOrder: index,
-            createdBy: user.id,
-            updatedBy: user.id
-          }))
-        });
-      }
+      await this.writeManagerRows(tx, form, id, user.id, rows);
 
       await tx.kycForm.update({ where: { id: form.id, version: form.version }, data: { updatedBy: user.id } });
     });
 
     return this.getForm(user, id);
+  }
+
+  // Table rows behind Section B; the JSON section data stays the source the form is read from.
+  private async writeOwnershipRows(tx: Prisma.TransactionClient, form: { id: string; tenantId: string }, kycCaseId: string, userId: string, rows: RowPayload[], ubos: RowPayload[]) {
+    if (rows.length) {
+      await tx.kycShareholder.createMany({
+        data: rows.map((row, index) => ({
+          tenantId: form.tenantId,
+          kycCaseId,
+          kycFormId: form.id,
+          fullName: this.requiredText(row.fullName, 'Party full name'),
+          nationality: this.optionText(row.nationality, row.nationalityOther),
+          dateOfBirth: this.dateValue(row.dateOfBirth),
+          identityNumber: this.optionalText(row.identityNumber),
+          ownershipPercentage: this.decimalValue(row.shareholderPercentage ?? row.ownershipPercentage),
+          residenceAddress: this.optionalText(row.residenceAddress),
+          sortOrder: index,
+          createdBy: userId,
+          updatedBy: userId
+        }))
+      });
+    }
+
+    if (ubos.length) {
+      await tx.kycUbo.createMany({
+        data: ubos.map((row, index) => ({
+          tenantId: form.tenantId,
+          kycCaseId,
+          kycFormId: form.id,
+          fullName: this.requiredText(row.fullName, 'Beneficial person full name'),
+          nationality: this.optionalText(row.nationality),
+          dateOfBirth: this.dateValue(row.dateOfBirth),
+          identityNumber: this.optionalText(row.identityNumber),
+          ownershipPercentage: this.decimalValue(row.uboInterestPercentage ?? row.ownershipPercentage),
+          residenceAddress: this.optionalText(row.residenceAddress),
+          notes: this.optionalText(row.notes),
+          sortOrder: index,
+          createdBy: userId,
+          updatedBy: userId
+        }))
+      });
+    }
+  }
+
+  private async writeManagerRows(tx: Prisma.TransactionClient, form: { id: string; tenantId: string }, kycCaseId: string, userId: string, rows: RowPayload[]) {
+    if (rows.length) {
+      await tx.kycManager.createMany({
+        data: rows.map((row, index) => ({
+          tenantId: form.tenantId,
+          kycCaseId,
+          kycFormId: form.id,
+          fullName: this.requiredText(row.fullName, 'Manager full name'),
+          entityName: this.optionalText(row.entityName),
+          nationalityAndAddress: this.optionalText(row.nationalityAndAddress),
+          nationality: this.optionalText(row.nationality),
+          address: this.optionalText(row.address),
+          dateOfBirth: this.dateValue(row.dateOfBirth),
+          identityNumber: this.optionalText(row.identityNumber),
+          qidNumber: this.optionalText(row.qidNumber),
+          qidExpiry: this.dateValue(row.qidExpiry),
+          passportNumber: this.optionalText(row.passportNumber),
+          passportExpiry: this.dateValue(row.passportExpiry),
+          position: this.optionText(row.position, row.positionOther),
+          isAuthorizedSignatory: Boolean(row.isAuthorizedSignatory),
+          sortOrder: index,
+          createdBy: userId,
+          updatedBy: userId
+        }))
+      });
+    }
   }
 
   async saveRequiredDocuments(user: RequestUser, id: string, dto: Record<string, unknown>) {
@@ -3595,6 +3741,8 @@ export class KycService {
   }
 
   private dateValue(value: unknown) {
+    // Rows copied from stored KYC managers (re-KYC prefill) carry Date objects.
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
     if (!value || typeof value !== 'string') return null;
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
