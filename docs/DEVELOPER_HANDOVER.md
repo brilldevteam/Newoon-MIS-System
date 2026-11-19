@@ -9,6 +9,19 @@
 - **Check:** `node backend/scripts/check-kyc-export-date.cjs` covers the fallback, an entered date winning, a standard KYC, and the HTML and DOCX outputs.
 - **Not verified:** Word rendering of the DOCX (the Word automation hung on this machine), and the server. Layout is unchanged; only the date value is now filled.
 
+## Resubmit to DMLRO "Internal server error" (2026-11-19)
+
+- **Symptom:** after DMLRO returned a KYC file, **Resubmit KYC File to DMLRO** showed "Internal server error". Nothing was saved, so after a refresh the AML Supervisor comments box was empty again.
+- **Cause:** `InternalReviewTask` is unique per `(kycCaseId, stage, status)`. `submitToAml` marked the current AML Supervisor task `COMPLETED` while the first round's `COMPLETED` Supervisor task still existed, so the database refused it (Prisma `P2002`) and the whole transaction rolled back. The other review stages already clear the old task first (`clearReviewTaskStatus` in `submitReviewAndRoute`, MLRO, SEF).
+- **Fix (`backend/src/kyc/kyc.service.ts`):** clear the old task before setting the final status in:
+  - `submitToAml` (`COMPLETED`);
+  - `returnToBusinessDevelopment` (`RETURNED`, for a second return to BD);
+  - DMLRO final approval during MLRO absence (`COMPLETED`, for each stage being completed);
+  - MLRO deciding while DMLRO is unavailable (`CANCELLED`).
+  Submissions, versions, status history, audit entries and notifications are unchanged; only the duplicate task row from an earlier round is removed, as the other stages already do.
+- **Check:** `node backend/scripts/check-kyc-resubmit-tasks.cjs` replays submit → DMLRO return → resubmit (twice) and a second return to BD against an in-memory task table with the same unique rule. It fails with the unique-constraint error on the old code.
+- **Not verified:** against a real database or on the server. Cases already stuck need no data fix; resubmitting works once this is deployed.
+
 ## Parent Companies in the Enquiry Ownership Step (2026-11-19)
 
 - **Why:** clients with layered groups, for example a Qatar company owned by a UK company, owned by a US holding company, owned by a US parent, could record only the direct shareholder. Adding the upper companies as extra shareholders pushed the total to 200%.
