@@ -1,4 +1,5 @@
 import { beneficialOwners } from '../common/ownership';
+import { directOwnershipTotal, ownershipChainOrder, shareholderOfLabel } from '../common/preliminary-ownership-chain';
 import { uboCompanyName } from '../common/ubo-display-name';
 
 type Row = Record<string, unknown>;
@@ -15,7 +16,8 @@ export function preliminaryPdfHtml(data: Row): string {
   const contact = object(data.contact);
   const declaration = object(data.declaration);
   const total = (items: Row[]) => items.reduce((sum, row) => sum + (Number(row.ownershipPercentage) || 0), 0).toFixed(2);
-  const parties = (items: Row[]) => items.map((row, index) => [index + 1, row.fullName, row.identityNumber, row.nationality, row.address, row.ownershipPercentage]);
+  // Chain order: each direct shareholder followed by its parent companies, numbered 1, 1.1, 1.1.1.
+  const parties = (items: Row[]) => ownershipChainOrder(items).map(({ row, number }) => [number, row.fullName, row.identityNumber, row.nationality, row.address, shareholderOfLabel(row, items), row.ownershipPercentage]);
   const contactEntries = [['Full Name', contact.fullName], ['Position', contact.position], ['Nationality', contact.nationality], ['Passport Number', contact.passportNumber], ['Passport Expiry Date', contact.passportExpiryDate], ['QID Number', contact.qidNumber], ['QID Expiry Date', contact.qidExpiryDate], ['Mobile Number', contact.mobileNumber], ['Email', contact.email]].filter(([, item]) => String(item ?? '').trim() && String(item).trim() !== '-');
   const date = data.completedAt ? new Date(String(data.completedAt)).toLocaleDateString('en-GB', { timeZone: 'UTC' }) : '-';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -24,7 +26,7 @@ export function preliminaryPdfHtml(data: Row): string {
   ${table('Section A: Basic Client Details', ['No.', 'Details'], [
     [1, `Proposed Company Name: ${data.companyName || '-'}`], [2, `Proposed Legal Form: ${data.proposedLegalForm || '-'}`], [3, `Jurisdiction of Registration: ${data.jurisdiction || '-'}`], [4, `Country of incorporation: ${data.countryOfIncorporation || '-'}`], [5, `Proposed Registered Office Address: ${data.registeredOfficeAddress || '-'}`], [6, `Proposed Business Activity: ${data.businessActivity || '-'}`], [7, `Expected Source of Initial Capital: ${data.sourceOfFunds || '-'}`], [8, `Expected Business from Newoon: ${Array.isArray(data.expectedBusiness) ? data.expectedBusiness.join(', ') : data.expectedBusiness || '-'}`]
   ])}
-  ${table('Section B: Proposed Shareholders', ['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %'], parties(shareholders))}<p><strong>Total ownership %: ${total(shareholders)}%</strong></p>
+  ${table('Section B: Proposed Shareholders', ['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %'], parties(shareholders))}<p><strong>Total direct ownership %: ${directOwnershipTotal(shareholders).toFixed(2)}%</strong></p>
   ${table('Ultimate Beneficial Owners (Natural Person Only)', ['No.', 'Name', 'Company', 'Passport/QID', 'Nationality', 'Residence', 'UBO %'], ubos.map((row, index) => [index + 1, row.fullName, uboCompanyName(row, shareholders), row.identityNumber, row.nationality, row.address, row.ownershipPercentage]))}<p><strong>Total UBO %: ${total(ubos)}%</strong></p>
   ${table('Section C: Proposed Management & Control Persons', ['No.', 'Name', 'Passport / QID', 'Nationality', 'Position'], rows(data.management).map((row, index) => [index + 1, row.fullName, row.identityNumber, row.nationality, Array.isArray(row.positions) && row.positions.length ? row.positions.join(', ') : row.position]))}
   ${table('Section D: Required Documents', ['Document', 'Available'], rows(data.documents).map((row) => [row.documentType, row.available ? 'Yes' : 'No']))}

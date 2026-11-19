@@ -1,4 +1,5 @@
 import { mergeBeneficialOwners } from '../utils/ownership';
+import { directOwnershipTotal, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
 import { uboCompanyName } from '../utils/ubo-display-name';
 
@@ -20,8 +21,8 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
         ['5', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`], ['6', `Proposed Business Activity: ${value(data.businessActivity)}`],
         ['7', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`], ['8', `Expected Business from Newoon: ${value(expectedBusiness)}`]
       ]} />
-      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Ownership %']} rows={rows(data.shareholders).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
-      <p className="mt-1 font-bold">Total ownership %: {totalOwnership(rows(data.shareholders))}%</p>
+      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %']} rows={ownershipChainOrder(rows(data.shareholders)).map(({ row, number }) => [number, value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), shareholderOfLabel(row, rows(data.shareholders)), value(row.ownershipPercentage)])} />
+      <p className="mt-1 font-bold">Total direct ownership %: {directOwnershipTotal(rows(data.shareholders)).toFixed(2)}%</p>
       <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Company', 'Passport/QID', 'Nationality', 'Residence', 'UBO %']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), uboCompanyName(row, rows(data.shareholders)), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
       <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)))}%</p>
       <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />

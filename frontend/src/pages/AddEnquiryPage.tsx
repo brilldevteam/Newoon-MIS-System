@@ -2,6 +2,7 @@ import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
 import { mergeBeneficialOwners } from '../utils/ownership';
+import { directOwnershipTotal, overOwnedCompanies, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -303,9 +304,14 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (percentages.some((value) => !Number.isFinite(value) || value < 0 || value > 100)) {
       return 'Each shareholder ownership percentage must be a number between 0 and 100.';
     }
-    const total = percentages.reduce((sum, value) => sum + value, 0);
+    // Parent companies hold a share of the company above them, so only direct shareholders count towards 100%.
+    const total = directOwnershipTotal(form.preliminaryShareholders);
     if (Math.abs(total - 100) > 0.005) {
       return `Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`;
+    }
+    const overOwned = overOwnedCompanies(form.preliminaryShareholders, form.preliminaryUbos)[0];
+    if (overOwned) {
+      return `Owners of ${overOwned.name} add up to ${overOwned.total.toFixed(2)}%. The owners of one company cannot exceed 100%.`;
     }
     if (form.preliminaryUbos.some((row) => row.parentRowId && (!row.uboPercentage?.trim() || !Number.isFinite(Number(row.uboPercentage)) || Number(row.uboPercentage) < 0 || Number(row.uboPercentage) > 100))) {
       return 'Enter a UBO percentage between 0 and 100 for each beneficial owner linked to a corporate shareholder.';
@@ -1138,7 +1144,8 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
       </PdfSection>
       <PdfSection title="Section B: Shareholders & Beneficial Owners (Proposed)">
         <p className="font-bold">Proposed Shareholders</p>
-        <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Ownership %']} rows={form.preliminaryShareholders.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Shareholder of', 'Ownership %']} rows={ownershipChainOrder(form.preliminaryShareholders).map(({ row, number }) => [number, value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), shareholderOfLabel(row, form.preliminaryShareholders), value(row.ownershipPercentage)])} />
+        <p className="mt-1 font-bold">Total direct ownership %: {directOwnershipTotal(form.preliminaryShareholders).toFixed(2)}%</p>
         <p className="mt-2 font-bold">Ultimate Beneficial owners (Natural Person Only)</p>
         <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'UBO %']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
         <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos))}%</p>

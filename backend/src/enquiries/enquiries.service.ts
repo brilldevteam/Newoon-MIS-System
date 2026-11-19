@@ -15,6 +15,7 @@ import { basename, isAbsolute, join, normalize, relative } from 'path';
 import PizZip from 'pizzip';
 import { randomUUID } from 'crypto';
 import { beneficialOwners } from '../common/ownership';
+import { chainParentId, directOwnershipTotal, overOwnedCompanies } from '../common/preliminary-ownership-chain';
 import { KycPdfRenderer } from '../kyc/export/kyc-pdf-renderer';
 import { preliminaryPdfHtml } from './preliminary-pdf';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
@@ -507,7 +508,7 @@ export class EnquiriesService {
       const ownershipIds = new Map(preliminaryShareholders.map((row) => [String(row.id || ''), randomUUID()]));
       const ownershipRows = preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map<Record<string, unknown> & { id: string }>((row) => ({
         ...row, id: ownershipIds.get(String(row.id || '')) || randomUUID(),
-        parentRowId: ownershipIds.get(String(row.parentRowId || '')) || '',
+        parentRowId: ownershipIds.get(chainParentId(row, preliminaryShareholders)) || '',
         residenceAddress: row.address, shareholderPercentage: row.ownershipPercentage
       }));
       const beneficialRows = beneficialOwners(preliminaryShareholders, preliminaryUbos).map<Record<string, unknown> & { id: string }>((row) => ({
@@ -1020,11 +1021,13 @@ export class EnquiriesService {
       registeredOfficeAddress: this.optionalText(dto.registeredOfficeAddress),
       sourceOfFunds: this.optionalText(dto.sourceOfFunds),
       expectedBusiness,
-      shareholders: this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
+      // A company row may name another company row as parentRowId (a parent company in the ownership chain).
+      // Links to a missing, non-company or circular parent are cleared, so the row counts as a direct shareholder.
+      shareholders: ((rows) => rows.map((row) => ({ ...row, parentRowId: chainParentId(row, rows) })))(this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
         id: this.optionalText(row.id) || randomUUID(), shareholderType: row.shareholderType === 'Corporate Entity' ? 'Corporate Entity' : 'Individual', parentRowId: this.optionalText(row.parentRowId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)
-      })),
+      }))),
       ubos: this.asArray<Record<string, unknown>>(dto.ubos).map((row) => ({
         id: this.optionalText(row.id) || randomUUID(), shareholderType: 'Individual', parentRowId: this.optionalText(row.parentRowId), sourceShareholderId: this.optionalText(row.sourceShareholderId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
@@ -1051,9 +1054,15 @@ export class EnquiriesService {
     if (!shareholders.length || shareholders.some((row) => !this.optionalText(row.fullName) || !this.optionalText(row.ownershipPercentage))) {
       throw new BadRequestException('Add at least one proposed shareholder with name and ownership percentage.');
     }
-    const total = shareholders.reduce((sum, row) => sum + Number(this.ownershipPercentageValue(row.ownershipPercentage)), 0);
+    shareholders.forEach((row) => this.ownershipPercentageValue(row.ownershipPercentage));
+    // Parent companies hold a share of the company above them, so only direct shareholders count towards 100%.
+    const total = directOwnershipTotal(shareholders);
     if (Math.abs(total - 100) > 0.005) {
       throw new BadRequestException(`Direct shareholder ownership must total 100%. Current total: ${total.toFixed(2)}%.`);
+    }
+    const overOwned = overOwnedCompanies(shareholders, this.asArray<Record<string, unknown>>(data.ubos))[0];
+    if (overOwned) {
+      throw new BadRequestException(`Owners of ${overOwned.name} add up to ${overOwned.total.toFixed(2)}%. The owners of one company cannot exceed 100%.`);
     }
     const management = this.asArray<Record<string, unknown>>(data.management);
     for (const row of this.asArray<Record<string, unknown>>(data.ubos)) {
