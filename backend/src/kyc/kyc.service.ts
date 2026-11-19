@@ -2489,7 +2489,10 @@ export class KycService {
       fullKycStarted: form.fullKycStarted,
       sectionA: {
         ...sectionA,
-        reference: form.kycCase.kycNumber || this.text(sectionA.reference)
+        reference: form.kycCase.kycNumber || this.text(sectionA.reference),
+        // Conversion never filled the KYC Date. A KYC made from a Preliminary KYC uses the Preliminary KYC's date
+        // (its completion date, UTC as in the Preliminary PDF) until someone enters a date; an entered date always wins.
+        date: this.text(sectionA.date) || /^\d{4}-\d{2}-\d{2}/.exec(this.text(preliminary.completedAt))?.[0] || ''
       },
       sectionB: {
         ...ownershipSection,
