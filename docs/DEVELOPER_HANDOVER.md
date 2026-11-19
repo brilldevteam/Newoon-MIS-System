@@ -1,5 +1,13 @@
 # Newoon MIS Developer Handover
 
+## AML Edit Enquiry Opens Empty with "Forbidden resource" (2026-11-19)
+
+- **Symptom:** an AML Team / AML Supervisor user opened **Edit Enquiry** on an enquiry already converted to KYC (case still in `SUPERVISOR_REVIEW_PENDING`) and got a red "Forbidden resource" banner over an empty form.
+- **Cause:** `AddEnquiryPage` loaded `GET /api/clients` and `GET /api/enquiries/:id` in one `Promise.all`. `/clients` follows the `clients` area of the role matrix, and AML roles have no Clients access by default, so once the matrix is saved it returns 403. The rejected `Promise.all` dropped the enquiry too. The enquiry endpoints themselves allowed the edit.
+- **Fix:** the client list is now optional on that page. If `/clients` fails, the "Current client" picker shows only the enquiry's already linked client, and the enquiry still loads and saves.
+- **Rule unchanged:** AML Team / AML Supervisor may still edit an enquiry while its KYC case is in preparation (`INQUIRY_RECEIVED` … `SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED`), in `EnquiriesService.canModifyEnquiry` and the matching `utils/enquiry-edit-access.ts`. Later case stages lock it, as before. Backend authorization is unchanged.
+- **Check:** `frontend/scripts/check-returned-enquiry-ui.cjs` now also opens the editor as AML Supervisor with `/clients` returning 403.
+
 ## Country of Incorporation on Proposed-Company Enquiries (2026-11-15)
 
 - **Before:** line 4 of the Preliminary KYC ("Country of incorporation") was fixed text that always printed "-". There was no field for it.
