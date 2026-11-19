@@ -404,9 +404,12 @@ export function AddEnquiryPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    Promise.all([listClients(), id ? getEnquiry(id) : Promise.resolve(null)])
+    // The client list only feeds the "Current client" picker. Roles without Clients access in the role matrix
+    // (for example AML Team / AML Supervisor) get 403 from /clients; that must not block loading the enquiry itself.
+    Promise.all([listClients().catch(() => null), id ? getEnquiry(id) : Promise.resolve(null)])
       .then(([clientItems, enquiry]) => {
-        setClients(clientItems);
+        const linkedClient = enquiry?.client ? [enquiry.client] : [];
+        setClients(clientItems ?? linkedClient);
         if (!enquiry) return;
         if (!canEditEnquiryRecord(user, enquiry)) {
           navigate(`/enquiries/${id}`, { replace: true });

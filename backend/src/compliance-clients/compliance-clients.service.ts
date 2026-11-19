@@ -5,7 +5,13 @@ import { AccessControlService } from '../access-control/access-control.service';
 import { COMPLIANCE_REGISTER_STATUSES, COMPLIANCE_REGISTER_WHERE } from '../common/client-compliance';
 import { userSummarySelect } from '../common/user-summary';
 import { KycService } from '../kyc/kyc.service';
-import { profileFromForm } from './compliance-client-profile';
+import { applyOverrides, identityExpiries, optionText, personKey, profileFieldSpec, profileFromForm, ProfileOverride, rowKey, text } from './compliance-client-profile';
+import { ComplianceDocumentsService, UploadedClientFile } from './compliance-documents.service';
+import { IdDocumentReaderService } from './id-document-reader.service';
+import { standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
+import { MrzResult } from '../common/mrz';
+import { syncIdentityExpiryItems } from './identity-expiry-sync';
+import { UpdateProfileFieldDto } from './dto/profile-edit.dto';
 import { expiryState } from './compliance-monitoring.service';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -68,7 +74,9 @@ export class ComplianceClientsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly kycService?: KycService,
-    private readonly accessControl?: AccessControlService
+    private readonly accessControl?: AccessControlService,
+    private readonly documents?: ComplianceDocumentsService,
+    private readonly reader?: IdDocumentReaderService
   ) {}
 
   // Client profile for the compliance client page. Company and party details are read from the client's
@@ -80,6 +88,7 @@ export class ComplianceClientsService {
         ...listSelect,
         tenantId: true,
         industry: true,
+        currentKycCaseId: true,
         contacts: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }], select: { id: true, name: true, email: true, phone: true, position: true, isPrimary: true } },
         engagements: {
           orderBy: [{ startDate: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
@@ -89,6 +98,7 @@ export class ComplianceClientsService {
           orderBy: { createdAt: 'desc' },
           select: {
             id: true, kycNumber: true, title: true, status: true, createdAt: true, updatedAt: true,
+            purpose: true, previousKycCaseId: true,
             service: { select: { name: true } },
             kycForm: { select: { id: true } }
           }
@@ -97,13 +107,19 @@ export class ComplianceClientsService {
     });
     if (!client) throw new NotFoundException('Compliance client not found');
 
-    const profileCase =
-      client.kycCases.find((kycCase) => kycCase.status === 'CLIENT_ACTIVE' && kycCase.kycForm) ||
-      client.kycCases.find((kycCase) => kycCase.kycForm) ||
-      null;
+    const profileCase = this.pickProfileCase(client);
     const caseIds = client.kycCases.map((kycCase) => kycCase.id);
-    const [form, legalDocuments, riskHistory, crrf, review, canViewCrrf] = await Promise.all([
+    const [form, overrides, identityDocuments, legalDocuments, riskHistory, crrf, review, canViewCrrf] = await Promise.all([
       profileCase && this.kycService ? this.kycService.formSnapshot(profileCase.id) : Promise.resolve(null),
+      profileCase ? this.profileOverrides(client.tenantId, profileCase.id) : Promise.resolve([]),
+      this.prisma.clientDocument.findMany({
+        where: { clientId: client.id, tenantId: client.tenantId, deletedAt: null, personKey: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true, personKey: true, personName: true, identityType: true, documentNumber: true, documentExpiry: true,
+          fileName: true, mimeType: true, createdAt: true, uploadedBy: { select: userSummarySelect }
+        }
+      }),
       this.prisma.legalDocument.findMany({
         where: { kycCaseId: { in: caseIds }, tenantId: client.tenantId, storagePath: { not: null } },
         orderBy: { createdAt: 'desc' },
@@ -129,7 +145,7 @@ export class ComplianceClientsService {
       this.canView(user, 'crrf')
     ]);
 
-    const { contacts, engagements, kycCases, industry, tenantId: _tenantId, ...rest } = client;
+    const { contacts, engagements, kycCases, industry, tenantId: _tenantId, currentKycCaseId: _current, ...rest } = client;
     const summary = this.toListItem({ ...rest, contacts: contacts.filter((contact) => contact.isPrimary).slice(0, 1), engagements: engagements.slice(0, 1), kycCases: kycCases.slice(0, 1) });
     return {
       client: { ...summary, industry },
@@ -137,7 +153,11 @@ export class ComplianceClientsService {
       engagements,
       kycCases: kycCases.map(({ kycForm, service, ...kycCase }) => ({ ...kycCase, serviceName: service?.name || null, hasForm: Boolean(kycForm) })),
       profileCase: profileCase ? { id: profileCase.id, kycNumber: profileCase.kycNumber, status: profileCase.status } : null,
-      profile: profileFromForm(form),
+      profile: profileFromForm(form, overrides),
+      // Values changed on this page (section|rowId|field), shown with an "edited" marker.
+      editedFields: overrides.map((override) => `${override.section}|${override.rowId}|${override.field}`),
+      // QID / passport copies per person (personKey = normalized full name), newest first; earlier copies are history.
+      identityDocuments,
       legalDocuments,
       riskHistory,
       // CRRF ratings and files follow the CRRF area of the role matrix; reviewer comments are never included here.
@@ -145,6 +165,265 @@ export class ComplianceClientsService {
       crrfRestricted: !canViewCrrf,
       internalReview: review
     };
+  }
+
+  // The client's current KYC: the case recorded on activation or re-KYC approval, else (clients activated before
+  // that was recorded) the latest activated case with a form, else the latest case with a form.
+  private pickProfileCase<T extends { id: string; status: string; kycForm: { id: string } | null }>(client: { currentKycCaseId: string | null; kycCases: T[] }) {
+    return client.kycCases.find((kycCase) => kycCase.id === client.currentKycCaseId && kycCase.kycForm) ||
+      client.kycCases.find((kycCase) => kycCase.status === 'CLIENT_ACTIVE' && kycCase.kycForm) ||
+      client.kycCases.find((kycCase) => kycCase.kycForm) ||
+      null;
+  }
+
+  private profileOverrides(tenantId: string, kycCaseId: string): Promise<ProfileOverride[]> {
+    return this.prisma.clientProfileOverride.findMany({
+      where: { tenantId, kycCaseId },
+      orderBy: { updatedAt: 'asc' },
+      select: { section: true, rowId: true, rowLabel: true, field: true, value: true }
+    });
+  }
+
+  private async clientWithProfileCase(user: RequestUser, id: string) {
+    const client = await this.prisma.client.findFirst({
+      where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE },
+      select: {
+        id: true, tenantId: true, name: true, status: true, currentKycCaseId: true,
+        kycCases: { orderBy: { createdAt: 'desc' }, select: { id: true, kycNumber: true, status: true, serviceId: true, kycForm: { select: { id: true } } } }
+      }
+    });
+    if (!client) throw new NotFoundException('Compliance client not found');
+    const profileCase = this.pickProfileCase(client);
+    const form = profileCase && this.kycService ? await this.kycService.formSnapshot(profileCase.id) : null;
+    if (!profileCase || !form) throw new BadRequestException('This client has no KYC form to take the details from yet.');
+    return { client, profileCase, form };
+  }
+
+  // Saves one value edited with the pencil icon. The approved KYC form is not changed: the value is stored as an
+  // overlay on the client's current KYC, audited, and used for the page and to prefill the next re-KYC.
+  async updateProfileField(user: RequestUser, id: string, dto: UpdateProfileFieldDto) {
+    const spec = profileFieldSpec(dto.section, dto.field);
+    if (!spec) throw new BadRequestException('This detail cannot be edited here.');
+    const { client, profileCase, form } = await this.clientWithProfileCase(user, id);
+    const value = this.profileValue(spec.kind, dto.value);
+
+    const rowId = dto.section === 'COMPANY' || dto.section === 'KEY_CONTACT' ? '' : this.optionalText(dto.rowId) || '';
+    const overrides = await this.profileOverrides(client.tenantId, profileCase.id);
+    const existing = overrides.find((override) => override.section === dto.section && override.rowId === rowId && override.field === dto.field);
+    let rowLabel: string | null = null;
+    let previous: unknown;
+    if (dto.section === 'COMPANY' || dto.section === 'KEY_CONTACT') {
+      const source = (dto.section === 'COMPANY' ? form.sectionA : form.sectionE) as Record<string, unknown>;
+      previous = source?.[dto.field];
+    } else {
+      const raw = dto.section === 'OFFICER'
+        ? (form.sectionC as { managers?: unknown }).managers
+        : (form.sectionB as Record<string, unknown>)[dto.section === 'SHAREHOLDER' ? 'shareholders' : 'ubos'];
+      const list = (Array.isArray(raw) ? raw : []) as Array<Record<string, unknown>>;
+      const index = list.findIndex((row, position) => rowKey(row, position) === rowId);
+      if (!rowId || index < 0) throw new BadRequestException('This person is no longer on the client profile. Refresh the page.');
+      const row = list[index];
+      if (row.shareholderType === 'Corporate Entity' && ['qidNumber', 'qidExpiry', 'passportNumber', 'passportExpiry'].includes(dto.field)) {
+        throw new BadRequestException('QID and passport apply to individuals. Use the CR number for a corporate shareholder.');
+      }
+      rowLabel = existing?.rowLabel ?? text(row.fullName);
+      previous = row[dto.field];
+    }
+    const from = existing ? existing.value : spec.kind === 'list' ? optionText(previous) : text(previous);
+    if ((from ?? null) === value) return this.findOne(user, id);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.clientProfileOverride.upsert({
+        where: { kycCaseId_section_rowId_field: { kycCaseId: profileCase.id, section: dto.section, rowId, field: dto.field } },
+        update: { value, updatedById: user.id },
+        create: { tenantId: client.tenantId, clientId: client.id, kycCaseId: profileCase.id, section: dto.section, rowId, rowLabel, field: dto.field, value, updatedById: user.id }
+      });
+      await tx.auditLog.create({
+        data: {
+          tenantId: client.tenantId,
+          actorId: user.id,
+          action: 'UPDATE',
+          entityType: 'ComplianceClient',
+          entityId: client.id,
+          metadata: {
+            action: 'CLIENT_PROFILE_FIELD_EDITED',
+            kycCaseId: profileCase.id,
+            kycNumber: profileCase.kycNumber,
+            section: dto.section,
+            rowId,
+            person: rowLabel,
+            field: dto.field,
+            from: from ?? null,
+            to: value
+          } as Prisma.InputJsonValue
+        }
+      });
+      if (dto.section !== 'COMPANY') {
+        const updated = await tx.clientProfileOverride.findMany({
+          where: { tenantId: client.tenantId, kycCaseId: profileCase.id },
+          orderBy: { updatedAt: 'asc' },
+          select: { section: true, rowId: true, rowLabel: true, field: true, value: true }
+        });
+        await syncIdentityExpiryItems(tx, client, user.id, identityExpiries(profileFromForm(form, updated)));
+      }
+    });
+    return this.findOne(user, id);
+  }
+
+  // Uploads a QID or passport copy for one person on the profile into the "Identity Documents" folder. When a new
+  // number or expiry date is given, the person's details are updated through the audited profile edit, which also
+  // keeps the Expiry record in step (a new expiry date starts a new set of reminders).
+  async uploadIdentityDocument(
+    user: RequestUser, id: string,
+    input: { section?: string; rowId?: string; identityType?: string; documentNumber?: string; expiryDate?: string },
+    files: UploadedClientFile[],
+    sourceNote?: string
+  ) {
+    if (!this.documents) throw new BadRequestException('Document uploads are not available.');
+    const identityType = input.identityType === 'QID' || input.identityType === 'PASSPORT' ? input.identityType : null;
+    if (!identityType) throw new BadRequestException('Choose QID or passport.');
+    if (files.length !== 1) throw new BadRequestException('Select one file: the copy of the QID or passport.');
+    const section = String(input.section || '');
+    if (!['SHAREHOLDER', 'UBO', 'OFFICER', 'KEY_CONTACT'].includes(section)) throw new BadRequestException('Choose the person this copy belongs to.');
+    const { client, form } = await this.clientWithProfileCase(user, id);
+    const rowId = section === 'KEY_CONTACT' ? '' : this.optionalText(input.rowId) || '';
+    const raw = section === 'KEY_CONTACT'
+      ? [form.sectionE as Record<string, unknown>]
+      : ((section === 'OFFICER' ? (form.sectionC as { managers?: unknown }).managers : (form.sectionB as Record<string, unknown>)[section === 'SHAREHOLDER' ? 'shareholders' : 'ubos']) || []) as Array<Record<string, unknown>>;
+    const row = section === 'KEY_CONTACT' ? raw[0] : raw.find((item, position) => rowKey(item, position) === rowId);
+    if (!row) throw new BadRequestException('This person is no longer on the client profile. Refresh the page.');
+    if (row.shareholderType === 'Corporate Entity') throw new BadRequestException('QID and passport copies apply to individuals.');
+    // The person's current (edited) name is the link, so the copy follows a name changed on this page.
+    const overrides = await this.profileOverrides(client.tenantId, form.kycCaseId);
+    const nameOverride = overrides.find((override) => override.section === section && override.rowId === rowId && override.field === 'fullName');
+    const fullName = text(nameOverride?.value) || text(row.fullName);
+    if (!fullName) throw new BadRequestException('Enter the name of the person before uploading an ID copy.');
+    const documentNumber = this.optionalText(input.documentNumber)?.slice(0, 100) || null;
+    const expiry = this.profileValue('date', input.expiryDate);
+    const prefix = identityType === 'QID' ? 'qid' : 'passport';
+    // Without new values the copy records the number and expiry the person currently has.
+    const current = (field: string) => {
+      const override = overrides.find((item) => item.section === section && item.rowId === rowId && item.field === field);
+      return override ? text(override.value) : text(row[field]);
+    };
+    const copyNumber = documentNumber || current(`${prefix}Number`);
+    const copyExpiry = expiry || current(`${prefix}Expiry`)?.slice(0, 10) || null;
+    const section_ = await this.documents.sectionByKey(client.tenantId, 'identity');
+    const label = identityType === 'QID' ? 'QID' : 'Passport';
+    await this.documents.storeFiles(user, client, section_, files, {
+      title: `${label} copy - ${fullName}`.slice(0, 200),
+      notes: [sourceNote, copyNumber && `${label} no. ${copyNumber}`, copyExpiry && `expires ${copyExpiry}`].filter(Boolean).join(', ') || null,
+      identity: {
+        personKey: personKey(fullName), personName: fullName, identityType,
+        documentNumber: copyNumber, documentExpiry: copyExpiry ? new Date(`${copyExpiry}T00:00:00.000Z`) : null
+      }
+    });
+    if (documentNumber) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Number`, value: documentNumber });
+    if (expiry) await this.updateProfileField(user, id, { section: section as never, rowId, field: `${prefix}Expiry`, value: expiry });
+    return this.findOne(user, id);
+  }
+
+  // Uses a QID / passport file uploaded on one of this client's KYC cases as a person's copy. The file is copied into
+  // the Identity Documents folder (the KYC file is unchanged); reading it goes through the KYC access checks.
+  async linkKycIdentityDocument(
+    user: RequestUser, id: string,
+    input: { legalDocumentId?: string; section?: string; rowId?: string; identityType?: string; documentNumber?: string; expiryDate?: string }
+  ) {
+    if (!this.kycService) throw new BadRequestException('KYC documents are not available.');
+    const client = await this.prisma.client.findFirst({ where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE }, select: { id: true, tenantId: true } });
+    if (!client) throw new NotFoundException('Compliance client not found');
+    const legal = await this.prisma.legalDocument.findFirst({
+      where: { id: this.optionalText(input.legalDocumentId) || '', tenantId: client.tenantId, storagePath: { not: null }, kycCase: { clientId: client.id } },
+      select: { id: true, kycCaseId: true, documentType: true, kycCase: { select: { kycNumber: true } } }
+    });
+    if (!legal) throw new NotFoundException('KYC document not found for this client.');
+    const file = await this.kycService.getLegalDocumentFile(user, legal.kycCaseId, legal.id);
+    const upload = { originalname: file.fileName, mimetype: file.mimeType || undefined, size: file.content.length, buffer: file.content };
+    // Without typed values, use the number and expiry read from the file, but only when both pass their check digits
+    // exactly as read and the document is the right kind; otherwise staff enter them with the pencils.
+    let readFromDocument: { documentNumber: string; expiryDate: string } | null = null;
+    if (!this.optionalText(input.documentNumber) && !this.optionalText(input.expiryDate)) {
+      const read = await this.readSafely(upload);
+      if (read && read.documentNumber && read.expiryDate && read.documentNumberCheck === 'OK' && read.expiryValid && this.typeMatches(read, input.identityType)) {
+        readFromDocument = { documentNumber: read.documentNumber, expiryDate: read.expiryDate };
+      }
+    }
+    const detail = await this.uploadIdentityDocument(user, id, { ...input, ...(readFromDocument || {}) }, [upload], `From ${legal.kycCase.kycNumber} (${legal.documentType})`);
+    return { ...detail, readFromDocument };
+  }
+
+  // Reads the number and expiry date from a QID / passport copy (machine-readable zone, local OCR) to pre-fill the
+  // upload form. Nothing is stored; staff check the values before saving.
+  async readIdentityDocument(user: RequestUser, id: string, identityType: string | undefined, files: UploadedClientFile[]) {
+    const client = await this.prisma.client.findFirst({ where: { id, ...this.tenantWhere(user), ...COMPLIANCE_REGISTER_WHERE }, select: { id: true } });
+    if (!client) throw new NotFoundException('Compliance client not found');
+    if (files.length !== 1) throw new BadRequestException('Select one file to read.');
+    validateUploadFiles(files, standardDocumentKinds, 'document');
+    const read = await this.readSafely(files[0]);
+    if (!read || (!read.documentNumber && !read.expiryDate)) {
+      return { found: false, message: 'The number and expiry date could not be read from this file. Enter them from the document.' };
+    }
+    return {
+      found: true,
+      format: read.format,
+      documentType: read.documentType,
+      issuingCountry: read.issuingCountry,
+      documentNumber: read.documentNumber,
+      documentNumberCheck: read.documentNumberCheck,
+      expiryDate: read.expiryDate,
+      expiryValid: read.expiryValid,
+      nameOnDocument: [read.givenNames, read.surname].filter(Boolean).join(' '),
+      nationality: read.nationality,
+      typeMatches: this.typeMatches(read, identityType)
+    };
+  }
+
+  private async readSafely(file: UploadedClientFile) {
+    if (!this.reader) return null;
+    try {
+      return await this.reader.read(file);
+    } catch (error) {
+      // Reading is a convenience: a file that cannot be read (or a reader problem) falls back to manual entry.
+      return null;
+    }
+  }
+
+  // A passport has a TD3 zone with document type P; an ID card such as the QID a TD1 zone.
+  private typeMatches(read: MrzResult, identityType: string | undefined) {
+    return identityType === 'PASSPORT' ? read.format === 'TD3' && read.documentType.startsWith('P') : identityType === 'QID' ? read.format === 'TD1' : false;
+  }
+
+  // Starts a periodic re-KYC prefilled from the current profile (including edits made on this page). The earlier
+  // KYC cases stay unchanged and listed; the new case becomes current when its final approval is given.
+  async startRekyc(user: RequestUser, id: string) {
+    if (!this.kycService) throw new BadRequestException('Re-KYC is not available.');
+    const { client, profileCase, form } = await this.clientWithProfileCase(user, id);
+    if (client.status !== 'ACTIVE') throw new BadRequestException('Only active clients can start a re-KYC.');
+    const overrides = await this.profileOverrides(client.tenantId, profileCase.id);
+    const effective = applyOverrides(form, overrides);
+    return this.kycService.createRekycCase(
+      user,
+      { id: client.id, tenantId: client.tenantId, name: client.name },
+      { id: profileCase.id, kycNumber: profileCase.kycNumber, serviceId: profileCase.serviceId },
+      effective
+    );
+  }
+
+  private profileValue(kind: string, input: string | null | undefined) {
+    const value = typeof input === 'string' ? input.trim() : '';
+    if (!value) return null;
+    if (kind === 'date') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(new Date(`${value}T00:00:00Z`).getTime())) throw new BadRequestException('Enter the date as YYYY-MM-DD.');
+      return value;
+    }
+    if (kind === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new BadRequestException('Enter a valid email address.');
+    if (kind === 'percent') {
+      const number = Number(value.replace(/%$/, ''));
+      if (!Number.isFinite(number) || number < 0 || number > 100) throw new BadRequestException('Enter a percentage between 0 and 100.');
+      return String(number);
+    }
+    if (kind !== 'longtext' && value.length > 500) throw new BadRequestException('This value is too long.');
+    return value;
   }
 
   async list(user: RequestUser, query: ComplianceClientQuery) {
@@ -186,6 +465,19 @@ export class ComplianceClientsService {
       changes[key as string] = { from: existing[key], to: value };
     };
 
+    if (dto.name !== undefined) {
+      const name = this.optionalText(dto.name);
+      if (!name) throw new BadRequestException('The client name cannot be empty.');
+      track('name', name);
+    }
+    if (dto.clientCode !== undefined) {
+      const code = this.optionalText(dto.clientCode)?.toUpperCase() || null;
+      if (!code || !/^[A-Z0-9][A-Z0-9-]*$/.test(code)) throw new BadRequestException('Enter a client code such as CL-2026-0001 (letters, digits and dashes).');
+      track('clientCode', code);
+    }
+    if (dto.registrationNumber !== undefined) track('registrationNumber', this.optionalText(dto.registrationNumber));
+    if (dto.country !== undefined) track('country', this.optionalText(dto.country));
+    if (dto.industry !== undefined) track('industry', this.optionalText(dto.industry));
     if (dto.cddType !== undefined) track('cddType', dto.cddType === 'NONE' ? null : (dto.cddType as DueDiligenceType));
     if (dto.jurisdiction !== undefined) track('jurisdiction', dto.jurisdiction === 'NONE' ? null : (dto.jurisdiction as ClientJurisdiction));
     if (dto.email !== undefined) track('email', this.optionalText(dto.email));
@@ -202,9 +494,16 @@ export class ComplianceClientsService {
       }
       track('status', dto.status);
       track('statusReason', dto.status === 'INACTIVE' ? reason : null);
+    } else if (dto.statusReason !== undefined) {
+      track('statusReason', this.optionalText(dto.statusReason));
     }
 
     if (!Object.keys(changes).length) return this.findListItem(user, existing.id);
+
+    if (data.clientCode !== undefined) {
+      const taken = await this.prisma.client.findFirst({ where: { tenantId: existing.tenantId, clientCode: data.clientCode as string, id: { not: existing.id } }, select: { name: true } });
+      if (taken) throw new BadRequestException(`Client code ${data.clientCode} is already used by ${taken.name}.`);
+    }
 
     await this.prisma.$transaction([
       this.prisma.client.update({ where: { id: existing.id }, data }),

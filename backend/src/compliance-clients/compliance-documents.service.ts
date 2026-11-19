@@ -14,6 +14,7 @@ export type UploadedClientFile = { originalname: string; mimetype?: string; size
 // Folders every tenant starts with: the legacy CDD and Monitoring tabs plus its four Compliance Documentation sections.
 export const DEFAULT_DOCUMENT_SECTIONS: Array<{ key: string; title: string; description: string; category: ClientDocumentCategory; sortOrder: number }> = [
   { key: 'cdd', title: 'CDD Documents', description: 'Customer due diligence evidence for this client.', category: 'CDD', sortOrder: 10 },
+  { key: 'identity', title: 'Identity Documents', description: 'QID and passport copies of the people on this client. Upload renewed copies from the details of each person.', category: 'CDD', sortOrder: 12 },
   { key: 'screening', title: 'Screening Evidence', description: 'Evidence attached to ongoing screening records.', category: 'SCREENING', sortOrder: 15 },
   { key: 'monitoring', title: 'Ongoing Monitoring', description: 'Ongoing monitoring evidence, reviews and correspondence.', category: 'MONITORING', sortOrder: 20 },
   { key: 'policy-manual', title: 'Policy & Procedure Manual', description: 'Company policies and standard operating procedures.', category: 'COMPLIANCE', sortOrder: 30 },
@@ -31,8 +32,20 @@ const documentSelect = {
   mimeType: true,
   size: true,
   createdAt: true,
+  personName: true,
+  identityType: true,
+  documentNumber: true,
+  documentExpiry: true,
   uploadedBy: { select: userSummarySelect }
 } satisfies Prisma.ClientDocumentSelect;
+
+export type IdentityDocumentInput = {
+  personKey: string;
+  personName: string;
+  identityType: 'QID' | 'PASSPORT';
+  documentNumber: string | null;
+  documentExpiry: Date | null;
+};
 
 @Injectable()
 export class ComplianceDocumentsService {
@@ -82,7 +95,7 @@ export class ComplianceDocumentsService {
     client: { id: string; tenantId: string },
     section: { id: string; key: string },
     files: UploadedClientFile[],
-    options: { title?: string | null; notes?: string | null; screeningId?: string | null }
+    options: { title?: string | null; notes?: string | null; screeningId?: string | null; identity?: IdentityDocumentInput }
   ) {
     if (!files.length) throw new BadRequestException('Select at least one file to upload.');
     validateUploadFiles(files, standardDocumentKinds, 'document');
@@ -100,6 +113,7 @@ export class ComplianceDocumentsService {
             clientId: client.id,
             sectionId: section.id,
             screeningId: options.screeningId || null,
+            ...(options.identity || {}),
             // With several files, a shared title is suffixed by each file name so the entries stay distinguishable.
             title: options.title ? (files.length > 1 ? `${options.title} — ${fileName}` : options.title) : fileName,
             notes: options.notes || null,
@@ -118,7 +132,10 @@ export class ComplianceDocumentsService {
             action: 'CREATE',
             entityType: 'ClientDocument',
             entityId: row.id,
-            metadata: { clientId: client.id, section: section.key, title: row.title, fileName, screeningId: options.screeningId || null }
+            metadata: {
+              clientId: client.id, section: section.key, title: row.title, fileName, screeningId: options.screeningId || null,
+              ...(options.identity ? { person: options.identity.personName, identityType: options.identity.identityType, documentNumber: options.identity.documentNumber } : {})
+            } as Prisma.InputJsonValue
           }
         });
       });

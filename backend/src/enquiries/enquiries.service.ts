@@ -1197,6 +1197,11 @@ export class EnquiriesService {
       position: enquiry.keyContactPosition || '',
       nationality: this.optionalText(details.keyContactNationality) || '',
       identityNumber: this.optionalText(details.keyContactIdentityNumber) || '',
+      // The enquiry already captures these separately; keep them for the KYC and the client's expiry alerts.
+      qidNumber: this.optionalText(details.keyContactQidNumber) || '',
+      qidExpiry: this.optionalText(details.keyContactQidExpiryDate) || '',
+      passportNumber: this.optionalText(details.keyContactPassportNumber) || '',
+      passportExpiry: this.optionalText(details.keyContactPassportExpiryDate) || '',
       mobileNumber: enquiry.keyContactPhone || '',
       email: enquiry.keyContactEmail || ''
     };

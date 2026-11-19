@@ -36,6 +36,7 @@ import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { identitySummary, legacyIdentity, withDerivedIdentity } from '../utils/person-identity';
 import { STANDARD_DOCUMENT_ACCEPT, STANDARD_DOCUMENT_HINT } from '../utils/upload-security';
 
 const sections = [
@@ -1682,8 +1683,8 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
       {(data.ubos || []).map((ubo: Row, index: number) => <label key={ubo.id || index} className="block text-sm font-medium text-slate-700">Corporate shareholder for {ubo.fullName || `beneficial owner ${index + 1}`}<select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={ubo.parentRowId || ''} onChange={(event) => onChange({ ...data, ubos: data.ubos.map((row: Row, rowIndex: number) => rowIndex === index ? { ...row, parentRowId: event.target.value } : row) })}><option value="">Direct beneficial owner</option>{shareholders.filter((party: Row) => party.shareholderType === 'Corporate Entity').map((party: Row) => <option key={party.id} value={party.id}>{party.fullName || 'Unnamed corporate shareholder'}</option>)}</select></label>)}
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
-      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport / CR No.'], ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
+      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} fields={[
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['qidExpiry', 'QID expiry date', 'date'], ['passportNumber', 'Passport number'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -1700,7 +1701,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
   }
 
   function patchRow(index: number, patch: Row) {
-    onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+    onChange(rows.map((row, rowIndex) => (rowIndex === index ? withDerivedIdentity({ ...row, ...patch }) : row)));
   }
 
   function addOwner() {
@@ -1720,7 +1721,8 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
   async function lookup(index: number) {
     const row = rows[index];
     const rowKey = rowId(row, index);
-    const identifier = String(row.identityNumber || '').trim();
+    const corporate = (row.shareholderType || 'Individual') === 'Corporate Entity';
+    const identifier = String((corporate ? row.identityNumber : row.qidNumber || row.passportNumber || row.identityNumber) || '').trim();
     if (!identifier) {
       setLookupMessages((current) => ({ ...current, [rowKey]: 'Enter a CR, QID, or passport number first.' }));
       return;
@@ -1825,9 +1827,13 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                   <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
-                    <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID / Passport number *')}</span>
+                    <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID number (or passport) *')}</span>
                     <div className="mt-1 flex gap-2">
-                      <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      {(row.shareholderType || 'Individual') === 'Corporate Entity' ? (
+                        <input value={row.identityNumber || ''} onChange={(event) => patchRow(index, { identityNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      ) : (
+                        <input value={row.qidNumber || ''} onChange={(event) => patchRow(index, { qidNumber: event.target.value, linkedClientId: '', linkedClientName: '' })} className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      )}
                       <button type="button" onClick={() => lookup(index)} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                         Lookup
                       </button>
@@ -1843,6 +1849,14 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
                   </div>
+                  {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
+                    <>
+                      <Field label="QID expiry date" type="date" value={row.qidExpiry} onChange={(value) => patchRow(index, { qidExpiry: value })} />
+                      <Field label="Passport number (or QID) *" value={row.passportNumber} onChange={(value) => patchRow(index, { passportNumber: value, linkedClientId: '', linkedClientName: '' })} />
+                      <Field label="Passport expiry date" type="date" value={row.passportExpiry} onChange={(value) => patchRow(index, { passportExpiry: value })} />
+                      {legacyIdentity(row) ? <LegacyIdentityNote value={legacyIdentity(row)} /> : null}
+                    </>
+                  ) : null}
                   <Field label="Shareholder % *" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
                   <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
                   <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -1978,8 +1992,8 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 }
 
 function SectionCForm({ data, onChange }: FormProps) {
-  return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows })} fields={[
-    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['identityNumber', 'QID / Passport No. *'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+  return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} fields={[
+    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['qidExpiry', 'QID expiry date', 'date'], ['passportNumber', 'Passport number (or QID) *'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
@@ -2111,7 +2125,11 @@ function SectionEContactForm({ data, onChange }: FormProps) {
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
-    <Field label="QID / Passport Number" value={data.identityNumber} onChange={(value) => update(data, onChange, 'identityNumber', value)} />
+    <Field label="QID number" value={data.qidNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, qidNumber: value }))} />
+    <Field label="QID expiry date" type="date" value={data.qidExpiry} onChange={(value) => onChange({ ...data, qidExpiry: value })} />
+    <Field label="Passport number" value={data.passportNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, passportNumber: value }))} />
+    <Field label="Passport expiry date" type="date" value={data.passportExpiry} onChange={(value) => onChange({ ...data, passportExpiry: value })} />
+    {legacyIdentity(data) ? <LegacyIdentityNote value={legacyIdentity(data)} /> : null}
     <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
     <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
   </FormGrid>;
@@ -2416,7 +2434,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="B. Manager / Authorized Signatory / Directors / Secretary">
-          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), row.identityNumber, row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
+          <PreviewTable headers={['Full name', 'Position', 'Entity', 'Nationality', 'Address', 'DOB', 'ID No.', 'Signatory']} rows={(form.sectionC.managers || []).map((row) => [row.fullName, displaySelectedList(row.position, row.positionOther), row.entityName, displaySelectedList(row.nationality) || row.nationalityAndAddress, row.address, displayDate(row.dateOfBirth), identitySummary(row), row.isAuthorizedSignatory ? 'Yes' : 'No'])} />
         </PreviewSection>
         <PreviewSection title="C. Shareholders">
           <PreviewTable headers={['Type', 'Full name', 'Nationality / country', 'DOB / Incorporation', 'QID / Passport / CR', 'Shareholder %', 'Address', 'Linked client', 'Beneficial person']} rows={(form.sectionB.shareholders || []).map((row) => [row.shareholderType || 'Individual', row.fullName, displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.shareholderPercentage ?? row.ownershipPercentage, row.residenceAddress, row.linkedClientName || '-', row.isUbo ? 'Yes' : 'No'])} />
@@ -2442,7 +2460,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           ]} />
         </PreviewSection>
         <PreviewSection title="E. Key Communication Person">
-          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', displaySelectedList(splitList(form.sectionE.nationality), form.sectionE.nationalityOther)], ['QID / Passport Number', form.sectionE.identityNumber], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
+          <PreviewGrid rows={[['Full name', form.sectionE.fullName], ['Position / Job title', displaySelectedList(form.sectionE.position, form.sectionE.positionOther)], ['Nationality', displaySelectedList(splitList(form.sectionE.nationality), form.sectionE.nationalityOther)], ['QID / Passport Number', identitySummary(form.sectionE)], ['Mobile Number', form.sectionE.mobileNumber], ['Email', form.sectionE.email]]} />
         </PreviewSection>
         <PreviewSection title="F. Required Documents Checklist">
           <PreviewTable headers={['Document', 'Received', 'Uploaded file']} rows={(form.sectionF.documents || []).map((row) => [row.documentType, row.isProvided ? '☑' : '☐', row.fileName])} />
@@ -2876,6 +2894,14 @@ function readSignatureImageDataUrl(file: File) {
 
 type DynamicField = [key: string, label: string, type?: string, options?: string[]];
 
+function LegacyIdentityNote({ value }: { value: string }) {
+  return (
+    <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 md:col-span-2">
+      Earlier entry (QID / Passport combined): <span className="font-semibold">{value}</span>. Enter it as the QID or passport number above; it is kept until you do.
+    </p>
+  );
+}
+
 function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: Row[]; fields: DynamicField[]; onChange: (rows: Row[]) => void }) {
   return (
     <div className="space-y-3">
@@ -2887,6 +2913,11 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
         <div key={index} className="rounded-md border border-slate-200 p-3">
           <div className="grid gap-3 md:grid-cols-2">
             {fields.map(([key, label, type, options]) => {
+              if (type === 'legacyIdentity') {
+                const legacy = legacyIdentity(row);
+                return legacy ? <LegacyIdentityNote key={key} value={legacy} /> : null;
+              }
+
               if (type === 'checkbox') {
                 return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {labelText(label)}</label>;
               }
