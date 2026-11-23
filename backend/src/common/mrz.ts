@@ -93,7 +93,8 @@ const clean = (value: string) => value.replace(/<+$/g, '');
 // lone K's are dropped, so a misread filler does not end up in the person's name. Staff still check the name.
 const dropFiller = (value: string) => value.replace(/</g, ' ').split(/\s+/).filter((word) => word && word !== 'K' && !/^[KLI]{3,}$/.test(word)).join(' ');
 const names = (value: string) => {
-  const [surname, given = ''] = value.split('<<');
+  // Trailing filler read as letters ("ALPHAKKKKLLLL") is cut before the name is split.
+  const [surname, given = ''] = value.replace(/[KLI<]{3,}$/, '').split('<<');
   return { surname: dropFiller(surname), givenNames: dropFiller(given) };
 };
 
