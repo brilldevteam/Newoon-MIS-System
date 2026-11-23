@@ -5,7 +5,7 @@ import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { uboCompanyName } from '../utils/ubo-display-name';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { displayList as displaySelectedList, resolveOtherValue, SearchableMultiSelect as MultiSelect, SearchableSelect as Select, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
@@ -583,6 +583,11 @@ const sefDecisionLabels: Record<string, string> = {
   REJECT: 'Reject'
 };
 
+// Review decisions move the file to someone else and cannot be undone from this page, so the reviewer confirms first.
+function confirmReviewDecision(stage: string, decisionLabel: string, outcome: string) {
+  return window.confirm(`Submit the ${stage} decision "${decisionLabel}"?\n\n${outcome} This cannot be undone from this page.`);
+}
+
 function dmlroDecisionSuccessMessage(decision: string) {
   if (decision === 'REQUEST_ADDITIONAL_INFORMATION') return 'DMLRO requested additional information from AML Supervisor.';
   if (decision === 'RETURN_TO_SUPERVISOR') return 'KYC file returned to AML Supervisor.';
@@ -1005,6 +1010,7 @@ const DMLRO_STAGE_STATUSES = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDI
 
 export function KycFormEditorPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
@@ -1227,6 +1233,7 @@ export function KycFormEditorPage() {
       setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
+    if (!confirmReviewDecision('DMLRO', dmlroDecisionLabels[decision] || decision, dmlroDecisionSuccessMessage(decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1255,7 +1262,8 @@ export function KycFormEditorPage() {
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
-      setMessage(dmlroDecisionSuccessMessage(decision));
+      // Back to the case page, where the new status and the next step are shown, so the decision is not sent twice.
+      navigate(`/kyc/${id}`, { state: { reviewNotice: dmlroDecisionSuccessMessage(decision) } });
     } catch (requestError: any) {
       setError(getApiErrorMessage(requestError, dmlroDecisionErrorMessage(decision)));
     } finally {
@@ -1293,6 +1301,7 @@ export function KycFormEditorPage() {
       setError('High-risk KYC files must be sent to SEF for management decision before final approval.');
       return;
     }
+    if (!confirmReviewDecision('MLRO', mlroDecisionLabels[decision] || decision, mlroDecisionSuccessMessage(decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1327,7 +1336,7 @@ export function KycFormEditorPage() {
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
-      setMessage(mlroDecisionSuccessMessage(decision));
+      navigate(`/kyc/${id}`, { state: { reviewNotice: mlroDecisionSuccessMessage(decision) } });
     } catch (requestError: any) {
       setError(getApiErrorMessage(requestError, mlroDecisionErrorMessage(decision)));
     } finally {
@@ -1354,6 +1363,7 @@ export function KycFormEditorPage() {
       setError('Add SEF conditions or comments before submitting this decision.');
       return;
     }
+    if (!confirmReviewDecision('SEF', sefDecisionLabels[decision] || decision, sefDecisionSuccessMessage(decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1380,7 +1390,7 @@ export function KycFormEditorPage() {
       setKycCase(caseData);
       formRef.current = normalized;
       setForm(normalized);
-      setMessage(sefDecisionSuccessMessage(decision));
+      navigate(`/kyc/${id}`, { state: { reviewNotice: sefDecisionSuccessMessage(decision) } });
     } catch (requestError: any) {
       setError(getApiErrorMessage(requestError, sefDecisionErrorMessage(decision)));
     } finally {

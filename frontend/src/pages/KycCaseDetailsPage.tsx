@@ -1,6 +1,6 @@
 import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { canSubmitToDmlro, KycCaseGuide } from '../components/KycCaseGuide';
 import { SearchableMultiSelect } from '../components/SearchableSelect';
 import { safeCommentHtml } from '../components/RichTextEditor';
@@ -56,6 +56,8 @@ function groupedLegalDocuments(documents: KycCase['legalDocuments']) {
 export function KycCaseDetailsPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  // Set by the KYC form after a DMLRO / MLRO decision is submitted.
+  const reviewNotice = (useLocation().state as { reviewNotice?: string } | null)?.reviewNotice || '';
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [reviewFeedback, setReviewFeedback] = useState<NonNullable<KycCase['reviewFeedback']>>([]);
   const [services, setServices] = useState<string[]>([]);
@@ -363,6 +365,7 @@ export function KycCaseDetailsPage() {
           {kycStatusOwner(kycCase.status) ? <span className="text-xs font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</span> : null}
         </div>
       </div>
+      {reviewNotice ? <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{reviewNotice}</p> : null}
       <KycCaseGuide kycCase={kycCase} user={user} readiness={readiness} readinessError={readinessError} isPreliminary={isPreliminaryProposedCompany} onJump={jumpTo} />
       <div className="flex flex-wrap gap-2">
         {hasAnyRole(user, workflowRoles.kycFormBuilder) ? <Link to={`/kyc/${kycCase.id}/revisions`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"><FileText className="h-4 w-4" />Form history &amp; compare</Link> : null}
