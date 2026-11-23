@@ -1,3 +1,4 @@
+import { assertClientTab, clientAccessLevel, clientScopeWhere } from './client-access';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { NotificationType, Prisma } from '@prisma/client';
 import { COMPLIANCE_REGISTER_WHERE, nextReviewDateFor } from '../common/client-compliance';
@@ -21,7 +22,10 @@ export class ComplianceMonitoringService {
   constructor(private readonly prisma: PrismaService, private readonly documents: ComplianceDocumentsService) {}
 
   async overview(user: RequestUser, clientId: string) {
+    // Expiry is on the Operations tabs; screenings, reviews and risk changes are for full access only (client-access.ts).
+    assertClientTab(user, 'expiry');
     const client = await this.findClient(user, clientId);
+    const full = clientAccessLevel(user) === 'FULL';
     const [screenings, riskChanges, reviews, expiryItems] = await Promise.all([
       this.prisma.clientScreening.findMany({
         where: { clientId: client.id, tenantId: client.tenantId },
@@ -47,9 +51,9 @@ export class ComplianceMonitoringService {
       })
     ]);
     return {
-      screenings,
-      riskChanges,
-      reviews,
+      screenings: full ? screenings : [],
+      riskChanges: full ? riskChanges : [],
+      reviews: full ? reviews : [],
       expiryItems: expiryItems.map((item) => ({ ...item, expiryState: expiryState(item.expiryDate) })),
       canDecideRisk: this.canDecideRisk(user)
     };
@@ -319,7 +323,7 @@ export class ComplianceMonitoringService {
   private tenantWhere(user: RequestUser) {
     if (user.roles.includes('SUPER_ADMIN')) return {};
     if (!user.tenantId) throw new ForbiddenException('User is not assigned to a tenant');
-    return { tenantId: user.tenantId };
+    return { tenantId: user.tenantId, ...clientScopeWhere(user) };
   }
 
   private clientLabel(client: ClientRef) {

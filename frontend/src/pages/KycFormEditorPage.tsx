@@ -530,15 +530,32 @@ const businessNatureOptions = [
 const positionOptions = [
   '',
   'Director',
+  'Managing Director',
+  'Chairman',
+  'CEO',
+  'CFO',
+  'COO',
   'Manager',
   'General Manager',
   'Authorized Signatory',
   'Secretary',
   'SEF',
   'Senior Executive Function',
+  'Shareholder',
+  'UBO',
   'Interest Holder',
   'Beneficial Person',
   'Compliance Officer'
+];
+
+// Per-person declarations on every person row (2026-11-23). Title is a plain list; PEP and dual citizenship are Yes / No.
+const personTitleOptions = ['', 'Mr', 'Ms', 'Mrs', 'Dr', 'Sheikh', 'Sheikha'];
+const personDeclarationFields: DynamicField[] = [
+  ['title', 'Title', 'simpleselect', personTitleOptions],
+  ['dualCitizenship', 'Dual citizenship', 'yesno'],
+  ['otherNationality', 'Other nationality (if dual citizenship)'],
+  ['isPep', 'PEP (politically exposed person)', 'yesno'],
+  ['pepDetails', 'PEP details']
 ];
 
 const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'];
@@ -1560,7 +1577,7 @@ export function KycFormEditorPage() {
                 />
               ) : null}
               {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
-              {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} /> : null}
+              {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} personFlags={personFlags(form)} /> : null}
               {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
               {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
               {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
@@ -1684,7 +1701,7 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
       <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['qidExpiry', 'QID expiry date', 'date'], ['passportNumber', 'Passport number'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['passportNumber', 'Passport number'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -1825,6 +1842,20 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                   </label>
                   <Field label="Full name *" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
                   <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                  {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
+                    <>
+                      <label className="block text-sm font-medium text-slate-700">
+                        Title
+                        <select value={row.title || ''} onChange={(event) => patchRow(index, { title: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
+                          {personTitleOptions.map((option) => <option key={option} value={option}>{option || 'Not selected'}</option>)}
+                        </select>
+                      </label>
+                      <Choice label="Dual citizenship" value={row.dualCitizenship || ''} onChange={(value) => patchRow(index, { dualCitizenship: value })} />
+                      <Field label="Other nationality (if dual citizenship)" value={row.otherNationality} onChange={(value) => patchRow(index, { otherNationality: value })} />
+                      <Choice label="PEP (politically exposed person)" value={row.isPep || ''} onChange={(value) => patchRow(index, { isPep: value })} />
+                      <Field label="PEP details" value={row.pepDetails} onChange={(value) => patchRow(index, { pepDetails: value })} />
+                    </>
+                  ) : null}
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
                     <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID number (or passport) *')}</span>
@@ -1851,9 +1882,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                   </div>
                   {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
                     <>
-                      <Field label="QID expiry date" type="date" value={row.qidExpiry} onChange={(value) => patchRow(index, { qidExpiry: value })} />
                       <Field label="Passport number (or QID) *" value={row.passportNumber} onChange={(value) => patchRow(index, { passportNumber: value, linkedClientId: '', linkedClientName: '' })} />
-                      <Field label="Passport expiry date" type="date" value={row.passportExpiry} onChange={(value) => patchRow(index, { passportExpiry: value })} />
                       {legacyIdentity(row) ? <LegacyIdentityNote value={legacyIdentity(row)} /> : null}
                     </>
                   ) : null}
@@ -1993,11 +2022,27 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
 
 function SectionCForm({ data, onChange }: FormProps) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} fields={[
-    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['qidExpiry', 'QID expiry date', 'date'], ['passportNumber', 'Passport number (or QID) *'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['passportNumber', 'Passport number (or QID) *'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
-function SectionDComplianceForm({ data, onChange }: FormProps) {
+// People who answered Yes to the per-person PEP / dual citizenship questions on any person row.
+function personFlags(form: any) {
+  const rows: Row[] = [...(form.sectionB?.shareholders || []), ...(form.sectionB?.ubos || []), ...(form.sectionC?.managers || []), form.sectionE || {}];
+  const named = (key: string) => [...new Set(rows.filter((row) => String(row[key] || '') === 'Yes').map((row) => [row.title, row.fullName].filter(Boolean).join(' ')).filter(Boolean))] as string[];
+  return { pep: named('isPep'), dual: named('dualCitizenship') };
+}
+
+function PersonFlagNote({ names, answer, what }: { names: string[]; answer: string; what: string }) {
+  if (!names.length) return null;
+  return (
+    <p className={`rounded-md border px-3 py-2 text-sm ${answer === 'Yes' ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+      {answer === 'Yes' ? `Marked on the person rows: ${names.join(', ')}.` : `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} marked ${what} on the person rows, but this answer is not Yes. Check it.`}
+    </p>
+  );
+}
+
+function SectionDComplianceForm({ data, onChange, personFlags: flags }: FormProps & { personFlags?: { pep: string[]; dual: string[] } }) {
   const hasPepExposure = (data.pepQuestion || 'No') === 'Yes';
   const hasSanctionExposure = (data.sanctionQuestion || 'No') === 'Yes';
   const hasDualCitizenship = (data.dualCitizenshipQuestion || 'No') === 'Yes';
@@ -2043,6 +2088,7 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
   return (
     <div className="space-y-5">
       <Choice label="Any PEP exposure? *" value={data.pepQuestion || ''} onChange={setPepQuestion} />
+      <PersonFlagNote names={flags?.pep || []} answer={data.pepQuestion || ''} what="as PEP" />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
       {hasPepExposure ? (
         <SectionDSupportingDocuments label="PEP supporting documents" data={data} fieldKey="pepDocumentFileNames" onChange={onChange} />
@@ -2053,6 +2099,7 @@ function SectionDComplianceForm({ data, onChange }: FormProps) {
         <SectionDSupportingDocuments label="Sanction supporting documents" data={data} fieldKey="sanctionDocumentFileNames" onChange={onChange} />
       ) : null}
       <Choice label="Any dual citizenship? *" value={data.dualCitizenshipQuestion || ''} onChange={setDualCitizenshipQuestion} />
+      <PersonFlagNote names={flags?.dual || []} answer={data.dualCitizenshipQuestion || ''} what="as dual citizens" />
       {hasDualCitizenship ? (
         <FormGrid>
           <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
@@ -2126,9 +2173,17 @@ function SectionEContactForm({ data, onChange }: FormProps) {
     <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
     <Field label="QID number" value={data.qidNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, qidNumber: value }))} />
-    <Field label="QID expiry date" type="date" value={data.qidExpiry} onChange={(value) => onChange({ ...data, qidExpiry: value })} />
     <Field label="Passport number" value={data.passportNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, passportNumber: value }))} />
-    <Field label="Passport expiry date" type="date" value={data.passportExpiry} onChange={(value) => onChange({ ...data, passportExpiry: value })} />
+    <label className="block text-sm font-medium text-slate-700">
+      Title
+      <select value={data.title || ''} onChange={(event) => onChange({ ...data, title: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
+        {personTitleOptions.map((option) => <option key={option} value={option}>{option || 'Not selected'}</option>)}
+      </select>
+    </label>
+    <Choice label="Dual citizenship" value={data.dualCitizenship || ''} onChange={(value) => onChange({ ...data, dualCitizenship: value })} />
+    <Field label="Other nationality (if dual citizenship)" value={data.otherNationality} onChange={(value) => onChange({ ...data, otherNationality: value })} />
+    <Choice label="PEP (politically exposed person)" value={data.isPep || ''} onChange={(value) => onChange({ ...data, isPep: value })} />
+    <Field label="PEP details" value={data.pepDetails} onChange={(value) => onChange({ ...data, pepDetails: value })} />
     {legacyIdentity(data) ? <LegacyIdentityNote value={legacyIdentity(data)} /> : null}
     <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
     <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
@@ -2920,6 +2975,21 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
 
               if (type === 'checkbox') {
                 return <label key={key} className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={Boolean(row[key])} onChange={(event) => updateRow(rows, index, key, event.target.checked, onChange)} /> {labelText(label)}</label>;
+              }
+
+              if (type === 'yesno') {
+                return <Choice key={key} label={label} value={row[key] || ''} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
+              }
+
+              if (type === 'simpleselect') {
+                return (
+                  <label key={key} className="block text-sm font-medium text-slate-700">
+                    {labelText(label)}
+                    <select value={row[key] || ''} onChange={(event) => updateRow(rows, index, key, event.target.value, onChange)} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
+                      {(options || ['']).map((option) => <option key={option} value={option}>{option || 'Not selected'}</option>)}
+                    </select>
+                  </label>
+                );
               }
 
               if (type === 'select') {

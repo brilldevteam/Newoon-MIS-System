@@ -2,7 +2,7 @@ import { Transform } from 'class-transformer';
 import { ArrayNotEmpty, ArrayUnique, IsArray, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength, Matches } from 'class-validator';
 import { PASSWORD_MAX_BYTES, PASSWORD_PATTERN, PASSWORD_RULE_MESSAGE } from '../../common/security/password-policy';
 
-export const MANAGED_ROLES = ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM'];
+export const MANAGED_ROLES = ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM'];
 
 export class UserProfileDto {
   @Transform(({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value)

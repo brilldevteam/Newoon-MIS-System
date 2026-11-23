@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { IdentityExpiry } from './compliance-client-profile';
 
-// Keeps the client's Expiry records in step with the QID / passport expiry dates on its profile. Records created
+// Keeps the client's Expiry records in step with the expiry dates on its profile (QID, passports, national address
+// certificate, CR). Records created
 // here carry a sourceKey; manual Expiry records (sourceKey null) are never touched. A person's document that is no
 // longer on the profile is deactivated, not deleted. The compliance reminder sweep then notifies at 60 and 30 days
 // and on expiry; a new expiry date starts a new set of reminders because the milestone includes the date.
@@ -20,6 +21,7 @@ export async function syncIdentityExpiryItems(
     const expiryDate = new Date(`${document.expiryDate.slice(0, 10)}T00:00:00.000Z`);
     const data = {
       documentType: document.documentType,
+      documentLabel: document.documentLabel ?? null,
       holderName: document.holderName.slice(0, 200),
       holderRole: document.holderRole.slice(0, 200),
       documentNumber: document.documentNumber,
@@ -41,7 +43,8 @@ export async function syncIdentityExpiryItems(
       summary.created += 1;
     } else if (
       current.expiryDate.getTime() !== expiryDate.getTime() || !current.isActive || current.holderName !== data.holderName ||
-      current.holderRole !== data.holderRole || current.documentNumber !== data.documentNumber
+      current.holderRole !== data.holderRole || current.documentNumber !== data.documentNumber ||
+      (current.documentLabel ?? null) !== data.documentLabel || current.documentType !== data.documentType
     ) {
       await tx.clientExpiryItem.update({ where: { id: current.id }, data: { ...data, updatedById: userId } });
       summary.updated += 1;

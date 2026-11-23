@@ -3,7 +3,8 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ClientDocumentFolders } from '../components/ClientDocumentFolders';
 import { EditableFields, EditableItem, EditConfig, EditKind } from '../components/EditableFields';
-import { IdentityDocumentsBlock, IdentityDocumentsContext } from '../components/IdentityDocumentsBlock';
+import { PeopleContext, PeopleTab, roleLabel } from '../components/ClientPeople';
+import { LegalDocumentsPanel } from '../components/LegalDocumentsPanel';
 import { ExpiryPanel, ReviewsPanel, ScreeningPanel } from '../components/ComplianceMonitoringPanels';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
@@ -13,29 +14,30 @@ import {
   CddType,
   ClientJurisdiction,
   ComplianceClientUpdate,
-  PersonIdentity,
-  ProfileRef,
+  EntityField,
+  PersonRoleType,
   startComplianceRekyc,
-  updateComplianceProfileField,
-  personKey,
+  updateEntityField,
+  allocateStaff,
+  getAllocationCandidates,
+  removeStaffAllocation,
+  StaffUser,
   ClientDocumentFolders as Folders,
   ComplianceClientDetail,
   complianceStatusLabels,
   getClientDocuments,
   getComplianceClient,
   jurisdictionLabels,
-  OfficerRole,
-  ProfileOfficer,
-  ProfileParty,
   riskLabels,
   updateComplianceClient
 } from '../services/compliance-clients.service';
 import { ClientMonitoring, getClientMonitoring } from '../services/compliance-monitoring.service';
-import { LegalDocument, viewLegalDocument } from '../services/kyc-workflow.service';
-import { hasAreaAccess, workflowRoles } from '../utils/access-control';
+import { getLegalDocuments, LegalDocumentRegister, openLegalDocumentFile } from '../services/legal-documents.service';
+import { hasAreaAccess, roleLabels, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 
-type TabKey = 'overview' | 'company' | 'officers' | 'shareholders' | 'secretary' | 'sef' | 'ubos' | 'documents' | 'crrf' | 'cdd' | 'monitoring' | 'compliance-docs' | 'screening' | 'reviews' | 'expiry' | 'engagements';
+// Keys stay stable for saved links and notifications: 'documents' is the Legal Documents tab and 'cdd' is the EDD tab.
+type TabKey = 'overview' | 'company' | 'shareholders' | 'officers' | 'signatories' | 'sef' | 'secretary' | 'documents' | 'engagements' | 'compliance-docs' | 'expiry' | 'ubos' | 'kyc' | 'crrf' | 'screening' | 'cdd' | 'monitoring' | 'reviews';
 
 const riskTone: Record<string, string> = {
   HIGH: 'bg-rose-50 text-rose-700 ring-rose-200',
@@ -48,15 +50,6 @@ const statusTone: Record<string, string> = {
   INACTIVE: 'bg-slate-100 text-slate-600 ring-slate-200',
   ON_HOLD: 'bg-amber-50 text-amber-700 ring-amber-200'
 };
-const roleLabels: Record<OfficerRole, string> = {
-  DIRECTOR: 'Director',
-  MANAGER: 'Manager',
-  SECRETARY: 'Secretary',
-  SEF: 'SEF',
-  SIGNATORY: 'Signatory',
-  OTHER: 'Other'
-};
-
 function formatDate(value: string | null | undefined) {
   if (!value) return '—';
   const date = new Date(value);
@@ -86,125 +79,104 @@ function Fields({ items }: { items: Array<[string, ReactNode]> }) {
   return <EditableFields items={items.map(([label, value]) => ({ label, value }))} />;
 }
 
+function EddSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        <p className="text-sm text-slate-500">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+// Staff allocated to the client: Accounting and HR see only their allocated clients (Company Admin, AML Supervisor,
+// DMLRO and MLRO allocate them).
+function AllocationPanel({ data, onChange }: { data: ComplianceClientDetail; onChange: (next: ComplianceClientDetail) => void }) {
+  const { showToast } = useToast();
+  const [candidates, setCandidates] = useState<StaffUser[] | null>(null);
+  const [userId, setUserId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const manage = data.access.canManageAllocation;
+
+  async function openAdd() {
+    try {
+      setCandidates(await getAllocationCandidates(data.client.id));
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to load staff.'), 'error');
+    }
+  }
+
+  async function add() {
+    if (!userId) return;
+    setBusy(true);
+    try {
+      onChange(await allocateStaff(data.client.id, userId));
+      setCandidates(null);
+      setUserId('');
+      showToast('Staff member allocated.', 'success');
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to allocate.'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(allocationId: string, name: string) {
+    if (!window.confirm(`Remove ${name} from this client? They will no longer see it.`)) return;
+    setBusy(true);
+    try {
+      onChange(await removeStaffAllocation(data.client.id, allocationId));
+      showToast('Allocation removed.', 'success');
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to remove the allocation.'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="Allocated staff"
+      description="Accounting and HR staff see only the clients allocated to them (company, people, engagements and legal documents without passports)."
+      action={manage && !candidates ? <button type="button" onClick={openAdd} className="text-xs font-medium text-brand-700 hover:text-brand-800">Allocate</button> : undefined}
+    >
+      {candidates ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <select aria-label="Staff member" value={userId} onChange={(event) => setUserId(event.target.value)} className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+            <option value="">{candidates.length ? 'Choose a staff member…' : 'No Accounting or HR users left to allocate'}</option>
+            {candidates.map((item) => <option key={item.id} value={item.id}>{item.firstName} {item.lastName} ({item.roles.map((role) => roleLabels[role] || role).join(', ')})</option>)}
+          </select>
+          <button type="button" disabled={!userId || busy} onClick={add} className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60">Add</button>
+          <button type="button" onClick={() => setCandidates(null)} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+        </div>
+      ) : null}
+      {data.allocations.length ? (
+        <ul className="space-y-2 text-sm">
+          {data.allocations.map((allocation) => (
+            <li key={allocation.id} className="flex items-center justify-between gap-2">
+              <span className="min-w-0">
+                <span className="font-medium text-slate-900">{allocation.user.firstName} {allocation.user.lastName}</span>
+                <span className="block text-xs text-slate-500">{allocation.user.roles.map((role) => roleLabels[role] || role).join(', ')}</span>
+              </span>
+              {manage ? <button type="button" disabled={busy} onClick={() => remove(allocation.id, `${allocation.user.firstName} ${allocation.user.lastName}`)} className="shrink-0 text-xs font-medium text-rose-700 hover:text-rose-800 disabled:opacity-60">Remove</button> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Empty>No staff allocated.</Empty>
+      )}
+    </Panel>
+  );
+}
+
 function Empty({ children }: { children: ReactNode }) {
   return <p className="rounded-md border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">{children}</p>;
 }
 
-type ProfileEditing = {
-  canEdit: boolean;
-  edited: Set<string>;
-  ids: IdentityDocumentsContext;
-  save: (ref: ProfileRef, field: string, value: string | null) => Promise<void>;
-};
-
-// Builds one editable item for a value taken from the client's KYC profile.
-function profileItem(
-  editing: ProfileEditing, ref: ProfileRef, label: string, display: ReactNode, field: string, kind: EditKind, initial: string | null | undefined,
-  extra: Partial<EditConfig> = {}
-): EditableItem {
-  return {
-    label,
-    value: display,
-    edited: editing.edited.has(`${ref.section}|${ref.rowId}|${field}`),
-    edit: editing.canEdit ? { kind, initial, ...extra, onSave: (value) => editing.save(ref, field, value) } : null
-  };
-}
-
-// QID / passport numbers and expiry dates are edited in the ID documents box; only an older combined value shows here.
-function identityItems(_editing: ProfileEditing, person: PersonIdentity & { ref: ProfileRef }): EditableItem[] {
-  return person.legacyIdentity
-    ? [{ label: 'QID / Passport (earlier entry)', value: <span>{person.legacyIdentity}<span className="block text-xs text-slate-500">Recorded as one value on an older KYC. Enter it as the QID or passport number in ID documents below.</span></span>, wide: true }]
-    : [];
-}
-
-// Roles of each person across the tabs, so KYC ID files named for a role reach the right cards.
-function rolesByPerson(profile: ComplianceClientDetail['profile']) {
-  const roles: Record<string, string[]> = {};
-  const add = (name: string | null, role: string) => {
-    const key = personKey(name);
-    if (!key) return;
-    roles[key] = [...new Set([...(roles[key] || []), role])];
-  };
-  if (!profile) return roles;
-  profile.shareholders.forEach((party) => add(party.fullName, party.isUbo ? 'UBO' : 'SHAREHOLDER'));
-  profile.ubos.forEach((party) => add(party.fullName, 'UBO'));
-  profile.officers.forEach((officer) => officer.roles.forEach((role) => add(officer.fullName, role)));
-  add(profile.keyContact.fullName, 'KEY_CONTACT');
-  return roles;
-}
-
-function PartyCards({ parties, empty, editing, kind }: { parties: ProfileParty[]; empty: string; editing: ProfileEditing; kind: 'shareholder' | 'ubo' }) {
-  if (!parties.length) return <Empty>{empty}</Empty>;
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      {parties.map((party, index) => (
-        <article key={`${party.ref.section}-${party.ref.rowId}-${index}`} className="rounded-lg border border-slate-200 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="break-words font-semibold text-slate-900">{party.fullName}</h3>
-              <p className="text-xs text-slate-500">{party.partyType || 'Party'}{party.linkedCompany ? ` · via ${party.linkedCompany}` : ''}</p>
-            </div>
-            <div className="flex gap-1">
-              {party.percentage ? <Badge className="bg-brand-50 text-brand-700 ring-brand-200">{`${party.percentage}%`}</Badge> : null}
-              {party.isUbo && party.partyType !== 'Beneficial owner' ? <Badge className="bg-violet-50 text-violet-700 ring-violet-200">UBO</Badge> : null}
-            </div>
-          </div>
-          <div className="mt-4">
-            <EditableFields columns={2} items={[
-              profileItem(editing, party.ref, party.isCorporate ? 'Company name' : 'Full name', party.fullName, 'fullName', 'text', party.fullName, { required: true }),
-              profileItem(editing, party.ref, party.isCorporate ? 'Country' : 'Nationality', party.nationality, 'nationality', 'list', party.nationality,
-                { hint: 'Separate several with commas.' }),
-              ...(party.isCorporate
-                ? [profileItem(editing, party.ref, 'CR number', party.identityNumber, 'identityNumber', 'text', party.identityNumber)]
-                : identityItems(editing, party)),
-              profileItem(editing, party.ref, party.isCorporate ? 'Date of incorporation' : 'Date of birth', party.dateOfBirth ? formatDate(party.dateOfBirth) : null, 'dateOfBirth', 'date', party.dateOfBirth),
-              profileItem(editing, party.ref, kind === 'ubo' ? 'UBO interest %' : 'Shareholding %', party.percentage ? `${party.percentage}%` : null, party.percentageField, 'percent', party.percentage),
-              profileItem(editing, party.ref, 'Address', party.address, 'residenceAddress', 'longtext', party.address)
-            ]} />
-            {!party.isCorporate ? <IdentityDocumentsBlock person={party} context={editing.ids} /> : null}
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function OfficerCards({ officers, empty, editing }: { officers: ProfileOfficer[]; empty: string; editing: ProfileEditing }) {
-  if (!officers.length) return <Empty>{empty}</Empty>;
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      {officers.map((officer, index) => (
-        <article key={`${officer.ref.rowId}-${index}`} className="rounded-lg border border-slate-200 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h3 className="break-words font-semibold text-slate-900">{officer.fullName}</h3>
-              <p className="text-xs text-slate-500">{officer.positions.join(', ') || 'Position not captured'}{officer.entityName ? ` · ${officer.entityName}` : ''}</p>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {officer.roles.filter((role) => role !== 'OTHER').map((role) => (
-                <Badge key={role} className="bg-slate-100 text-slate-700 ring-slate-200">{roleLabels[role]}</Badge>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4">
-            <EditableFields columns={2} items={[
-              profileItem(editing, officer.ref, 'Full name', officer.fullName, 'fullName', 'text', officer.fullName, { required: true }),
-              profileItem(editing, officer.ref, 'Position', officer.positions.join(', ') || null, 'position', 'list', officer.positions.join(', '),
-                { hint: 'Separate several with commas. The position decides the tab (Director, Secretary, SEF).' }),
-              profileItem(editing, officer.ref, 'Entity name', officer.entityName, 'entityName', 'text', officer.entityName),
-              profileItem(editing, officer.ref, 'Nationality', officer.nationality, 'nationality', 'list', officer.nationality, { hint: 'Separate several with commas.' }),
-              ...identityItems(editing, officer),
-              profileItem(editing, officer.ref, 'Date of birth', officer.dateOfBirth ? formatDate(officer.dateOfBirth) : null, 'dateOfBirth', 'date', officer.dateOfBirth),
-              profileItem(editing, officer.ref, 'Address', officer.address, 'address', 'longtext', officer.address),
-              { label: 'Authorized signatory', value: officer.isAuthorizedSignatory ? 'Yes' : 'No' }
-            ]} />
-            <IdentityDocumentsBlock person={officer} context={editing.ids} />
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
+// Roles listed on each people tab. One person can hold several roles and then appears on each matching tab.
+const OFFICER_TAB_ROLES: PersonRoleType[] = ['DIRECTOR', 'MANAGER', 'CEO', 'CFO', 'COO', 'MANAGING_DIRECTOR', 'GENERAL_MANAGER', 'CHAIRMAN', 'OTHER'];
 
 export function ComplianceClientDetailsPage() {
   const { id = '' } = useParams();
@@ -217,6 +189,8 @@ export function ComplianceClientDetailsPage() {
   const canEdit = hasAreaAccess(user, 'compliance', true, workflowRoles.complianceEdit);
   const canOpenKyc = hasAreaAccess(user, 'kyc', false, [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]);
   const canOpenCrrf = hasAreaAccess(user, 'crrf', false, workflowRoles.crrf);
+  // Legal and ID documents can also be added or replaced by Operations (clients Edit); the AML team is notified.
+  const canEditDocuments = canEdit || hasAreaAccess(user, 'clients', true, workflowRoles.clientIntake);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -231,14 +205,33 @@ export function ComplianceClientDetailsPage() {
     load();
   }, [load]);
 
+  const [register, setRegister] = useState<LegalDocumentRegister | null>(null);
+  const [registerError, setRegisterError] = useState('');
+  const loadRegister = useCallback(() => {
+    setRegisterError('');
+    getLegalDocuments(id)
+      .then(setRegister)
+      .catch((requestError) => setRegisterError(getApiErrorMessage(requestError, 'Unable to load the legal documents.')));
+  }, [id]);
+
+  useEffect(() => {
+    loadRegister();
+  }, [loadRegister]);
+
+  // Tabs this user may see (backend client-access.ts); folders and monitoring are only loaded when they are shown.
+  const allowedTabs = data?.access.tabs || [];
+  const canFolders = allowedTabs.includes('compliance-docs');
+  const canMonitoring = allowedTabs.includes('expiry');
+
   const [folders, setFolders] = useState<Folders | null>(null);
   const [foldersError, setFoldersError] = useState('');
   const loadFolders = useCallback(() => {
+    if (!canFolders) return;
     setFoldersError('');
     getClientDocuments(id)
       .then(setFolders)
       .catch((requestError) => setFoldersError(getApiErrorMessage(requestError, 'Unable to load client documents.')));
-  }, [id]);
+  }, [id, canFolders]);
 
   useEffect(() => {
     loadFolders();
@@ -247,11 +240,12 @@ export function ComplianceClientDetailsPage() {
   const [monitoring, setMonitoring] = useState<ClientMonitoring | null>(null);
   const [monitoringError, setMonitoringError] = useState('');
   const loadMonitoring = useCallback(() => {
+    if (!canMonitoring) return;
     setMonitoringError('');
     getClientMonitoring(id)
       .then(setMonitoring)
       .catch((requestError) => setMonitoringError(getApiErrorMessage(requestError, 'Unable to load monitoring records.')));
-  }, [id]);
+  }, [id, canMonitoring]);
 
   useEffect(() => {
     loadMonitoring();
@@ -266,30 +260,33 @@ export function ComplianceClientDetailsPage() {
   const folderSections = (category: 'CDD' | 'MONITORING' | 'COMPLIANCE') => folders?.sections.filter((section) => section.category === category) || [];
   const folderCount = (category: 'CDD' | 'MONITORING' | 'COMPLIANCE') => folderSections(category).reduce((sum, section) => sum + section.documents.length, 0);
 
-  const officers = data?.profile?.officers || [];
-  const directors = useMemo(() => officers.filter((officer) => officer.roles.some((role) => ['DIRECTOR', 'MANAGER', 'SIGNATORY', 'OTHER'].includes(role))), [officers]);
-  const secretaries = useMemo(() => officers.filter((officer) => officer.roles.includes('SECRETARY')), [officers]);
-  const sefs = useMemo(() => officers.filter((officer) => officer.roles.includes('SEF')), [officers]);
+  const people = data?.profile.people || [];
+  const holding = (roles: PersonRoleType[]) => people.filter((person) => person.roles.some((role) => roles.includes(role.role))).length;
 
-  const tabs: Array<{ key: TabKey; label: string; count?: number }> = [
+  // Order agreed with the business on 2026-11-22; Monitoring and Reviews & Risk are sections of EDD. Each user sees the
+  // tabs of their access level only.
+  const allTabs: Array<{ key: TabKey; label: string; count?: number }> = [
     { key: 'overview', label: 'Overview' },
     { key: 'company', label: 'Company' },
-    { key: 'officers', label: 'Directors & Managers', count: directors.length },
-    { key: 'shareholders', label: 'Shareholders', count: data?.profile?.shareholders.length ?? 0 },
-    { key: 'secretary', label: 'Secretary', count: secretaries.length },
-    { key: 'sef', label: 'SEF', count: sefs.length },
-    { key: 'ubos', label: 'UBOs', count: data?.profile?.ubos.length ?? 0 },
-    { key: 'documents', label: 'KYC & Documents', count: data?.legalDocuments.length ?? 0 },
-    { key: 'crrf', label: 'CRRF' },
-    { key: 'cdd', label: 'CDD', count: folderCount('CDD') },
-    { key: 'monitoring', label: 'Monitoring', count: folderCount('MONITORING') },
-    { key: 'compliance-docs', label: 'Compliance Docs', count: folderCount('COMPLIANCE') },
-    { key: 'screening', label: 'Screening', count: monitoring?.screenings.length ?? 0 },
-    { key: 'reviews', label: 'Reviews & Risk', count: monitoring ? monitoring.reviews.length + monitoring.riskChanges.length : 0 },
+    { key: 'shareholders', label: 'Shareholders', count: holding(['SHAREHOLDER']) },
+    { key: 'officers', label: 'Directors & Managers', count: holding(OFFICER_TAB_ROLES) },
+    { key: 'signatories', label: 'Authorised Signatory', count: holding(['AUTHORISED_SIGNATORY']) },
+    { key: 'sef', label: 'SEF', count: holding(['SEF']) },
+    { key: 'secretary', label: 'Secretary', count: holding(['SECRETARY']) },
+    { key: 'documents', label: 'Legal Documents', count: register ? register.documents.filter((document) => document.status === 'CURRENT').length + register.identity.length : undefined },
+    { key: 'engagements', label: 'Engagements', count: data?.engagements.length ?? 0 },
+    { key: 'compliance-docs', label: 'Compliance Documents', count: folderCount('COMPLIANCE') },
     { key: 'expiry', label: 'Expiry', count: monitoring?.expiryItems.filter((item) => item.isActive).length ?? 0 },
-    { key: 'engagements', label: 'Engagements', count: data?.engagements.length ?? 0 }
+    { key: 'ubos', label: 'UBO', count: holding(['UBO']) },
+    { key: 'kyc', label: 'KYC', count: data?.kycCases.length ?? 0 },
+    { key: 'crrf', label: 'CRRF' },
+    { key: 'screening', label: 'Screening', count: monitoring?.screenings.length ?? 0 },
+    { key: 'cdd', label: 'EDD', count: folderCount('CDD') + folderCount('MONITORING') + (monitoring ? monitoring.reviews.length + monitoring.riskChanges.length : 0) }
   ];
-  const requestedTab = searchParams.get('tab') as TabKey | null;
+  const tabs = allTabs.filter((tab) => allowedTabs.includes(tab.key));
+  // Older links (notifications, bookmarks) to Monitoring and Reviews & Risk open EDD.
+  const linkedTab = searchParams.get('tab');
+  const requestedTab = (linkedTab === 'monitoring' || linkedTab === 'reviews' ? 'cdd' : linkedTab) as TabKey | null;
   const activeTab: TabKey = tabs.some((tab) => tab.key === requestedTab) ? (requestedTab as TabKey) : 'overview';
   const activeTabRef = useRef<HTMLButtonElement | null>(null);
 
@@ -311,52 +308,59 @@ export function ComplianceClientDetailsPage() {
 
   const { client, profile, profileCase } = data;
   const openRekyc = data.kycCases.find((kycCase) => kycCase.purpose === 'REKYC' && !CLOSED_REKYC_STATUSES.includes(kycCase.status));
-  const sourceNote = profileCase
-    ? `From current KYC ${profileCase.kycNumber}${profile ? ` (form version ${profile.formVersion}, updated ${formatDate(profile.formUpdatedAt)})` : ''}.${canEdit ? ' Edits here are audited and do not change the approved KYC.' : ''}${openRekyc && canEdit ? ` Re-KYC ${openRekyc.kycNumber} is in progress: edits made here are kept when it is approved, but its reviewers do not see them, so also enter them in the re-KYC form.` : ''}`
-    : 'No KYC case with a form is linked to this client.';
-  const editing: ProfileEditing = {
-    canEdit: canEdit && Boolean(profile),
-    edited: new Set(data.editedFields),
+  const sourceNote = `${profile.source ? `Client record, first taken from KYC ${profile.source.kycNumber}.` : 'Client record.'}${canEdit ? ' Changes here are audited, do not change the approved KYC, and prefill the next re-KYC.' : ''}${openRekyc && canEdit ? ` Re-KYC ${openRekyc.kycNumber} is in progress: changes made here are kept when it is approved, but its reviewers do not see them, so also enter them in the re-KYC form.` : ''}`;
+  // Any change returns the refreshed page; expiry dates feed the Expiry tab and ID copies the Identity Documents folder.
+  const onChange = (next: ComplianceClientDetail) => {
+    setData(next);
+    loadMonitoring();
+    loadFolders();
+    loadRegister();
+  };
+  const peopleContext: PeopleContext = {
+    clientId: client.id,
+    canEdit,
+    people: profile.people,
+    onChange,
     ids: {
       clientId: client.id,
-      canEdit: canEdit && Boolean(profile),
+      canEdit,
+      canUpload: canEditDocuments,
+      showPassports: data.access.seesPassports,
       canOpenKyc,
       documents: data.identityDocuments || [],
       kycDocuments: data.legalDocuments,
       kycNumbers: Object.fromEntries(data.kycCases.map((kycCase) => [kycCase.id, kycCase.kycNumber])),
-      rolesByPerson: rolesByPerson(profile),
-      saveField: async (ref, field, value) => {
-        const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
-        setData(next);
-        showToast('Saved.', 'success');
-        loadMonitoring();
-      },
-      isEdited: (ref, field) => data.editedFields.includes(`${ref.section}|${ref.rowId}|${field}`),
-      onUploaded: (next) => {
-        setData(next);
-        loadMonitoring();
-        loadFolders();
-      },
+      onChange,
       openKycDocuments: () => setSearchParams({ tab: 'documents' }, { replace: true })
-    },
-    save: async (ref, field, value) => {
-      const next = await updateComplianceProfileField(client.id, { section: ref.section, rowId: ref.rowId || undefined, field, value });
-      setData(next);
-      showToast('Saved.', 'success');
-      // QID / passport dates feed the Expiry tab.
-      loadMonitoring();
     }
   };
-  const companyRef: ProfileRef = { section: 'COMPANY', rowId: '', rowLabel: null };
+  const company = profile.company;
+  const showRisk = data.access.level !== 'ALLOCATED';
+  const overviewDocuments = (register?.documents || []).filter((document) => document.status === 'CURRENT' && ['COMPANY_PROFILE', 'ORG_CHART'].includes(document.typeKey));
+  // The tab where a person is listed, for the "Person" link of an ID document.
+  const personTab = (personId: string): TabKey => {
+    const roles = profile.people.find((person) => person.id === personId)?.roles.map((role) => role.role) || [];
+    if (roles.includes('SHAREHOLDER')) return 'shareholders';
+    if (roles.some((role) => OFFICER_TAB_ROLES.includes(role))) return 'officers';
+    if (roles.includes('AUTHORISED_SIGNATORY')) return 'signatories';
+    if (roles.includes('SECRETARY')) return 'secretary';
+    if (roles.includes('SEF')) return 'sef';
+    if (roles.includes('UBO')) return 'ubos';
+    return 'overview';
+  };
+  const companyItem = (label: string, display: ReactNode, field: EntityField, kind: EditKind, extra: Partial<EditConfig> = {}): EditableItem => ({
+    label,
+    value: display,
+    edited: company.edited.includes(field),
+    edit: canEdit ? {
+      kind, initial: company[field] ?? null, ...extra,
+      onSave: async (value) => {
+        onChange(await updateEntityField(client.id, field, value));
+        showToast('Saved.', 'success');
+      }
+    } : null
+  });
   const activeEngagements = data.engagements.filter((engagement) => engagement.status === 'IN_PROGRESS' || engagement.status === 'PENDING').length;
-
-  async function openDocument(document: ComplianceClientDetail['legalDocuments'][number]) {
-    try {
-      await viewLegalDocument(document.kycCaseId, { ...document, status: 'UPLOADED' } as LegalDocument);
-    } catch (requestError) {
-      showToast(getApiErrorMessage(requestError, 'Unable to open this document.'), 'error');
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -374,15 +378,15 @@ export function ComplianceClientDetailsPage() {
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Badge className={statusTone[client.status] || statusTone.INACTIVE}>{complianceStatusLabels[client.status] || client.status}</Badge>
-              <Badge className={riskTone[client.riskLevel || 'PENDING']}>{client.riskLevel ? `${riskLabels[client.riskLevel]} risk` : 'Risk pending'}</Badge>
-              <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{client.cddType ? cddLabels[client.cddType] : 'CDD not set'}</Badge>
+              {showRisk ? <Badge className={riskTone[client.riskLevel || 'PENDING']}>{client.riskLevel ? `${riskLabels[client.riskLevel]} risk` : 'Risk pending'}</Badge> : null}
+              {showRisk ? <Badge className="bg-slate-100 text-slate-700 ring-slate-200">{client.cddType ? cddLabels[client.cddType] : 'CDD not set'}</Badge> : null}
               {client.pendingRiskChange ? (
-                <button type="button" onClick={() => setSearchParams({ tab: 'reviews' }, { replace: true })}>
+                <button type="button" onClick={() => setSearchParams({ tab: 'cdd' }, { replace: true })}>
                   <Badge className="bg-amber-50 text-amber-700 ring-amber-200">{`Risk change to ${riskLabels[client.pendingRiskChange.proposedRisk]} awaiting approval`}</Badge>
                 </button>
               ) : null}
               {client.reviewInProgress ? (
-                <button type="button" onClick={() => setSearchParams({ tab: 'reviews' }, { replace: true })}>
+                <button type="button" onClick={() => setSearchParams({ tab: 'cdd' }, { replace: true })}>
                   <Badge className="bg-brand-50 text-brand-700 ring-brand-200">Review in progress</Badge>
                 </button>
               ) : null}
@@ -395,19 +399,21 @@ export function ComplianceClientDetailsPage() {
           </div>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4 lg:min-w-[30rem]">
             <HeaderStat label="Activated" value={formatDate(client.activatedAt)} />
-            <HeaderStat label="Last review" value={formatDate(client.lastReviewDate)} />
-            <HeaderStat
-              label="Next review"
-              value={formatDate(client.nextReviewDate)}
-              tone={client.reviewState === 'OVERDUE' ? 'text-rose-700' : client.reviewState === 'DUE_SOON' ? 'text-amber-700' : undefined}
-            />
+            {showRisk ? <HeaderStat label="Last review" value={formatDate(client.lastReviewDate)} /> : null}
+            {showRisk ? (
+              <HeaderStat
+                label="Next review"
+                value={formatDate(client.nextReviewDate)}
+                tone={client.reviewState === 'OVERDUE' ? 'text-rose-700' : client.reviewState === 'DUE_SOON' ? 'text-amber-700' : undefined}
+              />
+            ) : null}
             <HeaderStat label="Engagements" value={`${activeEngagements} active / ${data.engagements.length}`} />
           </dl>
         </div>
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-slate-100 pt-4 text-sm text-slate-600">
           <span className="inline-flex items-center gap-1.5"><Mail className="h-4 w-4 text-slate-400" />{client.email || 'No email'}</span>
           <span className="inline-flex items-center gap-1.5"><Phone className="h-4 w-4 text-slate-400" />{client.phone || 'No phone'}</span>
-          <span className="inline-flex min-w-0 items-center gap-1.5"><MapPin className="h-4 w-4 shrink-0 text-slate-400" /><span className="break-words">{client.address || profile?.company.registeredOfficeAddress || 'No address'}</span></span>
+          <span className="inline-flex min-w-0 items-center gap-1.5"><MapPin className="h-4 w-4 shrink-0 text-slate-400" /><span className="break-words">{client.address || company.registeredOfficeAddress || 'No address'}</span></span>
         </div>
       </header>
 
@@ -433,8 +439,8 @@ export function ComplianceClientDetailsPage() {
       {activeTab === 'overview' ? (
         <div className="grid gap-6 xl:grid-cols-3">
           <div className="space-y-6 xl:col-span-2">
-            <RegisterDetails data={data} canEdit={canEdit} onSaved={load} onRiskChange={() => setSearchParams({ tab: 'reviews' }, { replace: true })} />
-            <Panel title="Risk history" description="Risk reclassifications recorded on this client's KYC cases.">
+            <RegisterDetails data={data} canEdit={canEdit} onSaved={load} onRiskChange={() => setSearchParams({ tab: 'cdd' }, { replace: true })} />
+            {showRisk ? <Panel title="Risk history" description="Risk reclassifications recorded on this client's KYC cases.">
               {data.riskHistory.length ? (
                 <ul className="divide-y divide-slate-100">
                   {data.riskHistory.map((entry) => (
@@ -453,10 +459,10 @@ export function ComplianceClientDetailsPage() {
               ) : (
                 <Empty>No risk reclassifications recorded.</Empty>
               )}
-            </Panel>
+            </Panel> : null}
           </div>
           <div className="space-y-6">
-            <Panel title="Current KYC assessment" description={sourceNote}>
+            {showRisk ? <Panel title="Current KYC assessment" description={sourceNote}>
               <Fields items={[
                 ['Risk at review', data.internalReview?.riskClassification ? riskLabels[data.internalReview.riskClassification] : null],
                 ['CDD at review', data.internalReview?.dueDiligenceType ? cddLabels[data.internalReview.dueDiligenceType] : null],
@@ -468,32 +474,29 @@ export function ComplianceClientDetailsPage() {
                   Open KYC case
                 </Link>
               ) : null}
-            </Panel>
-            <Panel title="Key communication person">
-              {profile ? (
-                <>
-                <EditableFields columns={2} items={[
-                  profileItem(editing, profile.keyContact.ref, 'Name', profile.keyContact.fullName, 'fullName', 'text', profile.keyContact.fullName),
-                  profileItem(editing, profile.keyContact.ref, 'Position', profile.keyContact.position, 'position', 'list', profile.keyContact.position),
-                  profileItem(editing, profile.keyContact.ref, 'Mobile', profile.keyContact.mobileNumber, 'mobileNumber', 'text', profile.keyContact.mobileNumber),
-                  profileItem(editing, profile.keyContact.ref, 'Email', profile.keyContact.email, 'email', 'email', profile.keyContact.email),
-                  profileItem(editing, profile.keyContact.ref, 'Nationality', profile.keyContact.nationality, 'nationality', 'list', profile.keyContact.nationality),
-                  ...identityItems(editing, profile.keyContact as PersonIdentity & { ref: ProfileRef })
-                ]} />
-                {profile.keyContact.fullName ? <IdentityDocumentsBlock person={profile.keyContact} context={editing.ids} /> : null}
-                </>
-              ) : data.contacts.length ? (
-                <ul className="space-y-3 text-sm">
-                  {data.contacts.map((contact) => (
-                    <li key={contact.id}>
-                      <p className="font-medium text-slate-900">{contact.name}{contact.isPrimary ? <span className="ml-2 text-xs text-slate-500">Primary</span> : null}</p>
-                      <p className="text-slate-500">{[contact.position, contact.email, contact.phone].filter(Boolean).join(' · ') || 'No contact details'}</p>
+            </Panel> : null}
+            <Panel
+              title="Company profile & organisation chart"
+              action={<button type="button" onClick={() => setSearchParams({ tab: 'documents' }, { replace: true })} className="text-xs font-medium text-brand-700 hover:text-brand-800">Legal documents</button>}
+            >
+              {overviewDocuments.length ? (
+                <ul className="space-y-2 text-sm">
+                  {overviewDocuments.map((document) => (
+                    <li key={document.id} className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2"><FileText className="h-4 w-4 shrink-0 text-slate-400" /><span className="truncate">{document.typeLabel}</span></span>
+                      <button type="button" onClick={() => openLegalDocumentFile(client.id, document).catch((requestError) => showToast(getApiErrorMessage(requestError, 'Unable to open this document.'), 'error'))} className="shrink-0 text-xs font-medium text-brand-700 hover:text-brand-800">View</button>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <Empty>No contact recorded.</Empty>
+                <Empty>No company profile or organisation chart yet. Add them in Legal Documents.</Empty>
               )}
+            </Panel>
+            {data.access.level === 'FULL' ? <AllocationPanel data={data} onChange={setData} /> : null}
+            <Panel title="Key communication person">
+              <PeopleTab context={peopleContext} roles={['KEY_CONTACT']} compact empty={data.contacts.length
+                ? `No key communication person on the client record. Enquiry contact: ${data.contacts.map((contact) => [contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')).join('; ')}.`
+                : 'No key communication person recorded.'} />
             </Panel>
           </div>
         </div>
@@ -501,90 +504,89 @@ export function ComplianceClientDetailsPage() {
 
       {activeTab === 'company' ? (
         <Panel title="Company details" description={sourceNote}>
-          {profile ? (
-            <EditableFields items={[
-              profileItem(editing, companyRef, 'Legal name', profile.company.legalName, 'legalName', 'text', profile.company.legalName),
-              profileItem(editing, companyRef, 'Legal form', profile.company.legalForm, 'legalForm', 'list', profile.company.legalForm),
-              profileItem(editing, companyRef, 'CR / QFC number', profile.company.commercialRegistrationNo || client.registrationNumber, 'commercialRegistrationNo', 'text', profile.company.commercialRegistrationNo),
-              profileItem(editing, companyRef, 'Country of incorporation', profile.company.countryOfIncorporation, 'countryOfIncorporation', 'list', profile.company.countryOfIncorporation),
-              profileItem(editing, companyRef, 'Date of incorporation', profile.company.dateOfIncorporation ? formatDate(profile.company.dateOfIncorporation) : null, 'dateOfIncorporation', 'date', profile.company.dateOfIncorporation),
-              profileItem(editing, companyRef, 'Tax identification no.', profile.company.taxIdentificationNo, 'taxIdentificationNo', 'text', profile.company.taxIdentificationNo),
-              profileItem(editing, companyRef, 'Registered office address', profile.company.registeredOfficeAddress, 'registeredOfficeAddress', 'longtext', profile.company.registeredOfficeAddress),
-              profileItem(editing, companyRef, 'Telephone', profile.company.telephone, 'telephone', 'text', profile.company.telephone),
-              profileItem(editing, companyRef, 'Email', profile.company.email, 'email', 'email', profile.company.email),
-              profileItem(editing, companyRef, 'Website', profile.company.website, 'website', 'text', profile.company.website),
-              profileItem(editing, companyRef, 'Nature of business', profile.company.businessNature, 'businessNature', 'list', profile.company.businessNature, { hint: 'Separate several with commas.' }),
-              profileItem(editing, companyRef, 'Related industry', profile.company.relatedIndustry, 'relatedIndustry', 'list', profile.company.relatedIndustry, { hint: 'Separate several with commas.' }),
-              profileItem(editing, companyRef, 'Licensed activities', profile.company.licenseActivities, 'licenseActivities', 'longtext', profile.company.licenseActivities),
-              profileItem(editing, companyRef, 'Services requested', profile.company.prospectiveServices, 'prospectiveService', 'list', profile.company.prospectiveServices, { hint: 'Separate several with commas.' })
-            ]} />
-          ) : (
-            <Empty>No KYC form data is available for this client yet.</Empty>
-          )}
+          <EditableFields items={[
+            companyItem('Legal name', company.legalName, 'legalName', 'text', { required: true }),
+            companyItem('Legal form', company.legalForm, 'legalForm', 'text'),
+            companyItem('CR / QFC number', company.commercialRegistrationNo || client.registrationNumber, 'commercialRegistrationNo', 'text'),
+            companyItem('CR expiry date', formatDate(company.crExpiryDate), 'crExpiryDate', 'date', { hint: 'Listed on the Expiry tab with 90 / 60 / 30-day alerts.' }),
+            companyItem('Date of incorporation', company.dateOfIncorporation ? formatDate(company.dateOfIncorporation) : null, 'dateOfIncorporation', 'date'),
+            companyItem('Country of incorporation', company.countryOfIncorporation, 'countryOfIncorporation', 'text'),
+            companyItem('Place of incorporation', company.placeOfIncorporation, 'placeOfIncorporation', 'text'),
+            companyItem('Registered office address', company.registeredOfficeAddress, 'registeredOfficeAddress', 'longtext'),
+            companyItem('Share capital', company.shareCapital, 'shareCapital', 'text'),
+            companyItem('Tax card no. (TIN)', company.taxIdentificationNo, 'taxIdentificationNo', 'text'),
+            companyItem('PO Box', company.poBox, 'poBox', 'text'),
+            companyItem('Telephone', company.telephone, 'telephone', 'text'),
+            companyItem('Email', company.email, 'email', 'email'),
+            companyItem('Website', company.website, 'website', 'text'),
+            companyItem('Main purpose / nature of business', company.businessNature, 'businessNature', 'text', { hint: 'Separate several with commas.' }),
+            companyItem('Related industry', company.relatedIndustry, 'relatedIndustry', 'text', { hint: 'Separate several with commas.' }),
+            companyItem('Licensed activities', company.licenseActivities, 'licenseActivities', 'longtext'),
+            companyItem('Financial year end', company.financialYearEnd, 'financialYearEnd', 'text', { hint: 'For example 31 December.' }),
+            companyItem('Approved auditor', company.auditorName, 'auditorName', 'text'),
+            companyItem('Services requested', company.prospectiveServices, 'prospectiveServices', 'text', { hint: 'Separate several with commas.' })
+          ]} />
         </Panel>
       ) : null}
 
       {activeTab === 'officers' ? (
-        <Panel title="Directors & managers" description={`Board members, managers and authorized signatories. ${sourceNote}`}>
-          <OfficerCards officers={directors} editing={editing} empty="No directors or managers recorded in the KYC form." />
+        <Panel title="Directors & managers" description={`Board members, managers and executives. ${sourceNote}`}>
+          <PeopleTab context={peopleContext} roles={OFFICER_TAB_ROLES} addRoles={OFFICER_TAB_ROLES} empty="No directors or managers on the client record." />
+        </Panel>
+      ) : null}
+
+      {activeTab === 'signatories' ? (
+        <Panel title="Authorised signatories" description={`People authorised to sign for the company. ${sourceNote}`}>
+          <PeopleTab context={peopleContext} roles={['AUTHORISED_SIGNATORY']} empty="No authorised signatory on the client record." />
         </Panel>
       ) : null}
 
       {activeTab === 'shareholders' ? (
-        <Panel title="Shareholders" description={`Ownership structure. ${sourceNote}`}>
-          <PartyCards parties={profile?.shareholders || []} editing={editing} kind="shareholder" empty="No shareholders recorded in the KYC form." />
+        <Panel title="Shareholders" description={`Ownership structure: individuals and companies. ${sourceNote}`}>
+          <PeopleTab context={peopleContext} roles={['SHAREHOLDER']} allowCorporate empty="No shareholders on the client record." />
         </Panel>
       ) : null}
 
       {activeTab === 'secretary' ? (
-        <Panel title="Company secretary" description={`Officers whose position includes Secretary. ${sourceNote}`}>
-          <OfficerCards officers={secretaries} editing={editing} empty="No company secretary recorded in the KYC form." />
+        <Panel title="Company secretary" description={sourceNote}>
+          <PeopleTab context={peopleContext} roles={['SECRETARY']} allowCorporate empty="No company secretary on the client record." />
         </Panel>
       ) : null}
 
       {activeTab === 'sef' ? (
-        <Panel title="Senior Executive Functions" description={`Officers whose position is SEF / Senior Executive Function. ${sourceNote}`}>
-          <OfficerCards officers={sefs} editing={editing} empty="No SEF recorded in the KYC form." />
+        <Panel title="Senior Executive Functions" description={sourceNote}>
+          <PeopleTab context={peopleContext} roles={['SEF']} empty="No SEF on the client record." />
         </Panel>
       ) : null}
 
       {activeTab === 'ubos' ? (
-        <Panel title="Ultimate beneficial owners" description={`Same beneficial-owner list as the KYC form and exports. ${sourceNote}`}>
-          <PartyCards parties={profile?.ubos || []} editing={editing} kind="ubo" empty="No beneficial owners recorded in the KYC form." />
+        <Panel title="Ultimate beneficial owners" description={`Individuals who ultimately own or control the company, directly or through a corporate shareholder. ${sourceNote}`}>
+          <PeopleTab context={peopleContext} roles={['UBO']} empty="No beneficial owners on the client record." />
         </Panel>
       ) : null}
 
+      {activeTab === 'kyc' ? <KycHistory data={data} canEdit={canEdit} canOpenKyc={canOpenKyc} onStarted={load} /> : null}
+
       {activeTab === 'documents' ? (
-        <div className="space-y-6">
-          <KycHistory data={data} canEdit={canEdit} canOpenKyc={canOpenKyc} onStarted={load} />
-          <Panel title="Legal & KYC documents" description="Files uploaded on this client's KYC cases. Client-level files are in the CDD, Monitoring and Compliance Docs tabs.">
-            {data.legalDocuments.length ? (
-              <ul className="divide-y divide-slate-100">
-                {data.legalDocuments.map((document) => {
-                  const kycNumber = data.kycCases.find((kycCase) => kycCase.id === document.kycCaseId)?.kycNumber;
-                  return (
-                    <li key={document.id} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex min-w-0 items-start gap-3">
-                        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-900">{document.documentType}</p>
-                          <p className="break-all text-xs text-slate-500">{document.fileName} · {formatDate(document.createdAt)}{kycNumber ? ` · ${kycNumber}` : ''}</p>
-                        </div>
-                      </div>
-                      {canOpenKyc ? (
-                        <button type="button" onClick={() => openDocument(document)} className="self-start rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 sm:self-auto">
-                          View
-                        </button>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <Empty>No documents uploaded on this client's KYC cases.</Empty>
-            )}
-          </Panel>
-        </div>
+        <LegalDocumentsPanel context={{
+          clientId: client.id,
+          canEdit: canEditDocuments,
+          canEditProfile: canEdit,
+          canOpenKyc,
+          company,
+          people: profile.people,
+          kycDocuments: data.legalDocuments,
+          kycNumbers: Object.fromEntries(data.kycCases.map((kycCase) => [kycCase.id, kycCase.kycNumber])),
+          register,
+          registerError,
+          onRegister: (next) => {
+            setRegister(next);
+            loadMonitoring();
+            load();
+          },
+          onProfile: onChange,
+          openPerson: (personId) => setSearchParams({ tab: personTab(personId) }, { replace: true })
+        }} />
       ) : null}
 
       {activeTab === 'crrf' ? (
@@ -627,42 +629,54 @@ export function ComplianceClientDetailsPage() {
         </Panel>
       ) : null}
 
-      {(['cdd', 'monitoring', 'compliance-docs'] as TabKey[]).includes(activeTab) ? (
+      {activeTab === 'cdd' ? (
+        <div className="space-y-8">
+          <EddSection title="EDD documents" description="Enhanced due diligence evidence kept on this client: source of funds and wealth, adverse media, additional checks and the ID copies of the people.">
+            {foldersError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{foldersError}</p> : !folders ? <p className="text-sm text-slate-500">Loading documents...</p> : (
+              <ClientDocumentFolders key="cdd" clientId={client.id} sections={folderSections('CDD')} canEdit={canEdit} allowCustomFolders={false} collapsible={false} onChange={(next) => (next ? setFolders(next) : loadFolders())} />
+            )}
+          </EddSection>
+          <EddSection title="Ongoing monitoring" description="Evidence that the client is being watched after onboarding: correspondence, transaction or activity notes and anything that may change the risk.">
+            {foldersError ? null : !folders ? <p className="text-sm text-slate-500">Loading documents...</p> : (
+              <ClientDocumentFolders key="monitoring" clientId={client.id} sections={folderSections('MONITORING')} canEdit={canEdit} allowCustomFolders={false} collapsible={false} onChange={(next) => (next ? setFolders(next) : loadFolders())} />
+            )}
+          </EddSection>
+          <EddSection title="Periodic reviews and risk" description="The scheduled review of the client (High risk every year, Medium every 2 years, Low every 3 years) and any change of risk level, which DMLRO or MLRO must approve.">
+            {monitoringError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{monitoringError}</p> : !monitoring ? <p className="text-sm text-slate-500">Loading reviews...</p> : (
+              <ReviewsPanel clientId={client.id} data={monitoring} canEdit={canEdit} onChange={onMonitoringChange} clientStatus={client.status} currentUserId={user?.id} />
+            )}
+          </EddSection>
+        </div>
+      ) : null}
+
+      {activeTab === 'compliance-docs' ? (
         foldersError ? (
           <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{foldersError}</p>
         ) : !folders ? (
           <p className="text-sm text-slate-500">Loading documents...</p>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-slate-500">
-              {activeTab === 'cdd'
-                ? 'Customer due diligence evidence kept on this client record.'
-                : activeTab === 'monitoring'
-                  ? 'Ongoing monitoring evidence, reviews and correspondence.'
-                  : "Compliance documentation folders. Folders are shared by all clients; the files are this client's."}
-            </p>
+            <p className="text-sm text-slate-500">Compliance documentation folders. Folders are shared by all clients; the files are this client's.</p>
             <ClientDocumentFolders
-              key={activeTab}
+              key="compliance-docs"
               clientId={client.id}
-              sections={folderSections(activeTab === 'cdd' ? 'CDD' : activeTab === 'monitoring' ? 'MONITORING' : 'COMPLIANCE')}
+              sections={folderSections('COMPLIANCE')}
               canEdit={canEdit}
-              allowCustomFolders={activeTab === 'compliance-docs'}
-              collapsible={activeTab === 'compliance-docs'}
+              allowCustomFolders
+              collapsible
               onChange={(next) => (next ? setFolders(next) : loadFolders())}
             />
           </div>
         )
       ) : null}
 
-      {(['screening', 'reviews', 'expiry'] as TabKey[]).includes(activeTab) ? (
+      {(['screening', 'expiry'] as TabKey[]).includes(activeTab) ? (
         monitoringError ? (
           <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{monitoringError}</p>
         ) : !monitoring ? (
           <p className="text-sm text-slate-500">Loading monitoring records...</p>
         ) : activeTab === 'screening' ? (
           <ScreeningPanel clientId={client.id} data={monitoring} canEdit={canEdit} onChange={onMonitoringChange} />
-        ) : activeTab === 'reviews' ? (
-          <ReviewsPanel clientId={client.id} data={monitoring} canEdit={canEdit} onChange={onMonitoringChange} clientStatus={client.status} currentUserId={user?.id} />
         ) : (
           <ExpiryPanel
             clientId={client.id}
@@ -671,9 +685,7 @@ export function ComplianceClientDetailsPage() {
             onChange={onMonitoringChange}
             holderSuggestions={[
               { name: client.name, role: 'Company' },
-              ...(profile?.officers || []).map((officer) => ({ name: officer.fullName, role: officer.positions.join(', ') || 'Officer' })),
-              ...(profile?.shareholders || []).map((holder) => ({ name: holder.fullName, role: 'Shareholder' })),
-              ...(profile?.ubos || []).map((ubo) => ({ name: ubo.fullName, role: 'UBO' }))
+              ...profile.people.map((person) => ({ name: person.fullName, role: person.roles.map(roleLabel).join(', ') || 'Person' }))
             ]}
           />
         )
@@ -768,7 +780,7 @@ function RegisterDetails({ data, canEdit, onSaved, onRiskChange }: { data: Compl
 
   return (
     <Panel title="Register details" description="Compliance register fields for this client. Use the pencil to change a value. Risk changes go through the review workflow.">
-      <EditableFields items={[
+      <EditableFields items={([
         item('Client code', client.clientCode, 'clientCode', 'text', client.clientCode, { required: true, maxLength: 40, hint: 'Must be unique, for example CL-2026-0001.' }),
         item('Client name', client.name, 'name', 'text', client.name, { required: true, maxLength: 200 }),
         item('CR / QFC number', client.registrationNumber, 'registrationNumber', 'text', client.registrationNumber, { maxLength: 100 }),
@@ -798,7 +810,7 @@ function RegisterDetails({ data, canEdit, onSaved, onRiskChange }: { data: Compl
         item('Industry', client.industry, 'industry', 'text', client.industry, { maxLength: 200 }),
         item('Status reason', client.statusReason, 'statusReason', 'longtext', client.statusReason, { maxLength: 1000 }),
         { label: 'Latest service', value: client.latestEngagement?.serviceName || null }
-      ]} />
+      ]).filter((entry) => data.access.level !== 'ALLOCATED' || !(['CDD type', 'Risk level'].includes(entry.label)))} />
     </Panel>
   );
 }

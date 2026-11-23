@@ -22,7 +22,7 @@ export class EnquiriesController {
     return this.enquiriesService.create(user, dto);
   }
 
-  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.enquiriesService.findAll(user);
@@ -47,7 +47,7 @@ export class EnquiriesController {
     return this.enquiriesService.convertToKyc(user, id);
   }
 
-  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Get(':id')
   findOne(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.enquiriesService.findOne(user, id);

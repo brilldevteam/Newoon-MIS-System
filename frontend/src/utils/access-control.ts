@@ -9,6 +9,7 @@ export type AppRole =
   | 'DMLRO'
   | 'MLRO'
   | 'SEF'
+  | 'CEO'
   | 'ACCOUNTING_TEAM'
   | 'HR_TEAM';
 
@@ -21,21 +22,22 @@ export const roleLabels: Record<string, string> = {
   DMLRO: 'DMLRO',
   MLRO: 'MLRO',
   SEF: 'SEF',
+  CEO: 'CEO',
   ACCOUNTING_TEAM: 'Accounting Team',
   HR_TEAM: 'HR Team'
 };
 
 export const workflowRoles = {
-  enquiries: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM'],
-  enquiryView: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM'],
+  enquiries: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM'],
+  enquiryView: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM'],
   clientIntake: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   enquiryEditing: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR'],
   caseCreation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'OPERATING_TEAM'],
   documentUpload: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   documentDelete: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
   kycPreparation: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR'],
-  screening: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
-  crrf: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
+  screening: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO'],
+  crrf: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO'],
   kycFormBuilder: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF'],
   amlDashboard: [],
   reviewTasks: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'DMLRO', 'MLRO', 'SEF'],
@@ -47,7 +49,8 @@ export const workflowRoles = {
   admin: ['SUPER_ADMIN'],
   userAdmin: ['SUPER_ADMIN', 'COMPANY_ADMIN'],
   // Defaults before the access matrix is saved; mirrors the backend "compliance" area defaults.
-  complianceView: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'OPERATING_TEAM'],
+  // Accounting and HR see only their allocated clients; CEO is read-only (2026-11-22).
+  complianceView: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'OPERATING_TEAM', 'ACCOUNTING_TEAM', 'HR_TEAM'],
   complianceEdit: ['SUPER_ADMIN', 'COMPANY_ADMIN', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO']
 };
 

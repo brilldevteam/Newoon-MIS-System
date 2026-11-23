@@ -158,7 +158,15 @@ async function checkExport() {
     expiryItems: [{ expiryDate: new Date(Date.now() + 10 * 86400000) }],
     _count: { engagements: 1, kycCases: 1 }
   };
-  const service = new ComplianceClientsService({ client: { findMany: async () => [row] } });
+  // The export also reads the client records (company, people, legal documents); this client has none, and its
+  // records are created on the way (ensureRecords is replaced here; see check-client-export.cjs and the Phase 4 test).
+  const prisma = {
+    client: { findMany: async ({ where }) => (where.entityProfile ? [] : [row]) },
+    clientEntityProfile: { findMany: async () => [] },
+    clientPerson: { findMany: async () => [] },
+    clientLegalDocument: { findMany: async () => [] }
+  };
+  const service = new ComplianceClientsService(prisma);
   const file = await service.exportExcel(actor, {});
   assert.match(file.fileName, /^compliance-clients-\d{4}-\d{2}-\d{2}\.xlsx$/);
   assert.equal(file.truncated, false);
@@ -171,6 +179,8 @@ async function checkExport() {
   assert.equal(sheet.getRow(2).getCell(5).value, 'RDD');
   assert.equal(sheet.getRow(2).getCell(9).value, 'contact@example.invalid', 'Falls back to the primary contact email');
   assert.equal(sheet.rowCount, 2);
+  assert.deepEqual(workbook.worksheets.map((item) => item.name), ['Compliance Clients', 'Company Details', 'People', 'Legal Documents'], 'The client details follow the register sheet');
+  assert.equal(workbook.getWorksheet('Company Details').getRow(2).getCell(2).value, row.name, 'A client without records still has a company row');
 }
 
 async function checkClientsIntake() {
@@ -197,7 +207,7 @@ async function checkClientsIntake() {
 
 async function checkActivation() {
   const state = {
-    client: { id: 'c1', tenantId: 'tenant-a', clientCode: null, activatedAt: null, riskLevel: null, cddType: null, email: null, phone: null },
+    client: { id: 'c1', tenantId: 'tenant-a', clientCode: null, activatedAt: null, riskLevel: null, cddType: null, email: null, phone: null, currentKycCaseId: null },
     latestCode: 'CL-2026-0041',
     engagements: [],
     audits: [],
@@ -230,7 +240,7 @@ async function checkActivation() {
     text: KycService.prototype.text,
     prisma: { $transaction: async (callback) => callback(tx) },
     audit: async (_tx, _user, tenantId, entityType, entityId, metadata) => { state.audits.push({ tenantId, entityType, entityId, metadata }); },
-    syncClientIdentityExpiry: async (_tx, _user, synced) => { state.expirySyncedFor = synced.id; }
+    syncClientRecords: async (_tx, _user, synced, previous) => { state.recordsSyncedFor = synced.id; state.recordsPrevious = previous; }
   };
   const kycCase = {
     id: 'k1', tenantId: 'tenant-a', clientId: 'c1', title: 'Synthetic KYC', kycNumber: 'KYC-2026-0007',
@@ -242,7 +252,8 @@ async function checkActivation() {
   const year = new Date().getFullYear();
   assert.equal(state.client.clientCode, `CL-${year}-0043`, 'A code conflict retries with the next free client code');
   assert.equal(state.client.currentKycCaseId, 'k1', 'The activated KYC becomes the current KYC');
-  assert.equal(state.expirySyncedFor, 'k1', 'Activation keeps ID expiry records in step');
+  assert.equal(state.recordsSyncedFor, 'k1', 'Activation fills the client records (people, roles, expiry dates)');
+  assert.equal(state.recordsPrevious, null, 'A new client has no earlier KYC to fill the records from');
   assert.equal(state.client.riskLevel, 'HIGH');
   assert.equal(state.client.cddType, 'ENHANCED');
   assert.equal(state.client.email, 'primary@example.invalid');
@@ -279,7 +290,11 @@ async function checkAccess() {
   assert.equal(access.allowsByDefault(['SEF'], 'compliance', false), true);
   assert.equal(access.allowsByDefault(['SEF'], 'compliance', true), false);
   assert.equal(access.allowsByDefault(['OPERATING_TEAM'], 'compliance', true), false);
-  assert.equal(access.allowsByDefault(['ACCOUNTING_TEAM'], 'compliance', false), false);
+  // Accounting and HR open the register but see only their allocated clients (Phase 3); they never edit it.
+  assert.equal(access.allowsByDefault(['ACCOUNTING_TEAM'], 'compliance', false), true);
+  assert.equal(access.allowsByDefault(['HR_TEAM'], 'compliance', true), false);
+  assert.equal(access.allowsByDefault(['CEO'], 'compliance', false), true);
+  assert.equal(access.allowsByDefault(['CEO'], 'compliance', true), false, 'CEO is read-only');
 
   const guard = fs.readFileSync(path.join(root, 'backend/src/common/guards/roles.guard.ts'), 'utf8');
   assert.match(guard, /ComplianceClientsController: 'compliance'/);
@@ -287,8 +302,15 @@ async function checkAccess() {
 
   // The migration's grants for already-configured matrices must equal the code defaults.
   const migration = fs.readFileSync(path.join(root, 'backend/prisma/migrations/20261109100000_compliance_client_register/migration.sql'), 'utf8');
-  const granted = [...migration.matchAll(/\('([A-Z_]+)', 'compliance\.(view|edit)'\)/g)].map((match) => `${match[1]}:${match[2]}`).sort();
-  const roles = ['COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'ACCOUNTING_TEAM', 'HR_TEAM'];
+  const phase3 = fs.readFileSync(path.join(root, 'backend/prisma/migrations/20261122130000_client_allocation_ceo_role/migration.sql'), 'utf8');
+  assert.match(phase3, /'compliance\.view'/);
+  assert.match(phase3, /VALUES \(gen_random_uuid\(\)::text, 'CEO'/);
+  assert.match(phase3, /"name" IN \('ACCOUNTING_TEAM', 'HR_TEAM'\)/);
+  const granted = [
+    ...[...migration.matchAll(/\('([A-Z_]+)', 'compliance\.(view|edit)'\)/g)].map((match) => `${match[1]}:${match[2]}`),
+    'CEO:view', 'ACCOUNTING_TEAM:view', 'HR_TEAM:view'
+  ].sort();
+  const roles = ['COMPANY_ADMIN', 'OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM'];
   const expected = roles.flatMap((role) => [
     access.allowsByDefault([role], 'compliance', false) ? `${role}:view` : null,
     access.allowsByDefault([role], 'compliance', true) ? `${role}:edit` : null
@@ -343,7 +365,7 @@ async function checkProfileMapping() {
   assert.equal(mapped.keyContact.ref.section, 'KEY_CONTACT');
 }
 
-// Client-page edits overlay the approved KYC form without changing it; QID / passport are separate with expiries.
+// Older client-page edits (before the client records) overlay the approved KYC form without changing it.
 async function checkProfileEdits() {
   const form = {
     version: 1, status: 'FINAL', updatedAt: new Date('2026-11-01'),
@@ -387,35 +409,6 @@ async function checkProfileEdits() {
   assert.equal(officer.identityNumber, 'QID: 111 / Passport: X9');
   assert.equal(mapped.keyContact.passportExpiry, '2026-12-20');
 
-  const expiries = profile.identityExpiries(mapped);
-  const keys = expiries.map((item) => item.sourceKey).sort();
-  assert.deepEqual(keys, ['person:PASSPORT:P1', 'person:PASSPORT:X9', 'person:QID:111', 'person:QID:28499999999'],
-    'One expiry per document; the owner listed as shareholder and UBO is not duplicated');
-  assert.equal(expiries.find((item) => item.sourceKey === 'person:QID:28499999999').holderRole, 'Shareholder, UBO');
-
-  // Expiry sync: create, update, deactivate; manual records untouched.
-  const items = [
-    { id: 'manual', clientId: 'c1', tenantId: 'tenant-a', sourceKey: null, isActive: true },
-    { id: 'gone', clientId: 'c1', tenantId: 'tenant-a', sourceKey: 'person:QID:OLD', isActive: true, expiryDate: new Date('2026-12-01'), holderName: 'x', holderRole: 'x', documentNumber: 'OLD' }
-  ];
-  const audits = [];
-  const tx = {
-    clientExpiryItem: {
-      findMany: async ({ where }) => items.filter((item) => item.clientId === where.clientId && item.tenantId === where.tenantId && item.sourceKey !== null),
-      create: async ({ data }) => { items.push({ id: `i${items.length}`, ...data }); },
-      update: async ({ where, data }) => Object.assign(items.find((item) => item.id === where.id), data),
-      updateMany: async ({ where, data }) => items.filter((item) => where.id.in.includes(item.id)).forEach((item) => Object.assign(item, data))
-    },
-    auditLog: { create: async ({ data }) => audits.push(data) }
-  };
-  const summary = await syncIdentityExpiryItems(tx, { id: 'c1', tenantId: 'tenant-a' }, 'aml-user', expiries);
-  assert.deepEqual(summary, { created: 4, updated: 0, deactivated: 1 });
-  assert.equal(items.find((item) => item.id === 'gone').isActive, false, 'A document no longer on the profile is deactivated, not deleted');
-  assert.equal(items.find((item) => item.id === 'manual').isActive, true);
-  assert.equal(audits[0].metadata.action, 'IDENTITY_EXPIRY_SYNC');
-  const again = await syncIdentityExpiryItems(tx, { id: 'c1', tenantId: 'tenant-a' }, 'aml-user', expiries);
-  assert.deepEqual(again, { created: 0, updated: 0, deactivated: 0 }, 'A repeated sync changes nothing');
-
   // QID / passport alerts start at 60 days; company documents keep the 90-day reminder.
   const day = 86400000;
   const sent = [];
@@ -436,93 +429,6 @@ async function checkProfileEdits() {
   await new ComplianceRemindersService(reminderPrisma).sweep('tenant-a');
   assert.deepEqual(sent.sort(), ['cr80', 'p50'], 'No 90-day reminder for QID or passport');
 
-  // Edit endpoint: tenant scoped, field allow-list, audited, stored on the current KYC, expiry kept in step.
-  const stored = [];
-  const editAudits = [];
-  const synced = [];
-  const kycCases = [
-    { id: 'k-new', kycNumber: 'KYC-2026-0009', status: 'SUPERVISOR_REVIEW_PENDING', serviceId: null, kycForm: { id: 'f2' } },
-    { id: 'k-cur', kycNumber: 'KYC-2026-0003', status: 'CLIENT_ACTIVE', serviceId: 'svc', kycForm: { id: 'f1' } }
-  ];
-  const editPrisma = {
-    client: { findFirst: async ({ where }) => (where.tenantId === 'tenant-a' ? { id: 'c1', tenantId: 'tenant-a', name: 'Synthetic', status: 'ACTIVE', currentKycCaseId: 'k-cur', kycCases } : null) },
-    clientProfileOverride: {
-      findMany: async ({ where }) => stored.filter((row) => row.kycCaseId === where.kycCaseId),
-      upsert: async ({ where, create, update }) => {
-        const key = where.kycCaseId_section_rowId_field;
-        const found = stored.find((row) => row.kycCaseId === key.kycCaseId && row.section === key.section && row.rowId === key.rowId && row.field === key.field);
-        if (found) Object.assign(found, update); else stored.push(create);
-      }
-    },
-    auditLog: { create: async ({ data }) => editAudits.push(data) },
-    clientExpiryItem: { findMany: async () => [], create: async ({ data }) => synced.push(data), update: async () => null, updateMany: async () => null },
-    $transaction: async (callback) => callback(editPrisma)
-  };
-  const snapshots = [];
-  const editService = new ComplianceClientsService(editPrisma, { formSnapshot: async (id) => { snapshots.push(id); return form; } });
-  editService.findOne = async () => 'refreshed';
-  assert.equal(await editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'passportExpiry', value: '2027-03-01' }), 'refreshed');
-  assert.equal(snapshots[0], 'k-cur', 'Edits apply to the current KYC, not a re-KYC still in review');
-  assert.equal(stored[0].tenantId, 'tenant-a');
-  assert.equal(stored[0].rowLabel, 'Old Owner');
-  assert.equal(editAudits[0].entityType, 'ComplianceClient');
-  assert.equal(editAudits[0].metadata.action, 'CLIENT_PROFILE_FIELD_EDITED');
-  assert.equal(editAudits[0].metadata.to, '2027-03-01');
-  assert.ok(synced.some((item) => item.documentType === 'PASSPORT' && item.holderName === 'Old Owner'), 'A new passport expiry creates an Expiry record');
-  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'isUbo', value: 'true' }), /cannot be edited/);
-  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's2', field: 'qidNumber', value: '1' }), /individuals/);
-  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'qidExpiry', value: '05/01/2027' }), /YYYY-MM-DD/);
-  await assert.rejects(editService.updateProfileField(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', field: 'shareholderPercentage', value: '120' }), /between 0 and 100/);
-  await assert.rejects(editService.updateProfileField({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'COMPANY', field: 'legalName', value: 'x' }), /not found/);
-
-  // ID copy upload: linked to the person by normalized name, refused for corporate rows, updates number and expiry.
-  const storedFiles = [];
-  const docs = { sectionByKey: async (_tenant, key) => ({ id: 'sec-identity', key }), storeFiles: async (_user, client, section, files, options) => storedFiles.push({ client, section, files, options }) };
-  const idService = new ComplianceClientsService(editPrisma, { formSnapshot: async () => form }, undefined, docs);
-  const edits = [];
-  idService.updateProfileField = async (_user, _id, dto) => { edits.push(`${dto.section}|${dto.rowId}|${dto.field}=${dto.value}`); };
-  idService.findOne = async () => 'refreshed';
-  const file = { originalname: 'passport.pdf', mimetype: 'application/pdf', buffer: Buffer.from('%PDF-1.4') };
-  assert.equal(await idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'PASSPORT', documentNumber: ' N555 ', expiryDate: '2031-05-01' }, [file]), 'refreshed');
-  assert.equal(storedFiles[0].section.key, 'identity');
-  assert.equal(storedFiles[0].options.identity.personKey, 'OLD OWNER', 'Copies are linked by the normalized name');
-  assert.equal(storedFiles[0].options.identity.documentNumber, 'N555');
-  assert.deepEqual(edits, ['SHAREHOLDER|s1|passportNumber=N555', 'SHAREHOLDER|s1|passportExpiry=2031-05-01'], 'The person details follow the renewed copy');
-  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's2', identityType: 'QID' }, [file]), /individuals/);
-  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'CR' }, [file]), /QID or passport/);
-  await assert.rejects(idService.uploadIdentityDocument(actor, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'QID' }, []), /one file/);
-  await assert.rejects(idService.uploadIdentityDocument({ ...actor, tenantId: 'tenant-b' }, 'c1', { section: 'SHAREHOLDER', rowId: 's1', identityType: 'QID' }, [file]), /not found/);
-  assert.equal(profile.personKey('  samer   saleh '), 'SAMER SALEH');
-
-  // Using a KYC upload as a person's copy: only this client's KYC files in this company, read through KYC access.
-  const linkCalls = [];
-  const linkPrisma = {
-    client: { findFirst: async ({ where }) => (where.tenantId === 'tenant-a' ? { id: 'c1', tenantId: 'tenant-a' } : null) },
-    legalDocument: {
-      findFirst: async ({ where }) => (where.id === 'ld-1' && where.tenantId === 'tenant-a' && where.kycCase.clientId === 'c1'
-        ? { id: 'ld-1', kycCaseId: 'k-cur', documentType: 'Identity Proof - Director', kycCase: { kycNumber: 'KYC-2026-0003' } } : null)
-    }
-  };
-  const linkService = new ComplianceClientsService(linkPrisma, {
-    getLegalDocumentFile: async (_user, caseId, documentId) => { linkCalls.push(`${caseId}/${documentId}`); return { fileName: 'qid.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4') }; }
-  });
-  linkService.uploadIdentityDocument = async (_user, _id, input, files, note) => ({ input, file: files[0].originalname, note });
-  const linked = await linkService.linkKycIdentityDocument(actor, 'c1', { legalDocumentId: 'ld-1', section: 'OFFICER', rowId: 'm1', identityType: 'QID' });
-  assert.deepEqual(linkCalls, ['k-cur/ld-1'], 'The KYC file is read through the KYC service');
-  assert.equal(linked.file, 'qid.pdf');
-  assert.equal(linked.note, 'From KYC-2026-0003 (Identity Proof - Director)');
-  await assert.rejects(linkService.linkKycIdentityDocument(actor, 'c1', { legalDocumentId: 'other-client-doc', section: 'OFFICER', identityType: 'QID' }), /not found/);
-  await assert.rejects(linkService.linkKycIdentityDocument({ ...actor, tenantId: 'tenant-b' }, 'c1', { legalDocumentId: 'ld-1', section: 'OFFICER', identityType: 'QID' }), /not found/);
-
-  // Re-KYC is started from the current KYC with the edits applied.
-  let rekyc = null;
-  const rekycService = new ComplianceClientsService(editPrisma, {
-    formSnapshot: async () => form,
-    createRekycCase: async (user, client, source, effective) => { rekyc = { client, source, effective }; return { id: 'k-next', kycNumber: 'KYC-2026-0010' }; }
-  });
-  assert.deepEqual(await rekycService.startRekyc(actor, 'c1'), { id: 'k-next', kycNumber: 'KYC-2026-0010' });
-  assert.deepEqual(rekyc.source, { id: 'k-cur', kycNumber: 'KYC-2026-0003', serviceId: 'svc' });
-  assert.equal(rekyc.effective.sectionB.shareholders[0].passportExpiry, '2027-03-01', 'The re-KYC is prefilled with client-page edits');
 }
 
 // Final approval of a re-KYC makes it the current KYC without an engagement decision; onboarding is unchanged.
@@ -540,8 +446,7 @@ async function checkRekycCompletion() {
       completeRekyc: KycService.prototype.completeRekyc,
       notifyReadyForClientConversion: async () => state.notices.push('convert'),
       recordStatus: async (_tx, from, _user, to) => state.statuses.push([from.status, to]),
-      syncClientIdentityExpiry: async () => { state.synced = true; },
-      carryOverProfileEdits: async (_tx, _user, _case, previous) => { state.carriedFrom = previous; return { editsCarriedOver: 2, editsSkipped: [] }; },
+      syncClientRecords: async (_tx, _user, _case, previous) => { state.synced = true; state.recordsFrom = previous; return { seeded: false, created: 0, updated: 2, archived: 0, documentsLinked: 0 }; },
       audit: async (_tx, _user, _tenant, _type, _id, metadata) => state.audits.push(metadata),
       createNotification: async (_tx, _case, type, title) => state.notices.push(`${type}:${title}`)
     };
@@ -558,26 +463,8 @@ async function checkRekycCompletion() {
   assert.ok(rekyc.synced);
   assert.equal(rekyc.audits[0].action, 'CLIENT_REKYC_COMPLETED');
   assert.equal(rekyc.audits[0].previousKycCaseId, 'k-old');
-  assert.equal(rekyc.carriedFrom, 'k-old', 'Edits made on the previous KYC during the re-KYC are carried over');
-  assert.equal(rekyc.audits[0].editsCarriedOver, 2);
-
-  // Carry-over matching: same row id for shareholders, the person's name for officers (their ids change).
-  const late = [
-    { section: 'COMPANY', rowId: '', rowLabel: null, field: 'website', value: 'example.test' },
-    { section: 'SHAREHOLDER', rowId: 's1', rowLabel: 'Old Owner', field: 'qidExpiry', value: '2027-02-01' },
-    { section: 'OFFICER', rowId: 'old-manager-id', rowLabel: 'Board Member', field: 'passportExpiry', value: '2030-11-07' },
-    { section: 'OFFICER', rowId: 'renamed-id', rowLabel: 'Original Name', field: 'qidNumber', value: '1' },
-    { section: 'OFFICER', rowId: 'gone-id', rowLabel: 'Left The Company', field: 'qidNumber', value: '2' }
-  ];
-  const previous = [...late, { section: 'OFFICER', rowId: 'renamed-id', rowLabel: 'Original Name', field: 'fullName', value: 'New Name' }];
-  const { carried, skipped } = profile.carryOverOverrides(late, previous, {
-    sectionB: { shareholders: [{ id: 's1', fullName: 'Old Owner' }], ubos: [] },
-    sectionC: { managers: [{ id: 'fresh-1', fullName: 'Board Member' }, { id: 'fresh-2', fullName: 'New Name' }] }
-  });
-  assert.deepEqual(carried.map((item) => `${item.section}|${item.rowId}|${item.field}`), [
-    'COMPANY||website', 'SHAREHOLDER|s1|qidExpiry', 'OFFICER|fresh-1|passportExpiry', 'OFFICER|fresh-2|qidNumber'
-  ]);
-  assert.deepEqual(skipped.map((item) => item.rowLabel), ['Left The Company'], 'Edits for people no longer listed are skipped and reported');
+  assert.equal(rekyc.recordsFrom, 'k-old', 'The client records are updated from the re-KYC (filled from the previous KYC first when missing)');
+  assert.equal(rekyc.audits[0].records.updated, 2);
 
   const onboarding = await run('ONBOARDING');
   assert.deepEqual(onboarding.notices, ['convert']);
@@ -601,20 +488,28 @@ async function checkProfileAccess() {
     crrfRecord: { findFirst: async () => ({ riskRating: 'HIGH', updatedAt: new Date(), internalComment: 'confidential', documents: [] }) },
     kycInternalReview: { findFirst: async () => null },
     clientProfileOverride: { findMany: async () => [] },
-    clientDocument: { findMany: async ({ where }) => { assert.equal(where.tenantId, 'tenant-a'); return []; } }
+    clientDocument: { findMany: async ({ where }) => { assert.equal(where.tenantId, 'tenant-a'); return []; } },
+    clientEntityProfile: { findUnique: async () => null },
+    clientAllocation: { findMany: async () => [] },
+    clientPerson: { findMany: async ({ where }) => { assert.equal(where.tenantId, 'tenant-a'); return []; } }
   };
-  const kycService = { formSnapshot: async (caseId) => { seen.snapshotCase = caseId; return null; } };
+  const kycService = { formSnapshot: async () => null };
   const accessFor = (crrfAllowed) => ({ allows: async () => crrfAllowed, allowsByDefault: () => false });
+  const service = (access) => {
+    const created = new ComplianceClientsService(prisma, kycService, access);
+    created.ensureRecords = async (_user, _client, profileCase) => { seen.snapshotCase = profileCase?.id ?? null; };
+    return created;
+  };
 
-  const allowed = await new ComplianceClientsService(prisma, kycService, accessFor(true)).findOne(actor, 'c1');
-  assert.equal(seen.snapshotCase, 'k-active', 'The activated KYC case is the profile source');
+  const allowed = await service(accessFor(true)).findOne(actor, 'c1');
+  assert.equal(seen.snapshotCase, 'k-active', 'The activated KYC case seeds the client records');
   assert.deepEqual(seen.where.status, { in: ['ACTIVE', 'INACTIVE', 'ON_HOLD'] });
   assert.deepEqual(seen.where.NOT, { status: 'ON_HOLD', activatedAt: null, clientCode: null });
   assert.equal(allowed.crrf.riskRating, 'HIGH');
   assert.equal(allowed.crrf.internalComment, undefined, 'CRRF reviewer comments are never returned');
   assert.equal(allowed.client.tenantId, undefined);
 
-  const restricted = await new ComplianceClientsService(prisma, kycService, accessFor(false)).findOne({ ...actor, roles: ['OPERATING_TEAM'] }, 'c1');
+  const restricted = await service(accessFor(false)).findOne({ ...actor, roles: ['OPERATING_TEAM'] }, 'c1');
   assert.equal(restricted.crrf, null, 'Roles without CRRF access do not receive CRRF data');
   assert.equal(restricted.crrfRestricted, true);
 
@@ -901,7 +796,7 @@ async function main() {
   await checkClientsIntake();
   await checkActivation();
   await checkAccess();
-  console.log('Compliance client checks passed: review cycle, risk/CDD precedence, filters and tenant scoping, audited status/CDD updates, xlsx export, profile mapping and CRRF access, client-page edits overlaid on the KYC with audit, separate QID/passport with expiry sync and 60/30-day alerts, re-KYC prefill, client document folders, risk approval (four eyes), periodic reviews, screening alerts, expiry and one-time reminders, prospect intake, CL-YYYY-NNNN codes with retry, and access defaults (synthetic persistence).');
+  console.log('Compliance client checks passed: review cycle, risk/CDD precedence, filters and tenant scoping, audited status/CDD updates, xlsx export, profile mapping and CRRF access, older client-page edits overlaid on the KYC, 60/30-day ID alerts, records filled on activation and re-KYC (see check-client-records.cjs), client document folders, risk approval (four eyes), periodic reviews, screening alerts, expiry and one-time reminders, prospect intake, CL-YYYY-NNNN codes with retry, and access defaults (synthetic persistence).');
 }
 
 main().catch((error) => {

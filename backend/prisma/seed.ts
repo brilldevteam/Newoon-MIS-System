@@ -12,6 +12,7 @@ const roleNames = [
   'SEF',
   'MLRO',
   'DMLRO',
+  'CEO',
   'ACCOUNTING_TEAM',
   'HR_TEAM'
 ];

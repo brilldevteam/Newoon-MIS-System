@@ -72,6 +72,9 @@ export const CONTENT_WIDTH_PT = (CONTENT_WIDTH_MM / 25.4) * 72;
 export const COLORS = { bar: '792326', border: 'CBD5E1', header: 'F1F5F9', muted: '64748B', ink: '0F172A', groupFill: 'FEECEC', groupEdge: 'B81F23' };
 
 const record = (value: unknown) => (value && typeof value === 'object' ? value : {}) as Rec;
+// A person's name with the title typed on the form (Mr, Ms, Sheikh ...), as printed in the person tables.
+const titledName = (row: Rec) => text([String(row.title ?? '').trim(), String(row.fullName ?? '').trim()].filter(Boolean).join(' '));
+
 const rows = (value: unknown) => (Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') : []) as Rec[];
 const t = (value: string, bold = false): Inline => ({ text: value, bold });
 const line = (parts: Inline[] | string, extra: Omit<Line, 'parts'> = {}): Line => ({ parts: typeof parts === 'string' ? [t(parts)] : parts, ...extra });
@@ -160,6 +163,14 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
     return sum + (Number.isFinite(percentage) ? percentage : 0);
   }, 0);
   const beneficial = beneficialOwners(parties, rows(b.ubos));
+  // People answered Yes to a per-person question (PEP, dual citizenship) on any person row, each name once.
+  const flaggedPeople = (key: 'isPep' | 'dualCitizenship') => {
+    const names = new Set<string>();
+    for (const row of [...managers, ...parties, ...beneficial, e]) {
+      if (/^yes$/i.test(String(row[key] ?? '').trim())) names.add(String(titledName(row)).trim());
+    }
+    return [...names].filter((name) => name && name !== '-');
+  };
   const diagramParties: Rec[] = [...parties, ...beneficial.filter((row) => row.parentRowId && !parties.some((party) => party.id === row.id || party.fullName === row.fullName && party.identityNumber === row.identityNumber)).map<Rec>((row, index) => ({ ...row, id: text(row.id) || `ubo-${index + 1}`, shareholderType: 'Individual', isUbo: true }))];
   const managers = rows(c.managers);
 
@@ -214,7 +225,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
     section('B. Manager / Authorized Signatory / Directors / Secretary', [data(
       [['Full name', 15], ['Position', 13], ['Entity', 14], ['Nationality', 11], ['Address', 15], ['DOB', 10], ['ID No.', 12], ['Signatory', 10]],
       managers.map((row) => [
-        text(row.fullName), optionText(row.position, row.positionOther), text(row.entityName), optionText(row.nationality) || text(row.nationalityAndAddress),
+        titledName(row), optionText(row.position, row.positionOther), text(row.entityName), optionText(row.nationality) || text(row.nationalityAndAddress),
         text(row.address), date(row.dateOfBirth), text(row.identityNumber), row.isAuthorizedSignatory ? 'Yes' : 'No'
       ])
     )]),
@@ -223,7 +234,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       data(
         [['Type', 9], ['Full name', 13], ['Nationality / country', 11], ['DOB / Incorporation', 12], ['QID / Passport / CR', 12], ['Shareholder %', 11], ['Address', 13], ['Linked client', 9], ['Beneficial person', 10]],
         parties.map((row) => [
-          text(row.shareholderType) || 'Individual', text(row.fullName), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth),
+          text(row.shareholderType) || 'Individual', titledName(row), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth),
           text(row.identityNumber), text(row.shareholderPercentage ?? row.ownershipPercentage), text(row.residenceAddress), text(row.linkedClientName), row.isUbo ? 'Yes' : 'No'
         ])
       ),
@@ -233,7 +244,7 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       subheading('UBO List'),
       data(
         [['Beneficial person', 17], ['Company', 22], ['Nationality', 10], ['DOB', 10], ['Identity No.', 14], ['UBO %', 8], ['Address', 19]],
-        beneficial.map((row) => [text(row.fullName), uboCompanyName(row, parties), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth), text(row.identityNumber), text(row.uboInterestPercentage ?? row.ownershipPercentage), text(row.residenceAddress)])
+        beneficial.map((row) => [titledName(row), uboCompanyName(row, parties), optionText(row.nationality, row.nationalityOther), date(row.dateOfBirth), text(row.identityNumber), text(row.uboInterestPercentage ?? row.ownershipPercentage), text(row.residenceAddress)])
       ),
       { kind: 'diagram', title: 'Control Structure', diagram, emptyText: 'No control structure generated.' }
     ]),
@@ -244,11 +255,14 @@ export async function buildKycDocumentModel(payload: KycExportPayload, documentV
       ['Any sanction exposure?', text(d.sanctionQuestion)],
       ['Sanction details', text(d.sanctionDetails)],
       ['Any dual citizenship?', text(d.dualCitizenshipQuestion)],
-      ['Dual citizenship details', text(d.dualCitizenshipDetails)]
+      ['Dual citizenship details', text(d.dualCitizenshipDetails)],
+      // Per-person answers on the rows above, listed only when somebody answered Yes (2026-11-23).
+      ...(flaggedPeople('isPep').length ? [['PEP (by person)', flaggedPeople('isPep').join('; ')] as [string, string]] : []),
+      ...(flaggedPeople('dualCitizenship').length ? [['Dual citizenship (by person)', flaggedPeople('dualCitizenship').join('; ')] as [string, string]] : [])
     ])])]),
 
     section('E. Key Communication Person', [fields([
-      ['Full name', text(e.fullName)],
+      ['Full name', titledName(e)],
       ['Position / Job title', optionText(e.position, e.positionOther)],
       ['Nationality', optionText(e.nationality, e.nationalityOther)],
       ['QID / Passport Number', text(e.identityNumber)],

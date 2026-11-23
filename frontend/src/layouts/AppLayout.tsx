@@ -15,6 +15,7 @@ import {
   SearchCheck,
   SlidersHorizontal,
   ShieldCheck,
+  Sparkles,
   ShieldEllipsis,
   UserCheck,
   Users,
@@ -59,6 +60,7 @@ const navItems: NavItem[] = [
   { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
   { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
   { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin, area: 'administration' },
+  { to: '/settings/ai-document-reading', label: 'AI Document Reading', icon: Sparkles, roles: workflowRoles.userAdmin, area: 'administration' },
   { to: '/access-control', label: 'Access Control', icon: SlidersHorizontal, roles: workflowRoles.admin }
 ];
 
@@ -424,6 +426,7 @@ function notificationLink(notification: AppNotification) {
     const tab = {
       COMPLIANCE_SCREENING_ALERT: 'screening',
       COMPLIANCE_DOCUMENT_EXPIRING: 'expiry',
+      COMPLIANCE_LEGAL_DOCUMENT_CHANGED: 'documents',
       COMPLIANCE_REVIEW_DUE: 'reviews',
       COMPLIANCE_RISK_CHANGE_REQUESTED: 'reviews',
       COMPLIANCE_RISK_CHANGE_DECIDED: 'reviews'

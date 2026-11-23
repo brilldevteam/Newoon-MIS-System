@@ -1,9 +1,10 @@
-import { FileText, Plus } from 'lucide-react';
+import { Download, FileText, Plus } from 'lucide-react';
 import { FormEvent, ReactNode, useState } from 'react';
 import { MultiFileUploadControl } from './MultiFileUploadControl';
 import { useToast } from './ToastProvider';
 import { getApiErrorMessage } from '../services/api';
 import { CddType, cddLabels, ClientRiskLevel, riskLabels, viewClientDocument } from '../services/compliance-clients.service';
+import { downloadExpiryExcel, ExpiryWindow } from '../services/legal-documents.service';
 import {
   cancelClientReview,
   cancelClientRiskChange,
@@ -488,7 +489,33 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
   const { busy, run } = useAction();
   const [editing, setEditing] = useState<{ id?: string; value: ExpiryPayload } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const items = data.expiryItems.filter((item) => showArchived || item.isActive);
+  const [range, setRange] = useState<ExpiryWindow>('ALL');
+  const [downloading, setDownloading] = useState(false);
+  const { showToast } = useToast();
+  // Requirement R08: expired, within 30 days and within 60 days (not yet expired).
+  const inWindow = (item: ClientExpiryRecord) => {
+    if (range === 'ALL') return true;
+    if (!item.isActive) return false;
+    const days = Math.floor((new Date(item.expiryDate).getTime() - Date.now()) / 86_400_000);
+    return range === 'EXPIRED' ? item.expiryState === 'EXPIRED' : item.expiryState !== 'EXPIRED' && days <= Number(range);
+  };
+  const items = data.expiryItems.filter((item) => (showArchived || item.isActive) && inWindow(item));
+  const counts = {
+    EXPIRED: data.expiryItems.filter((item) => item.isActive && item.expiryState === 'EXPIRED').length,
+    '30': data.expiryItems.filter((item) => item.isActive && (item.expiryState === 'DUE_30')).length,
+    '60': data.expiryItems.filter((item) => item.isActive && (item.expiryState === 'DUE_30' || item.expiryState === 'DUE_60')).length
+  };
+
+  async function download() {
+    setDownloading(true);
+    try {
+      await downloadExpiryExcel(clientId, range);
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to download the expiry list.'), 'error');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -508,9 +535,21 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
   return (
     <Card
       title="Expiry tracking"
-      description="Passports, QIDs and company documents with expiry dates. Reminders go out at 60 and 30 days for QIDs and passports (90, 60 and 30 days for company documents) and on expiry. QID and passport dates entered on a person's details appear here automatically."
-      action={canEdit && !editing ? <button type="button" onClick={() => setEditing({ value: { ...emptyExpiry } })} className={`${primaryButton} inline-flex items-center gap-1.5`}><Plus className="h-4 w-4" />Add document</button> : undefined}
+      description="Passports, QIDs and company documents with expiry dates. Reminders go out at 60 and 30 days for QIDs and passports (90, 60 and 30 days for company documents) and on expiry. QID, passport and national address dates entered on a person's details, and the CR expiry on the Company tab, appear here automatically."
+      action={(
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={downloading} onClick={download} className={`${secondaryButton} inline-flex items-center gap-1.5`}>
+            <Download className="h-4 w-4" />{downloading ? 'Preparing...' : 'Download Excel'}
+          </button>
+          {canEdit && !editing ? <button type="button" onClick={() => setEditing({ value: { ...emptyExpiry } })} className={`${primaryButton} inline-flex items-center gap-1.5`}><Plus className="h-4 w-4" />Add document</button> : null}
+        </div>
+      )}
     >
+      <div className="mb-4 flex flex-wrap gap-1.5" role="group" aria-label="Show documents">
+        {([['ALL', 'All'], ['EXPIRED', `Expired (${counts.EXPIRED})`], ['30', `Within 30 days (${counts['30']})`], ['60', `Within 60 days (${counts['60']})`]] as Array<[ExpiryWindow, string]>).map(([key, label]) => (
+          <button key={key} type="button" onClick={() => setRange(key)} className={`rounded-full px-3 py-1 text-xs font-medium ${range === key ? 'bg-brand-600 text-white' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>{label}</button>
+        ))}
+      </div>
       {editing ? (
         <form onSubmit={save} className="mb-5 grid gap-4 rounded-md bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-3">
           <label className={labelClass}>
@@ -573,7 +612,7 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
             <tbody className="divide-y divide-slate-100">
               {items.map((item) => (
                 <tr key={item.id} className={item.isActive ? '' : 'opacity-60'}>
-                  <td className="py-2 pr-4 text-slate-900">{item.documentType === 'OTHER' ? item.documentLabel : expiryTypeLabels[item.documentType]}</td>
+                  <td className="py-2 pr-4 text-slate-900">{item.documentLabel || expiryTypeLabels[item.documentType]}</td>
                   <td className="py-2 pr-4">
                     <p className="text-slate-900">{item.holderName}</p>
                     {item.holderRole ? <p className="text-xs text-slate-500">{item.holderRole}</p> : null}
@@ -584,7 +623,9 @@ export function ExpiryPanel({ clientId, data, canEdit, onChange, holderSuggestio
                   {canEdit ? (
                     <td className="whitespace-nowrap py-2 text-right">
                       {item.sourceKey ? (
-                        <span className="text-xs text-slate-500" title="Change this date with the pencil on the person's QID / passport details">From person details</span>
+                        <span className="text-xs text-slate-500" title={item.sourceKey.startsWith('legal:') ? 'Change this date in Legal Documents' : item.sourceKey.startsWith('entity:') ? 'Change this date on the Company tab' : "Change this date on the person's details"}>
+                          {item.sourceKey.startsWith('legal:') ? 'From legal documents' : item.sourceKey.startsWith('entity:') ? 'From company details' : 'From person details'}
+                        </span>
                       ) : (
                         <>
                           <button type="button" onClick={() => setEditing({ id: item.id, value: toPayload(item, item.isActive) })} className="text-xs font-medium text-brand-700 hover:text-brand-800">Edit</button>

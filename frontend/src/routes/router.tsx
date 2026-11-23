@@ -30,6 +30,7 @@ import { TenantsPage } from '../pages/TenantsPage';
 import { UploadLegalDocumentsPage } from '../pages/UploadLegalDocumentsPage';
 import { UsersPage } from '../pages/UsersPage';
 import { AccessControlPage } from '../pages/AccessControlPage';
+import { AiDocumentReadingPage } from '../pages/AiDocumentReadingPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import { HomeRedirect, RequireAccess, RequireRoles } from './RequireRoles';
 import { workflowRoles } from '../utils/access-control';
@@ -97,7 +98,10 @@ export const router = createBrowserRouter([
           },
           {
             element: <RequireAccess area="administration" fallbackRoles={workflowRoles.userAdmin} />,
-            children: [{ path: '/users', element: <UsersPage /> }]
+            children: [
+              { path: '/users', element: <UsersPage /> },
+              { path: '/settings/ai-document-reading', element: <AiDocumentReadingPage /> }
+            ]
           },
           {
             element: <RequireRoles roles={workflowRoles.admin} />,

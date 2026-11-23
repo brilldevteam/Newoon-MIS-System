@@ -74,6 +74,8 @@ export class NotificationsService {
       types.add(NotificationType.COMPLIANCE_DOCUMENT_EXPIRING);
       types.add(NotificationType.COMPLIANCE_SCREENING_ALERT);
       types.add(NotificationType.COMPLIANCE_RISK_CHANGE_DECIDED);
+      // Legal and ID documents added, replaced or removed (often by Operations) so AML can check the KYC.
+      types.add(NotificationType.COMPLIANCE_LEGAL_DOCUMENT_CHANGED);
     }
     if (this.hasAnyRole(user, ['DMLRO', 'MLRO'])) {
       types.add(NotificationType.COMPLIANCE_RISK_CHANGE_REQUESTED);

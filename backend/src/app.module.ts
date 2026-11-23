@@ -1,3 +1,4 @@
+import { AiSettingsModule } from './ai-settings/ai-settings.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { join } from 'path';
@@ -39,6 +40,7 @@ import { AccessControlModule } from './access-control/access-control.module';
     TenantModulesModule,
     ClientsModule,
     ComplianceClientsModule,
+    AiSettingsModule,
     EnquiriesModule,
     KycModule,
     DocumentsModule,

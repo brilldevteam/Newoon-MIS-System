@@ -51,7 +51,8 @@ function areaForController(name: string) {
     ApprovalsController: 'approvals',
     UsersController: 'administration',
     RolesController: 'administration',
-    AuditLogsController: 'administration'
+    AuditLogsController: 'administration',
+    AiSettingsController: 'administration'
     // Tenants, TenantModules, Modules and Permissions manage the whole platform across companies,
     // so they stay Super Admin only (their @Roles) and are deliberately not grantable through the matrix.
   };

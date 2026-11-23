@@ -64,6 +64,8 @@ export type ComplianceClientFilters = {
 };
 
 export type ComplianceClientPage = {
+  // What the signed-in user sees (backend client-access.ts).
+  access: ClientAccess;
   items: ComplianceClient[];
   pagination: { page: number; pageSize: number; total: number; totalPages: number };
   stats: ComplianceClientStats;
@@ -92,59 +94,98 @@ export function listComplianceClients(filters: ComplianceClientFilters) {
   return api.get<ComplianceClientPage>('/compliance/clients', { params: cleanParams(filters) }).then((response) => response.data);
 }
 
-export type OfficerRole = 'DIRECTOR' | 'MANAGER' | 'SECRETARY' | 'SEF' | 'SIGNATORY' | 'OTHER';
+// Client records (2026-11-22): one record for the company and one per person. A person holds any number of roles
+// and appears on every tab that lists one of them, so an edit shows everywhere.
+export type PersonRoleType =
+  | 'SHAREHOLDER' | 'UBO' | 'DIRECTOR' | 'MANAGER' | 'SECRETARY' | 'SEF' | 'AUTHORISED_SIGNATORY' | 'KEY_CONTACT'
+  | 'CEO' | 'CFO' | 'COO' | 'MANAGING_DIRECTOR' | 'GENERAL_MANAGER' | 'CHAIRMAN' | 'OTHER';
 
-export type ProfileSection = 'COMPANY' | 'SHAREHOLDER' | 'UBO' | 'OFFICER' | 'KEY_CONTACT';
-export type ProfileRef = { section: ProfileSection; rowId: string; rowLabel: string | null };
+export const personRoleLabels: Record<PersonRoleType, string> = {
+  SHAREHOLDER: 'Shareholder',
+  UBO: 'UBO',
+  DIRECTOR: 'Director',
+  MANAGER: 'Manager',
+  SECRETARY: 'Secretary',
+  SEF: 'SEF',
+  AUTHORISED_SIGNATORY: 'Authorised Signatory',
+  KEY_CONTACT: 'Key Communication Person',
+  CEO: 'CEO',
+  CFO: 'CFO',
+  COO: 'COO',
+  MANAGING_DIRECTOR: 'Managing Director',
+  GENERAL_MANAGER: 'General Manager',
+  CHAIRMAN: 'Chairman',
+  OTHER: 'Other'
+};
 
-export type PersonIdentity = {
-  identityNumber: string | null;
+// Same rules as the backend (client-records.ts).
+export const corporateRoles: PersonRoleType[] = ['SHAREHOLDER', 'DIRECTOR', 'SECRETARY', 'OTHER'];
+export const percentRoles: PersonRoleType[] = ['SHAREHOLDER', 'UBO'];
+export const personTitles = ['Mr', 'Ms', 'Mrs', 'Dr', 'Sheikh', 'Sheikha'];
+
+export type ClientPersonRole = {
+  id: string;
+  role: PersonRoleType;
+  title: string;
+  percentage: string | null;
+  viaPersonId: string | null;
+  sourceSection: string | null;
+  sourceRowId: string | null;
+};
+
+export type ClientPassport = { id: string; passportNumber: string; issuingCountry: string | null; expiryDate: string | null; isPrimary: boolean };
+
+export type ClientPerson = {
+  id: string;
+  partyType: 'INDIVIDUAL' | 'CORPORATE';
+  title: string | null;
+  fullName: string;
+  nationality: string | null;
+  dualCitizenship: boolean | null;
+  otherNationality: string | null;
+  dateOfBirth: string | null;
+  address: string | null;
+  telephone: string | null;
+  email: string | null;
+  isPep: boolean | null;
+  pepDetails: string | null;
+  representedEntity: string | null;
   qidNumber: string | null;
   qidExpiry: string | null;
-  passportNumber: string | null;
-  passportExpiry: string | null;
+  nationalAddressExpiry: string | null;
+  registrationNumber: string | null;
+  linkedClientName: string | null;
   // Combined "QID / Passport" value from an older KYC that has not been split yet.
   legacyIdentity: string | null;
+  passports: ClientPassport[];
+  roles: ClientPersonRole[];
+  // Fields changed on the client page (passport changes are "passport:<id>").
+  edited: string[];
 };
 
-export type ProfileParty = PersonIdentity & {
-  ref: ProfileRef;
-  id: string | null;
-  fullName: string;
-  partyType: string | null;
-  isCorporate: boolean;
-  nationality: string | null;
-  dateOfBirth: string | null;
-  address: string | null;
-  percentage: string | null;
-  percentageField: 'shareholderPercentage' | 'uboInterestPercentage';
-  isUbo: boolean;
-  linkedCompany: string | null;
+export type EntityField =
+  | 'legalName' | 'legalForm' | 'commercialRegistrationNo' | 'crExpiryDate' | 'dateOfIncorporation' | 'countryOfIncorporation' | 'placeOfIncorporation'
+  | 'registeredOfficeAddress' | 'shareCapital' | 'taxIdentificationNo' | 'poBox' | 'telephone' | 'email' | 'website' | 'businessNature'
+  | 'relatedIndustry' | 'licenseActivities' | 'prospectiveServices' | 'financialYearEnd' | 'auditorName';
+
+export type ClientEntity = Partial<Record<EntityField, string | null>> & { edited: string[] };
+
+// What the signed-in user sees on a client (backend client-access.ts): the tabs and whether they manage allocations.
+export type ClientAccess = {
+  level: 'FULL' | 'OPERATIONS' | 'ALLOCATED';
+  tabs: string[];
+  canManageAllocation: boolean;
+  seesPassports: boolean;
+  seesAmlData: boolean;
 };
 
-export type ProfileOfficer = PersonIdentity & {
-  ref: ProfileRef;
-  id: string | null;
-  fullName: string;
-  positions: string[];
-  roles: OfficerRole[];
-  entityName: string | null;
-  nationality: string | null;
-  dateOfBirth: string | null;
-  address: string | null;
-  isAuthorizedSignatory: boolean;
-};
-
-export type ProfileKeyContact = PersonIdentity & {
-  ref: ProfileRef;
-  fullName: string | null;
-  position: string | null;
-  nationality: string | null;
-  mobileNumber: string | null;
-  email: string | null;
-};
+export type StaffUser = { id: string; firstName: string; lastName: string; email: string; roles: string[] };
+export type ClientAllocation = { id: string; createdAt: string; user: StaffUser };
 
 export type ComplianceClientDetail = {
+  access: ClientAccess;
+  // Staff allocated to the client (shown to full access only).
+  allocations: ClientAllocation[];
   client: ComplianceClient & { industry: string | null };
   contacts: Array<{ id: string; name: string; email: string | null; phone: string | null; position: string | null; isPrimary: boolean }>;
   engagements: Array<{ id: string; engagementNumber: string; serviceName: string; description: string | null; status: string; startDate: string | null; endDate: string | null; kycCaseId: string | null; createdAt: string }>;
@@ -154,21 +195,11 @@ export type ComplianceClientDetail = {
   }>;
   profileCase: { id: string; kycNumber: string; status: string } | null;
   profile: {
-    formVersion: number;
-    formStatus: string;
-    formUpdatedAt: string;
-    editCount: number;
-    company: Record<
-      | 'legalName' | 'legalForm' | 'commercialRegistrationNo' | 'countryOfIncorporation' | 'dateOfIncorporation' | 'registeredOfficeAddress'
-      | 'telephone' | 'email' | 'website' | 'businessNature' | 'relatedIndustry' | 'licenseActivities' | 'taxIdentificationNo' | 'prospectiveServices',
-      string | null
-    >;
-    shareholders: ProfileParty[];
-    ubos: ProfileParty[];
-    officers: ProfileOfficer[];
-    keyContact: ProfileKeyContact;
-  } | null;
-  editedFields: string[];
+    // KYC the KYC-held values were last taken from.
+    source: { id: string; kycNumber: string } | null;
+    company: ClientEntity;
+    people: ClientPerson[];
+  };
   identityDocuments: IdentityDocument[];
   legalDocuments: Array<{ id: string; kycCaseId: string; documentType: string; fileName: string; mimeType: string | null; createdAt: string }>;
   riskHistory: Array<{
@@ -188,13 +219,52 @@ export function updateComplianceClient(id: string, payload: ComplianceClientUpda
   return api.patch<ComplianceClient>(`/compliance/clients/${id}`, payload).then((response) => response.data);
 }
 
-export function updateComplianceProfileField(id: string, payload: { section: ProfileSection; rowId?: string; field: string; value: string | null }) {
-  return api.patch<ComplianceClientDetail>(`/compliance/clients/${id}/profile`, payload).then((response) => response.data);
+const detailUrl = (id: string) => `/compliance/clients/${id}`;
+
+export function updateEntityField(id: string, field: EntityField, value: string | null) {
+  return api.patch<ComplianceClientDetail>(`${detailUrl(id)}/entity`, { field, value }).then((response) => response.data);
 }
 
-// A QID or passport copy uploaded from a person's details; personKey is the person's normalized full name.
+export function addClientPerson(id: string, payload: { partyType: 'INDIVIDUAL' | 'CORPORATE'; fullName: string; role: PersonRoleType; title?: string; percentage?: string }) {
+  return api.post<ComplianceClientDetail>(`${detailUrl(id)}/people`, payload).then((response) => response.data);
+}
+
+export function updatePersonField(id: string, personId: string, field: string, value: string | null) {
+  return api.patch<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}`, { field, value }).then((response) => response.data);
+}
+
+export function addPersonRole(id: string, personId: string, payload: { role: PersonRoleType; title?: string; percentage?: string; viaPersonId?: string }) {
+  return api.post<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/roles`, payload).then((response) => response.data);
+}
+
+export function updatePersonRole(id: string, personId: string, roleId: string, payload: { percentage?: string | null; viaPersonId?: string | null }) {
+  return api.patch<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/roles/${roleId}`, payload).then((response) => response.data);
+}
+
+export function removePersonRole(id: string, personId: string, roleId: string, reason?: string) {
+  return api.post<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/roles/${roleId}/remove`, { reason: reason?.trim() || undefined }).then((response) => response.data);
+}
+
+export function addPersonPassport(id: string, personId: string, payload: { passportNumber: string; issuingCountry?: string; expiryDate?: string }) {
+  const body = { passportNumber: payload.passportNumber, issuingCountry: payload.issuingCountry?.trim() || undefined, expiryDate: payload.expiryDate || undefined };
+  return api.post<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/passports`, body).then((response) => response.data);
+}
+
+export type PassportField = 'passportNumber' | 'issuingCountry' | 'expiryDate' | 'isPrimary';
+
+export function updatePersonPassport(id: string, personId: string, passportId: string, field: PassportField, value: string | null) {
+  return api.patch<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/passports/${passportId}`, { field, value }).then((response) => response.data);
+}
+
+export function removePersonPassport(id: string, personId: string, passportId: string, reason?: string) {
+  return api.post<ComplianceClientDetail>(`${detailUrl(id)}/people/${personId}/passports/${passportId}/remove`, { reason: reason?.trim() || undefined }).then((response) => response.data);
+}
+
+// A QID or passport copy uploaded from a person's details, linked by personId (older copies by personKey, the
+// person's normalized full name, until they are linked).
 export type IdentityDocument = {
   id: string;
+  personId: string | null;
   personKey: string;
   personName: string | null;
   identityType: 'QID' | 'PASSPORT';
@@ -213,12 +283,12 @@ export function personKey(fullName: string | null | undefined) {
 
 export function uploadIdentityDocument(
   clientId: string,
-  payload: { section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT'; documentNumber?: string; expiryDate?: string; file: File }
+  payload: { personId: string; identityType: 'QID' | 'PASSPORT'; passportId?: string; documentNumber?: string; expiryDate?: string; file: File }
 ) {
   const data = new FormData();
-  data.append('section', payload.section);
-  if (payload.rowId) data.append('rowId', payload.rowId);
+  data.append('personId', payload.personId);
   data.append('identityType', payload.identityType);
+  if (payload.passportId) data.append('passportId', payload.passportId);
   if (payload.documentNumber?.trim()) data.append('documentNumber', payload.documentNumber.trim());
   if (payload.expiryDate) data.append('expiryDate', payload.expiryDate);
   data.append('files', payload.file);
@@ -251,11 +321,23 @@ export function readIdentityDocument(clientId: string, identityType: 'QID' | 'PA
 
 export function linkKycIdentityDocument(
   clientId: string,
-  payload: { legalDocumentId: string; section: ProfileSection; rowId: string; identityType: 'QID' | 'PASSPORT' }
+  payload: { legalDocumentId: string; personId: string; identityType: 'QID' | 'PASSPORT'; passportId?: string }
 ) {
   return api
-    .post<ComplianceClientDetail & { readFromDocument: { documentNumber: string; expiryDate: string } | null }>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, rowId: payload.rowId || undefined }, { timeout: 120000 })
+    .post<ComplianceClientDetail & { readFromDocument: { documentNumber: string; expiryDate: string } | null }>(`/compliance/clients/${clientId}/identity-documents/from-kyc`, { ...payload, passportId: payload.passportId || undefined }, { timeout: 120000 })
     .then((response) => response.data);
+}
+
+export function getAllocationCandidates(id: string) {
+  return api.get<StaffUser[]>(`/compliance/clients/${id}/allocations/candidates`).then((response) => response.data);
+}
+
+export function allocateStaff(id: string, userId: string) {
+  return api.post<ComplianceClientDetail>(`/compliance/clients/${id}/allocations`, { userId }).then((response) => response.data);
+}
+
+export function removeStaffAllocation(id: string, allocationId: string) {
+  return api.post<ComplianceClientDetail>(`/compliance/clients/${id}/allocations/${allocationId}/remove`, {}).then((response) => response.data);
 }
 
 export function startComplianceRekyc(id: string) {

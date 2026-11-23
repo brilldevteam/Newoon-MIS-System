@@ -4,6 +4,8 @@ import { randomBytes } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { extname, join, normalize } from 'path';
 import { COMPLIANCE_REGISTER_WHERE } from '../common/client-compliance';
+import { assertClientTab, clientAccessLevel, clientScopeWhere } from './client-access';
+
 import { isPathInsideRoot, standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { userSummarySelect } from '../common/user-summary';
@@ -13,7 +15,8 @@ export type UploadedClientFile = { originalname: string; mimetype?: string; size
 
 // Folders every tenant starts with: the legacy CDD and Monitoring tabs plus its four Compliance Documentation sections.
 export const DEFAULT_DOCUMENT_SECTIONS: Array<{ key: string; title: string; description: string; category: ClientDocumentCategory; sortOrder: number }> = [
-  { key: 'cdd', title: 'CDD Documents', description: 'Customer due diligence evidence for this client.', category: 'CDD', sortOrder: 10 },
+  // Shown as EDD on the client page (2026-11-22); the key and category stay 'cdd' / CDD so stored folders keep working.
+  { key: 'cdd', title: 'EDD Documents', description: 'Enhanced due diligence evidence for this client.', category: 'CDD', sortOrder: 10 },
   { key: 'identity', title: 'Identity Documents', description: 'QID and passport copies of the people on this client. Upload renewed copies from the details of each person.', category: 'CDD', sortOrder: 12 },
   { key: 'screening', title: 'Screening Evidence', description: 'Evidence attached to ongoing screening records.', category: 'SCREENING', sortOrder: 15 },
   { key: 'monitoring', title: 'Ongoing Monitoring', description: 'Ongoing monitoring evidence, reviews and correspondence.', category: 'MONITORING', sortOrder: 20 },
@@ -41,6 +44,7 @@ const documentSelect = {
 
 export type IdentityDocumentInput = {
   personKey: string;
+  personId?: string | null;
   personName: string;
   identityType: 'QID' | 'PASSPORT';
   documentNumber: string | null;
@@ -53,7 +57,9 @@ export class ComplianceDocumentsService {
 
   // Sections with this client's current (not deleted) documents. Inactive sections still show when they hold files.
   async listClientDocuments(user: RequestUser, clientId: string) {
+    assertClientTab(user, 'compliance-docs');
     const client = await this.findClient(user, clientId);
+    const full = clientAccessLevel(user) === 'FULL';
     await this.ensureDefaultSections(client.tenantId);
     const [sections, documents] = await Promise.all([
       this.prisma.clientDocumentSection.findMany({
@@ -71,6 +77,8 @@ export class ComplianceDocumentsService {
       sections: sections
         .map((section) => ({ ...section, documents: documents.filter((document) => document.sectionId === section.id) }))
         .filter((section) => section.isActive || section.documents.length)
+        // EDD, monitoring and screening folders are for full access only.
+        .filter((section) => full || section.category === 'COMPLIANCE')
     };
   }
 
@@ -142,6 +150,23 @@ export class ComplianceDocumentsService {
     }
   }
 
+  // Stores one checked file for a client (legal documents register) and returns where it is; the caller records it.
+  writeClientFile(client: { id: string; tenantId: string }, file: UploadedClientFile) {
+    validateUploadFiles([file], standardDocumentKinds, 'document');
+    const folder = join(this.uploadRoot(), client.tenantId, client.id);
+    mkdirSync(folder, { recursive: true });
+    const fileName = this.safeFileName(file.originalname);
+    const storedFileName = `${Date.now()}-${randomBytes(6).toString('hex')}${extname(fileName).toLowerCase()}`;
+    writeFileSync(join(folder, storedFileName), file.buffer);
+    return { fileName, storagePath: `${client.tenantId}/${client.id}/${storedFileName}`, mimeType: file.mimetype || null, size: file.size || file.buffer.length };
+  }
+
+  // Reads a stored client file; null when it is missing or outside the upload folder.
+  readClientFile(storagePath: string | null | undefined) {
+    const filePath = storagePath ? this.resolvePath(storagePath) : null;
+    return filePath ? readFileSync(filePath) : null;
+  }
+
   async sectionByKey(tenantId: string, key: string) {
     await this.ensureDefaultSections(tenantId);
     return this.prisma.clientDocumentSection.findFirstOrThrow({ where: { tenantId, key } });
@@ -153,6 +178,13 @@ export class ComplianceDocumentsService {
       where: { id: documentId, clientId: client.id, tenantId: client.tenantId, deletedAt: null }
     });
     if (!document) throw new NotFoundException('Document not found.');
+    // QID / passport copies are shown on the people tabs; other files follow the folders the user may see.
+    const level = clientAccessLevel(user);
+    const section = level === 'FULL' ? null : await this.prisma.clientDocumentSection.findUnique({ where: { id: document.sectionId }, select: { category: true } });
+    const allowed = level === 'FULL'
+      || (level === 'OPERATIONS' && (Boolean(document.identityType) || section?.category === 'COMPLIANCE'))
+      || (level === 'ALLOCATED' && document.identityType === 'QID');
+    if (!allowed) throw new NotFoundException('Document not found.');
     const filePath = this.resolvePath(document.storagePath);
     if (!filePath) throw new NotFoundException('The document file is missing from storage.');
     return { fileName: document.fileName, mimeType: document.mimeType, content: readFileSync(filePath) };
@@ -258,7 +290,7 @@ export class ComplianceDocumentsService {
   private tenantWhere(user: RequestUser) {
     if (user.roles.includes('SUPER_ADMIN')) return {};
     if (!user.tenantId) throw new ForbiddenException('User is not assigned to a tenant');
-    return { tenantId: user.tenantId };
+    return { tenantId: user.tenantId, ...clientScopeWhere(user) };
   }
 
   private uploadRoot() {

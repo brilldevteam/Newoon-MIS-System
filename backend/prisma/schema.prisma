@@ -46,6 +46,13 @@ model Tenant {
   clientExpiryItems ClientExpiryItem[]
   complianceReminders ComplianceReminder[]
   clientProfileOverrides ClientProfileOverride[]
+  clientEntityProfiles ClientEntityProfile[]
+  clientPeople  ClientPerson[]
+  clientPersonRoles ClientPersonRole[]
+  clientPersonPassports ClientPersonPassport[]
+  clientLegalDocuments ClientLegalDocument[]
+  aiSetting     TenantAiSetting?
+  clientAllocations ClientAllocation[]
   kycCases      KycCase[]
   documents     Document[]
   legalDocuments LegalDocument[]
@@ -114,6 +121,7 @@ model User {
   uploadedSignedKycDocuments SignedKycDocument[] @relation("SignedKycDocumentUploader")
   riskReclassifications RiskReclassification[] @relation("RiskReclassificationUser")
   createdClientEngagements ClientEngagement[] @relation("ClientEngagementCreator")
+  clientAllocations ClientAllocation[] @relation("ClientAllocationUser")
   uploadedClientDocuments ClientDocument[] @relation("ClientDocumentUploader")
   performedClientScreenings ClientScreening[] @relation("ClientScreeningPerformer")
   requestedClientRiskChanges ClientRiskChange[] @relation("ClientRiskChangeRequester")
@@ -300,6 +308,7 @@ enum NotificationType {
   COMPLIANCE_REVIEW_DUE
   COMPLIANCE_DOCUMENT_EXPIRING
   COMPLIANCE_SCREENING_ALERT
+  COMPLIANCE_LEGAL_DOCUMENT_CHANGED
 }
 
 enum EnquiryType {
@@ -554,6 +563,10 @@ model Client {
   reviews            ClientReview[]
   expiryItems        ClientExpiryItem[]
   profileOverrides   ClientProfileOverride[]
+  entityProfile      ClientEntityProfile?
+  people             ClientPerson[]
+  legalDocuments     ClientLegalDocument[]
+  allocations        ClientAllocation[]
   notifications      Notification[]
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
@@ -628,6 +641,9 @@ model ClientDocument {
   // QID / passport copies uploaded from a person's details: personKey is the normalized full name, so the same
   // person listed as shareholder and director shares the copies. Number and expiry are those of this copy.
   personKey      String?
+  // The client person this QID / passport copy belongs to (set from 2026-11-22; older copies are linked on first load).
+  personId       String?
+  person         ClientPerson?         @relation(fields: [personId], references: [id], onDelete: SetNull)
   personName     String?
   identityType   String?
   documentNumber String?
@@ -641,6 +657,7 @@ model ClientDocument {
   @@index([tenantId])
   @@index([clientId, sectionId])
   @@index([clientId, personKey])
+  @@index([personId])
   @@index([screeningId])
 }
 
@@ -813,6 +830,252 @@ model ClientProfileOverride {
 }
 
 // One row per reminder milestone already notified, so repeated or parallel sweeps never notify twice.
+// Client-level records (agreed 2026-11-22): after activation the client profile is kept here, not as edits layered
+// on the KYC form. The approved KYC form is never changed; a re-KYC is prefilled from these records and its
+// approval updates them. One person can hold any number of roles (shareholder, UBO, director, signatory, ...).
+enum ClientPartyType {
+  INDIVIDUAL
+  CORPORATE
+}
+
+enum ClientPersonRoleType {
+  SHAREHOLDER
+  UBO
+  DIRECTOR
+  MANAGER
+  SECRETARY
+  SEF
+  AUTHORISED_SIGNATORY
+  KEY_CONTACT
+  CEO
+  CFO
+  COO
+  MANAGING_DIRECTOR
+  GENERAL_MANAGER
+  CHAIRMAN
+  OTHER
+}
+
+model ClientEntityProfile {
+  id                       String    @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId                 String    @unique
+  client                   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  legalName                String?
+  legalForm                String?
+  commercialRegistrationNo String?
+  crExpiryDate             DateTime?
+  dateOfIncorporation      DateTime?
+  countryOfIncorporation   String?
+  placeOfIncorporation     String?
+  registeredOfficeAddress  String?
+  shareCapital             String?
+  taxIdentificationNo      String?
+  poBox                    String?
+  telephone                String?
+  email                    String?
+  website                  String?
+  businessNature           String?
+  relatedIndustry          String?
+  licenseActivities        String?
+  prospectiveServices      String?
+  financialYearEnd         String?
+  auditorName              String?
+  // KYC case the KYC-held fields were last taken from.
+  sourceKycCaseId          String?
+  // Field name -> ISO time of the last edit on the client page; a later re-KYC approval keeps those values.
+  fieldEditedAt            Json      @default("{}")
+  updatedById              String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([tenantId])
+}
+
+model ClientPerson {
+  id                    String                 @id @default(uuid())
+  tenantId              String
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId              String
+  client                Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  partyType             ClientPartyType        @default(INDIVIDUAL)
+  title                 String?
+  fullName              String
+  nationality           String?
+  dualCitizenship       Boolean?
+  otherNationality      String?
+  dateOfBirth           DateTime?
+  address               String?
+  telephone             String?
+  email                 String?
+  isPep                 Boolean?
+  pepDetails            String?
+  // Entity the person represents (the KYC "entity name").
+  representedEntity     String?
+  qidNumber             String?
+  qidExpiry             DateTime?
+  nationalAddressExpiry DateTime?
+  // Corporate parties: CR / registration number, and the MIS client it is linked to (if any).
+  registrationNumber    String?
+  linkedClientName      String?
+  // Combined "QID / Passport" value from an older KYC that was never split.
+  legacyIdentity        String?
+  fieldEditedAt         Json                   @default("{}")
+  // Set when the person no longer holds any role; kept so documents and history stay linked.
+  archivedAt            DateTime?
+  sortOrder             Int                    @default(0)
+  createdById           String?
+  updatedById           String?
+  roles                 ClientPersonRole[]     @relation("ClientPersonRoles")
+  viaRoles              ClientPersonRole[]     @relation("ClientPersonRoleVia")
+  passports             ClientPersonPassport[]
+  documents             ClientDocument[]
+  legalDocuments        ClientLegalDocument[]
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId])
+}
+
+model ClientPersonRole {
+  id            String               @id @default(uuid())
+  tenantId      String
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId      String
+  person        ClientPerson         @relation("ClientPersonRoles", fields: [personId], references: [id], onDelete: Cascade)
+  role          ClientPersonRoleType
+  // Position wording for OTHER (for example "Compliance Officer"); empty for the listed roles.
+  title         String               @default("")
+  percentage    Decimal?             @db.Decimal(5, 2)
+  // A UBO held through a corporate shareholder of the client.
+  viaPersonId   String?
+  via           ClientPerson?        @relation("ClientPersonRoleVia", fields: [viaPersonId], references: [id], onDelete: SetNull)
+  // KYC row the role came from (SHAREHOLDER / UBO / OFFICER / KEY_CONTACT and row id), used to prefill the next re-KYC.
+  sourceSection String?
+  sourceRowId   String?
+  createdById   String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@unique([personId, role, title])
+  @@index([tenantId])
+  @@index([viaPersonId])
+}
+
+model ClientPersonPassport {
+  id             String       @id @default(uuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId       String
+  person         ClientPerson @relation(fields: [personId], references: [id], onDelete: Cascade)
+  passportNumber String
+  issuingCountry String?
+  expiryDate     DateTime?
+  // The passport printed on the KYC form; others are kept on the client profile only.
+  isPrimary      Boolean      @default(false)
+  createdById    String?
+  updatedById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([tenantId])
+  @@index([personId])
+}
+
+// Legal documents register (2026-11-22, Phase 2): every company and individual document of a client with its type,
+// number, name, nationality / location and expiry date. A replaced or deleted document is kept with its history.
+// QID and passports stay on the person (ClientPerson / ClientPersonPassport) and are listed with these in the tab.
+enum ClientLegalDocumentNature {
+  COMPANY
+  INDIVIDUAL
+}
+
+enum ClientLegalDocumentStatus {
+  CURRENT
+  REPLACED
+  DELETED
+}
+
+model ClientLegalDocument {
+  id                  String                    @id @default(uuid())
+  tenantId            String
+  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId            String
+  client              Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Catalogue key (CR_EXTRACT_EN, TAX_CARD, ...) or OTHER with the typed label.
+  typeKey             String
+  typeLabel           String
+  nature              ClientLegalDocumentNature
+  personId            String?
+  person              ClientPerson?             @relation(fields: [personId], references: [id], onDelete: SetNull)
+  documentNumber      String?
+  holderName          String
+  location            String?
+  issueDate           DateTime?
+  expiryDate          DateTime?
+  notes               String?
+  fileName            String?
+  storagePath         String?
+  mimeType            String?
+  size                Int?
+  status              ClientLegalDocumentStatus @default(CURRENT)
+  // The document this one replaced (a renewed CR replaces the previous one).
+  replacesId          String?                   @unique
+  replaces            ClientLegalDocument?      @relation("ClientLegalDocumentReplacement", fields: [replacesId], references: [id], onDelete: SetNull)
+  replacedBy          ClientLegalDocument?      @relation("ClientLegalDocumentReplacement")
+  // KYC upload the file was copied from, if any.
+  sourceKycDocumentId String?
+  // How the values were filled: MANUAL, LOCAL (read on the server) or AI (read by the company's AI service).
+  readMethod          String?
+  statusReason        String?
+  statusChangedAt     DateTime?
+  statusChangedById   String?
+  createdById         String?
+  updatedById         String?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  @@index([tenantId])
+  @@index([clientId, status])
+  @@index([personId])
+}
+
+// The company's own AI service for reading documents (2026-11-22). The API key is encrypted with
+// SETTINGS_ENCRYPTION_KEY and never returned to the browser; only its last four characters are shown.
+model TenantAiSetting {
+  id              String   @id @default(uuid())
+  tenantId        String   @unique
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider        String   @default("OPENAI")
+  model           String
+  apiKeyEncrypted String
+  apiKeyLast4     String
+  enabled         Boolean  @default(true)
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Staff allocated to a client (2026-11-22, Phase 3). Accounting and HR see only the clients allocated to them, with
+// a limited set of tabs; allocations are managed by Company Admin, AML Supervisor, DMLRO and MLRO.
+model ClientAllocation {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation("ClientAllocationUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([clientId, userId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
 model ComplianceReminder {
   id        String   @id @default(uuid())
   tenantId  String
@@ -1090,6 +1353,12 @@ model KycManager {
   passportNumber        String?
   passportExpiry        DateTime?
   position              String?
+  // Per-person declarations (2026-11-23): Mr / Ms / Sheikh ..., Yes / No answers as typed in the form.
+  title                 String?
+  dualCitizenship       String?
+  otherNationality      String?
+  isPep                 String?
+  pepDetails            String?
   isAuthorizedSignatory Boolean  @default(false)
   sortOrder             Int      @default(0)
   createdBy             String

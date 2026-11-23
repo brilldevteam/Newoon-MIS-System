@@ -84,7 +84,8 @@ export class IdDocumentReaderService implements OnApplicationShutdown {
     return [draw(image.height - band, band), draw(0, image.height)].filter(() => width > 0 && height > 0);
   }
 
-  private async pdfPages(buffer: Buffer) {
+  // Renders the first pages of a PDF as PNG images (also used by the document reader for scanned PDFs).
+  async pdfPages(buffer: Buffer, maxPages = MAX_PDF_PAGES) {
     const pdfjs = await importModule('pdfjs-dist/legacy/build/pdf.mjs');
     // Fonts for text in the PDF come from the package itself, never from the network.
     const standardFontDataUrl = `${join(dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts').split(sep).join('/')}/`;
@@ -92,7 +93,7 @@ export class IdDocumentReaderService implements OnApplicationShutdown {
     const document = await task.promise;
     const pages: Buffer[] = [];
     try {
-      for (let number = 1; number <= Math.min(document.numPages, MAX_PDF_PAGES); number += 1) {
+      for (let number = 1; number <= Math.min(document.numPages, maxPages); number += 1) {
         const page = await document.getPage(number);
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: Math.min(4, Math.max(1.5, TARGET_WIDTH / base.width)) });

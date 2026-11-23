@@ -25,7 +25,8 @@ const roleTone: Record<string, string> = {
   SEF: 'bg-amber-50 text-amber-800 ring-amber-200',
   OPERATING_TEAM: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   ACCOUNTING_TEAM: 'bg-teal-50 text-teal-700 ring-teal-200',
-  HR_TEAM: 'bg-rose-50 text-rose-700 ring-rose-200'
+  HR_TEAM: 'bg-rose-50 text-rose-700 ring-rose-200',
+  CEO: 'bg-indigo-50 text-indigo-700 ring-indigo-200'
 };
 const statusStyle: Record<ManagedUser['status'], { label: string; dot: string; text: string }> = {
   ACTIVE: { label: 'Active', dot: 'bg-emerald-500', text: 'text-emerald-700' },

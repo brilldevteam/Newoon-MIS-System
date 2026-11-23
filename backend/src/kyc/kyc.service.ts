@@ -3,8 +3,8 @@ import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
 import { withDerivedIdentity } from '../common/person-identity';
-import { carryOverOverrides, identityExpiries, profileFromForm, stripOverlayKeys } from '../compliance-clients/compliance-client-profile';
-import { syncIdentityExpiryItems } from '../compliance-clients/identity-expiry-sync';
+import { syncClientRecordsFromKyc } from '../compliance-clients/client-records-store';
+import { stripOverlayKeys } from '../compliance-clients/compliance-client-profile';
 import { complianceValidationError } from '../common/kyc-compliance';
 import { kycFormCompletenessIssues, kycFormCompletenessMessage } from '../common/kyc-form-completeness';
 import { amendedPreliminaryDocument, declarationWithPreliminaryFallback, preliminaryObject } from '../common/preliminary-review';
@@ -916,7 +916,7 @@ export class KycService {
         await this.finalizeApprovedKyc(tx, user, kycCase, 'DMLRO final approval completed - KYC is final.');
         await this.upsertActivationChecklist(tx, user, kycCase);
         return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-      });
+      }, { timeout: 60000 });
     }
 
     return this.returnDmlroReviewToSupervisor(user, id, { ...dto, decision });
@@ -1040,7 +1040,7 @@ export class KycService {
       }
       await this.upsertActivationChecklist(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-      });
+      }, { timeout: 60000 });
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
@@ -1089,7 +1089,7 @@ export class KycService {
       }
       await this.upsertActivationChecklist(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
-    });
+    }, { timeout: 60000 });
   }
 
   async addReviewerComment(user: RequestUser, id: string, stage: ReviewStage, dto: Record<string, unknown>) {
@@ -1363,14 +1363,14 @@ export class KycService {
               }
             });
           }
-          await this.syncClientIdentityExpiry(tx, user, kycCase);
+          await this.syncClientRecords(tx, user, kycCase, client.currentKycCaseId);
           await this.audit(tx, user, kycCase.tenantId, 'Client', client.id, {
             action: 'CLIENT_ACTIVATED_FOR_COMPLIANCE',
             kycCaseId: kycCase.id,
             riskLevel,
             cddType: profile.cddType || client.cddType
           });
-        });
+        }, { timeout: 60000 });
         return;
       } catch (error) {
         // Two activations in the same tenant can pick the same client code or engagement number; retry once more.
@@ -1582,7 +1582,7 @@ export class KycService {
       await this.audit(tx, user, kycCase.tenantId, 'KycCase', kycCase.id, { action });
       await this.afterKycFinal(tx, user, kycCase);
       return tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, include: this.caseInclude() });
-    });
+    }, { timeout: 60000 });
   }
 
   // The last required approval (MLRO, DMLRO-final or SEF) makes the KYC final straight away and tells
@@ -1631,48 +1631,42 @@ export class KycService {
     });
     await this.recordStatus(tx, { ...kycCase, status: KycCaseStatus.KYC_FINAL_APPROVED }, user, KycCaseStatus.CLIENT_ACTIVE,
       'Re-KYC approved; the client profile now uses this KYC. Earlier KYCs are kept as history.');
-    const carriedOver = await this.carryOverProfileEdits(tx, user, kycCase, client.currentKycCaseId);
-    await this.syncClientIdentityExpiry(tx, user, kycCase);
+    const records = await this.syncClientRecords(tx, user, kycCase, client.currentKycCaseId);
     await this.audit(tx, user, kycCase.tenantId, 'Client', client.id, {
-      action: 'CLIENT_REKYC_COMPLETED', kycCaseId: kycCase.id, previousKycCaseId: client.currentKycCaseId, riskLevel, cddType, ...carriedOver
+      action: 'CLIENT_REKYC_COMPLETED', kycCaseId: kycCase.id, previousKycCaseId: client.currentKycCaseId, riskLevel, cddType, records
     });
     await this.createNotification(tx, kycCase, NotificationType.CLIENT_ACTIVATED, `Re-KYC approved: ${client.name}`,
       `${kycCase.kycNumber} is approved and is now the current KYC (next review ${nextReviewDate ? nextReviewDate.toISOString().slice(0, 10) : 'not scheduled'}).`);
   }
 
-  // Edits made on the client page while the re-KYC was in progress went onto the previous KYC; keep them current.
-  private async carryOverProfileEdits(
+  // Updates the client records (company, people and roles) from a KYC that has just become the client's current one.
+  // Values and roles changed on the client page after this KYC was started are kept (see syncClientRecordsFromKyc).
+  // A client whose records were never created is first filled from its previous KYC, with the client-page edits
+  // made on it, so those edits are not lost.
+  private async syncClientRecords(
     tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; clientId: string }, previousCaseId: string | null
   ) {
-    if (!previousCaseId || previousCaseId === kycCase.id) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
-    const rekyc = await tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, select: { createdAt: true } });
-    const select = { section: true, rowId: true, rowLabel: true, field: true, value: true, updatedAt: true } as const;
-    const previous = await tx.clientProfileOverride.findMany({ where: { kycCaseId: previousCaseId, tenantId: kycCase.tenantId }, orderBy: { updatedAt: 'asc' }, select });
-    const late = previous.filter((override) => override.updatedAt > rekyc.createdAt);
-    if (!late.length) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
-    const form = await tx.kycForm.findUnique({ where: { kycCaseId: kycCase.id }, include: this.formInclude() });
-    if (!form) return { editsCarriedOver: 0, editsSkipped: [] as string[] };
-    const { carried, skipped } = carryOverOverrides(late, previous, this.serializeForm(form));
-    for (const override of carried) {
-      await tx.clientProfileOverride.upsert({
-        where: { kycCaseId_section_rowId_field: { kycCaseId: kycCase.id, section: override.section, rowId: override.rowId, field: override.field } },
-        update: { value: override.value, rowLabel: override.rowLabel, updatedById: user.id },
-        create: {
-          tenantId: kycCase.tenantId, clientId: kycCase.clientId, kycCaseId: kycCase.id, section: override.section,
-          rowId: override.rowId, rowLabel: override.rowLabel, field: override.field, value: override.value, updatedById: user.id
-        }
-      });
+    const client = await tx.client.findUniqueOrThrow({ where: { id: kycCase.clientId }, select: { id: true, tenantId: true, name: true } });
+    const formOf = async (caseId: string) => {
+      const form = await tx.kycForm.findUnique({ where: { kycCaseId: caseId }, include: this.formInclude() });
+      return form ? this.serializeForm(form) : null;
+    };
+    const overridesOf = (caseId: string) => tx.clientProfileOverride.findMany({
+      where: { kycCaseId: caseId, tenantId: kycCase.tenantId },
+      orderBy: { updatedAt: 'asc' },
+      select: { section: true, rowId: true, rowLabel: true, field: true, value: true, updatedAt: true }
+    });
+    const hasRecords = Boolean(await tx.clientEntityProfile.findUnique({ where: { clientId: client.id }, select: { id: true } }));
+    if (!hasRecords && previousCaseId && previousCaseId !== kycCase.id) {
+      const previous = await formOf(previousCaseId);
+      if (previous) {
+        await syncClientRecordsFromKyc(tx, { client, kycCaseId: previousCaseId, form: previous, overrides: await overridesOf(previousCaseId), userId: user.id, since: null });
+      }
     }
-    return { editsCarriedOver: carried.length, editsSkipped: skipped.map((override) => `${override.section} ${override.rowLabel || ''} ${override.field}`.replace(/\s+/g, ' ')) };
-  }
-
-  // Expiry records follow the QID / passport dates of the case's form, including client-page edits made on it.
-  private async syncClientIdentityExpiry(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; clientId: string }) {
-    const form = await tx.kycForm.findUnique({ where: { kycCaseId: kycCase.id }, include: this.formInclude() });
-    if (!form) return;
-    const overrides = await tx.clientProfileOverride.findMany({ where: { kycCaseId: kycCase.id, tenantId: kycCase.tenantId } });
-    const profile = profileFromForm(this.serializeForm(form), overrides);
-    await syncIdentityExpiryItems(tx, { id: kycCase.clientId, tenantId: kycCase.tenantId }, user.id, identityExpiries(profile));
+    const started = await tx.kycCase.findUniqueOrThrow({ where: { id: kycCase.id }, select: { createdAt: true } });
+    return syncClientRecordsFromKyc(tx, {
+      client, kycCaseId: kycCase.id, form: await formOf(kycCase.id), overrides: await overridesOf(kycCase.id), userId: user.id, since: started.createdAt
+    });
   }
 
   // Starts a periodic re-KYC for an onboarded client: a new KYC case (purpose REKYC) whose form is prefilled from
@@ -2013,6 +2007,11 @@ export class KycService {
           passportNumber: this.optionalText(row.passportNumber),
           passportExpiry: this.dateValue(row.passportExpiry),
           position: this.optionText(row.position, row.positionOther),
+          title: this.optionalText(row.title),
+          dualCitizenship: this.optionalText(row.dualCitizenship),
+          otherNationality: this.optionalText(row.otherNationality),
+          isPep: this.optionalText(row.isPep),
+          pepDetails: this.optionalText(row.pepDetails),
           isAuthorizedSignatory: Boolean(row.isAuthorizedSignatory),
           sortOrder: index,
           createdBy: userId,

@@ -1,3 +1,4 @@
+import { downloadExpiryExcel, ExpiryWindow } from '../services/legal-documents.service';
 import { AlertTriangle, CalendarClock, Download, Eye, Search, ShieldAlert, ShieldCheck, UserCheck, UserX } from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -85,6 +86,8 @@ export function ComplianceClientListPage() {
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [expiryWindow, setExpiryWindow] = useState<ExpiryWindow>('60');
+  const [exportingExpiry, setExportingExpiry] = useState(false);
   const [deactivating, setDeactivating] = useState<ComplianceClient | null>(null);
 
   const load = useCallback((current: ComplianceClientFilters) => {
@@ -155,7 +158,21 @@ export function ComplianceClientListPage() {
     }
   }
 
+  // Expiring documents of every client in the register (requirement R09).
+  async function exportExpiry() {
+    setExportingExpiry(true);
+    try {
+      await downloadExpiryExcel(null, expiryWindow);
+    } catch (requestError) {
+      showToast(getApiErrorMessage(requestError, 'Unable to export the expiring documents.'), 'error');
+    } finally {
+      setExportingExpiry(false);
+    }
+  }
+
   const stats = data?.stats;
+  const showRisk = data ? data.access.level !== 'ALLOCATED' : true;
+  const showAml = data ? data.access.level === 'FULL' : true;
   const pagination = data?.pagination;
 
   return (
@@ -165,15 +182,31 @@ export function ComplianceClientListPage() {
           <h1 className="text-2xl font-semibold text-slate-950">Compliance Clients</h1>
           <p className="mt-1 text-sm text-slate-500">Onboarded clients with their risk level, CDD type and periodic review schedule.</p>
         </div>
-        <button
-          type="button"
-          onClick={exportExcel}
-          disabled={exporting}
-          className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
-          <Download className="h-4 w-4" />
-          {exporting ? 'Exporting...' : 'Export Excel'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {showRisk ? (
+          <div className="inline-flex overflow-hidden rounded-md border border-slate-300 bg-white">
+            <select aria-label="Expiring documents" value={expiryWindow} onChange={(event) => setExpiryWindow(event.target.value as ExpiryWindow)} className="border-0 bg-transparent px-2 py-2 text-sm">
+              <option value="EXPIRED">Expired documents</option>
+              <option value="30">Expiring within 30 days</option>
+              <option value="60">Expiring within 60 days</option>
+              <option value="ALL">All tracked documents</option>
+            </select>
+            <button type="button" onClick={exportExpiry} disabled={exportingExpiry} className="inline-flex items-center gap-1.5 border-l border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+              <Download className="h-4 w-4" />{exportingExpiry ? 'Preparing...' : 'Expiry Excel'}
+            </button>
+          </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={exportExcel}
+            disabled={exporting}
+            title="Excel with four sheets: register, company details, people and legal documents"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? 'Exporting...' : 'Export Excel'}
+          </button>
+        </div>
       </div>
 
       {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
@@ -182,20 +215,20 @@ export function ComplianceClientListPage() {
         <StatCard label="Total clients" value={stats?.total ?? 0} detail="Active, inactive and on hold" icon={ShieldCheck} tone="blue" />
         <StatCard label="Active" value={stats?.active ?? 0} detail={`${stats?.onHold ?? 0} on hold`} icon={UserCheck} tone="green" />
         <StatCard label="Inactive" value={stats?.inactive ?? 0} icon={UserX} tone="slate" />
-        <StatCard label="EDD clients" value={stats?.edd ?? 0} detail={`${stats?.highRisk ?? 0} high risk`} icon={ShieldAlert} tone="rose" />
-        <StatCard label="Reviews overdue" value={stats?.reviewOverdue ?? 0} detail="Active clients past next review" icon={AlertTriangle} tone="rose" />
-        <StatCard label="Due in 30 days" value={stats?.reviewDueSoon ?? 0} detail={`${stats?.riskPending ?? 0} with risk pending`} icon={CalendarClock} tone="amber" />
+        {showRisk ? <StatCard label="EDD clients" value={stats?.edd ?? 0} detail={`${stats?.highRisk ?? 0} high risk`} icon={ShieldAlert} tone="rose" /> : null}
+        {showRisk ? <StatCard label="Reviews overdue" value={stats?.reviewOverdue ?? 0} detail="Active clients past next review" icon={AlertTriangle} tone="rose" /> : null}
+        {showRisk ? <StatCard label="Due in 30 days" value={stats?.reviewDueSoon ?? 0} detail={`${stats?.riskPending ?? 0} with risk pending`} icon={CalendarClock} tone="amber" /> : null}
       </div>
 
-      {stats ? (
+      {stats && showRisk ? (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm">
           <span className="font-medium text-slate-700">Needs attention:</span>
           {[
-            { key: 'RISK_APPROVAL', label: 'Risk changes awaiting approval', count: stats.riskApprovals, tone: 'amber' },
-            { key: 'SCREENING_ALERT', label: 'Open screening alerts', count: stats.screeningAlerts, tone: 'rose' },
-            { key: 'EXPIRING', label: 'Documents expiring in 30 days', count: stats.expiringDocuments, tone: 'rose' },
-            { key: 'REVIEW_IN_PROGRESS', label: 'Reviews in progress', count: stats.reviewsInProgress, tone: 'brand' }
-          ].map((item) => {
+            { key: 'RISK_APPROVAL', label: 'Risk changes awaiting approval', count: stats.riskApprovals, tone: 'amber', aml: true },
+            { key: 'SCREENING_ALERT', label: 'Open screening alerts', count: stats.screeningAlerts, tone: 'rose', aml: true },
+            { key: 'EXPIRING', label: 'Documents expiring in 30 days', count: stats.expiringDocuments, tone: 'rose', aml: false },
+            { key: 'REVIEW_IN_PROGRESS', label: 'Reviews in progress', count: stats.reviewsInProgress, tone: 'brand', aml: true }
+          ].filter((item) => showAml || !item.aml).map((item) => {
             const active = filters.attention === item.key;
             const tone = item.count === 0 ? 'border-slate-200 text-slate-400' : item.tone === 'rose' ? 'border-rose-200 text-rose-700' : item.tone === 'amber' ? 'border-amber-200 text-amber-700' : 'border-brand-200 text-brand-700';
             return (
@@ -235,6 +268,7 @@ export function ComplianceClientListPage() {
               <option value="INACTIVE">Inactive</option>
               <option value="ON_HOLD">On hold</option>
             </select>
+            {showRisk ? (
             <select aria-label="Risk level" value={filters.riskLevel} onChange={(event) => setFilter('riskLevel', event.target.value)} className={selectClass}>
               <option value="ALL">All risk</option>
               <option value="HIGH">High</option>
@@ -242,6 +276,8 @@ export function ComplianceClientListPage() {
               <option value="LOW">Low</option>
               <option value="PENDING">Pending</option>
             </select>
+            ) : null}
+            {showRisk ? (
             <select aria-label="CDD type" value={filters.cddType} onChange={(event) => setFilter('cddType', event.target.value)} className={selectClass}>
               <option value="ALL">All CDD</option>
               <option value="SIMPLIFIED">SDD</option>
@@ -249,6 +285,7 @@ export function ComplianceClientListPage() {
               <option value="ENHANCED">EDD</option>
               <option value="NONE">Not set</option>
             </select>
+            ) : null}
             <select aria-label="Jurisdiction" value={filters.jurisdiction} onChange={(event) => setFilter('jurisdiction', event.target.value)} className={selectClass}>
               <option value="ALL">All jurisdictions</option>
               <option value="QFC">QFC</option>
@@ -257,12 +294,14 @@ export function ComplianceClientListPage() {
               <option value="OTHER">Other</option>
               <option value="NONE">Not set</option>
             </select>
+            {showRisk ? (
             <select aria-label="Review" value={filters.review} onChange={(event) => setFilter('review', event.target.value)} className={selectClass}>
               <option value="ALL">All reviews</option>
               <option value="OVERDUE">Overdue</option>
               <option value="DUE_SOON">Due in 30 days</option>
               <option value="NOT_SCHEDULED">Not scheduled</option>
             </select>
+            ) : null}
           </div>
         </div>
 
@@ -273,11 +312,11 @@ export function ComplianceClientListPage() {
                 <th className="px-4 py-3">Code</th>
                 <th className="px-4 py-3">Client</th>
                 <th className="px-4 py-3">CR / QFC No.</th>
-                <th className="px-4 py-3">CDD Type</th>
-                <th className="px-4 py-3">Risk</th>
+                {showRisk ? <th className="px-4 py-3">CDD Type</th> : null}
+                {showRisk ? <th className="px-4 py-3">Risk</th> : null}
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Last Review</th>
-                <th className="px-4 py-3">Next Review</th>
+                {showRisk ? <th className="px-4 py-3">Last Review</th> : null}
+                {showRisk ? <th className="px-4 py-3">Next Review</th> : null}
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -306,6 +345,8 @@ export function ComplianceClientListPage() {
                         {client.registrationNumber || '—'}
                         {client.jurisdiction ? <span className="ml-1 text-xs text-slate-400">({jurisdictionLabels[client.jurisdiction]})</span> : null}
                       </td>
+                      {showRisk ? (
+                        <>
                       <td className="px-4 py-3">
                         {canEdit ? (
                           <select
@@ -327,15 +368,21 @@ export function ComplianceClientListPage() {
                       <td className="px-4 py-3">
                         <Badge className={riskTone[client.riskLevel || 'PENDING']}>{client.riskLevel ? riskLabels[client.riskLevel] : 'Pending'}</Badge>
                       </td>
+                        </>
+                      ) : null}
                       <td className="px-4 py-3">
                         <Badge className={statusTone[client.status] || statusTone.INACTIVE}>{complianceStatusLabels[client.status] || client.status}</Badge>
                         {client.statusReason ? <p className="mt-1 max-w-[12rem] truncate text-xs text-slate-500" title={client.statusReason}>{client.statusReason}</p> : null}
                       </td>
+                      {showRisk ? (
+                        <>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{formatDate(client.lastReviewDate)}</td>
                       <td className={`whitespace-nowrap px-4 py-3 ${review.className}`}>
                         {formatDate(client.nextReviewDate)}
                         {review.label && client.nextReviewDate ? <p className="text-xs font-semibold">{review.label}</p> : null}
                       </td>
+                        </>
+                      ) : null}
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1">
                           <Link

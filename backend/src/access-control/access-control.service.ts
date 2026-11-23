@@ -26,8 +26,11 @@ const defaults: Record<string, Partial<Record<(typeof ACCESS_AREAS)[number]['key
   DMLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT', compliance: 'EDIT' },
   MLRO: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'EDIT', approvals: 'EDIT', compliance: 'EDIT' },
   SEF: { enquiries: 'VIEW', kyc: 'EDIT', screening: 'VIEW', crrf: 'VIEW', approvals: 'EDIT', compliance: 'VIEW' },
-  ACCOUNTING_TEAM: { enquiries: 'VIEW' },
-  HR_TEAM: { enquiries: 'VIEW' }
+  // CEO (2026-11-22): read-only, with the AML roles and SEF on the client compliance tabs.
+  CEO: { enquiries: 'VIEW', kyc: 'VIEW', screening: 'VIEW', crrf: 'VIEW', compliance: 'VIEW' },
+  // Accounting and HR see only the compliance clients allocated to them, with a limited set of tabs (client-access.ts).
+  ACCOUNTING_TEAM: { enquiries: 'VIEW', compliance: 'VIEW' },
+  HR_TEAM: { enquiries: 'VIEW', compliance: 'VIEW' }
 };
 
 @Injectable()
