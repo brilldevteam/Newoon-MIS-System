@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Int
 import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
-import { withDerivedIdentity } from '../common/person-identity';
+import { identityTokens, rowIdentityTokens, sameParty, withDerivedIdentity } from '../common/person-identity';
 import { syncClientRecordsFromKyc } from '../compliance-clients/client-records-store';
 import { stripOverlayKeys } from '../compliance-clients/compliance-client-profile';
 import { complianceValidationError } from '../common/kyc-compliance';
@@ -73,6 +73,14 @@ function namesList(names: string[], limit = 6) {
   if (extra > 0) return `${shown.join(', ')} and ${extra} more`;
   return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0] || '';
 }
+
+// Statuses in which a reviewer has sent the file back to the AML team for more information: AML may edit the form,
+// upload documents and resubmit to DMLRO (AML Supervisor, DMLRO and MLRO requests alike).
+const AML_RETURN_STATUSES: KycCaseStatus[] = [
+  KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED,
+  KycCaseStatus.DMLRO_ADDITIONAL_INFORMATION_REQUIRED,
+  KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED
+];
 
 @Injectable()
 export class KycService {
@@ -409,7 +417,7 @@ export class KycService {
         KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
         KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
         KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
-        KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+        ...AML_RETURN_STATUSES
     ];
     if (!uploadableStatuses.includes(kycCase.status)) {
       throw new BadRequestException('Document uploads are disabled after submission unless the case is returned for additional information.');
@@ -624,7 +632,7 @@ export class KycService {
         KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
         KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
         KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
-        KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+        ...AML_RETURN_STATUSES
     ];
     // A full-KYC amendment draft (AML_REVIEW_STARTED) is prepared by AML and goes to DMLRO the same way, through
     // the same checks (documents, required form details, screening, CRRF, comments).
@@ -642,6 +650,14 @@ export class KycService {
 
     return this.prisma.$transaction(async (tx) => {
       await this.assertReviewPackageReady(tx, kycCase);
+      if (AML_RETURN_STATUSES.includes(kycCase.status)) {
+        // A resubmission after a reviewer asked for more information starts a new review round: the earlier DMLRO,
+        // MLRO and SEF reviews are reopened so they can be completed again (files returned before this fix kept them locked).
+        await tx.internalReviewSubmission.updateMany({
+          where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: { in: [ReviewStage.DMLRO, ReviewStage.MLRO, ReviewStage.SEF] }, isLocked: true },
+          data: { status: ReviewSubmissionStatus.REOPENED, isLocked: false, updatedBy: user.id }
+        });
+      }
       const review = await tx.kycInternalReview.findFirst({ where: { tenantId: kycCase.tenantId, kycCaseId: id } });
       const formalComments = safeComment(dto.formalComments !== undefined ? dto.formalComments : review?.amlClarificationFindings);
       if (!hasComment(formalComments)) throw new BadRequestException('Enter AML Supervisor comments on the submission page before submitting to DMLRO.');
@@ -727,7 +743,7 @@ export class KycService {
       KycCaseStatus.AML_REVIEW_STARTED,
       KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
       KycCaseStatus.SUPERVISOR_REVIEW_IN_PROGRESS,
-      KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+      ...AML_RETURN_STATUSES
     ];
     if (!returnableStatuses.includes(kycCase.status)) {
       throw new BadRequestException('The KYC case can be returned to BD only while it is with AML Supervisor.');
@@ -982,6 +998,9 @@ export class KycService {
         kycCase.status = KycCaseStatus.MLRO_REVIEW_IN_PROGRESS;
       }
       const saved = await this.lockReviewSubmission(tx, user, kycCase, ReviewStage.MLRO, { ...dto, ...(bypassingDmlro ? { data: { ...preliminaryObject(dto.data), bypassedDmlro: true } } : {}) });
+      if (decision === ReviewDecision.REQUEST_ADDITIONAL_INFORMATION) {
+        return this.returnMlroRequestToAml(tx, user, kycCase, saved.id, this.optionalText(dto.reason) || this.optionalText(dto.conditions) || safeComment(dto.formalComments) || '');
+      }
       const targetStatus = this.mlroDecisionStatus(decision);
       await this.recordStatus(tx, kycCase, user, targetStatus, this.mlroStatusNote(decision));
       if (decision === ReviewDecision.APPROVE || decision === ReviewDecision.APPROVE_WITH_CONDITIONS) {
@@ -2783,7 +2802,7 @@ export class KycService {
       KycCaseStatus.LEGAL_DOCUMENTS_PENDING,
       KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED,
       KycCaseStatus.SUPERVISOR_REVIEW_PENDING,
-      KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED
+      ...AML_RETURN_STATUSES
     ];
     return editableStatuses.includes(status);
   }
@@ -3099,9 +3118,13 @@ export class KycService {
             ...this.asArray<RowPayload>(current?.sectionB.ubos),
             ...this.asArray<RowPayload>(current?.sectionC.managers)
           ].filter((row) => this.text(row.fullName).trim());
-          const matches = (row: RowPayload, record: (typeof screening)[number]) => (this.text(row.identityNumber).trim()
-            ? this.text(record.identifier).trim().toLowerCase() === this.text(row.identityNumber).trim().toLowerCase()
-            : record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase());
+          // One screening record covers a person in all their roles: matched by any passport / QID / CR number,
+          // or by name when the row has no number.
+          const matches = (row: RowPayload, record: (typeof screening)[number]) => {
+            const rowTokens = rowIdentityTokens(row);
+            if (!rowTokens.size) return record.entityName.trim().toLowerCase() === this.text(row.fullName).trim().toLowerCase();
+            return sameParty({ name: row.fullName, tokens: rowTokens }, { name: record.entityName, tokens: identityTokens(record.identifier) });
+          };
           const unscreened = requiredParties.filter((row) => !screening.some((record) => record.status === 'COMPLETED' && matches(row, record)));
           // Names with a record that is not finalized yet are reported once, in the "finish these records" line below.
           const withoutRecord = unscreened.filter((row) => !screening.some((record) => matches(row, record)));
@@ -3191,6 +3214,33 @@ export class KycService {
 
       return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
     }, { timeout: 60000 });
+  }
+
+  // MLRO asked for more information: the file goes back to the AML team (as a DMLRO return does) so they can update
+  // the form, upload documents and resubmit through DMLRO. Before this the case stopped in MLRO_ADDITIONAL_INFORMATION_REQUIRED
+  // with no task, no editable form and a notification only SEF could see.
+  private async returnMlroRequestToAml(tx: Prisma.TransactionClient, user: RequestUser, kycCase: { id: string; tenantId: string; status: KycCaseStatus; title: string }, submissionId: string, reason: string) {
+    const id = kycCase.id;
+    const note = 'MLRO requested additional information';
+    await this.beginFormAmendment(tx, user, kycCase, reason ? `${note}: ${reason}` : note);
+    // Tasks are unique per (case, stage, status): clear an earlier round's RETURNED task before returning this one.
+    await this.clearReviewTaskStatus(tx, id, ReviewStage.MLRO, ReviewTaskStatus.RETURNED);
+    await tx.internalReviewTask.updateMany({
+      where: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.MLRO, status: { in: [ReviewTaskStatus.PENDING, ReviewTaskStatus.IN_PROGRESS, ReviewTaskStatus.PAUSED] } },
+      data: { status: ReviewTaskStatus.RETURNED, completedAt: new Date(), updatedBy: user.id }
+    });
+    await tx.internalReviewTask.upsert({
+      where: { kycCaseId_stage_status: { kycCaseId: id, stage: ReviewStage.SUPERVISOR, status: ReviewTaskStatus.PENDING } },
+      update: { updatedBy: user.id },
+      create: { tenantId: kycCase.tenantId, kycCaseId: id, stage: ReviewStage.SUPERVISOR, createdBy: user.id, updatedBy: user.id }
+    });
+    await this.recordStatus(tx, kycCase, user, KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED, note);
+    await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', submissionId, { action: 'MLRO_REQUESTED_ADDITIONAL_INFORMATION', decision: ReviewDecision.REQUEST_ADDITIONAL_INFORMATION });
+    await this.createNotification(
+      tx, kycCase, NotificationType.ADDITIONAL_INFORMATION_REQUESTED, 'Additional information requested by MLRO',
+      `${kycCase.title} was returned to the AML team: ${reason ? reason.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) : note}. Update the file and resubmit it to DMLRO.`
+    );
+    return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
   }
 
   private async lockReviewSubmission(

@@ -285,7 +285,7 @@ export function KycCaseDetailsPage() {
     return <p className="text-sm text-slate-500">Loading KYC case...</p>;
   }
 
-  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ||
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ||
     (kycCase.status === 'AML_REVIEW_STARTED' && kycCase.kycForm?.fullKycStarted === true && kycCase.kycForm.status === 'AMENDMENT_DRAFT' && !kycCase.kycForm.isLocked);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const canUploadDocuments =
@@ -335,7 +335,9 @@ export function KycCaseDetailsPage() {
       'AML_REVIEW_STARTED',
       'SUPERVISOR_REVIEW_PENDING',
       'SUPERVISOR_REVIEW_IN_PROGRESS',
-      'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'
+      'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED',
+      'DMLRO_ADDITIONAL_INFORMATION_REQUIRED',
+      'MLRO_ADDITIONAL_INFORMATION_REQUIRED'
     ].includes(kycCase.status) &&
     hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN']);
   const primaryContact = kycCase.client.contacts.find((contact) => contact.isPrimary) || kycCase.client.contacts[0];

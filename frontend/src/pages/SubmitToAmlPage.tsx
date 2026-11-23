@@ -57,7 +57,7 @@ export function SubmitToAmlPage() {
   };
   const remaining = checks?.filter((check) => !check.complete).length || 0;
   const canSubmit = Boolean(checks?.length && checks.every((check) => check.complete));
-  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) || isAmlAmendmentDraft(kycCase);
+  const isResubmission = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) || isAmlAmendmentDraft(kycCase);
 
   return (
     <div className="space-y-6">

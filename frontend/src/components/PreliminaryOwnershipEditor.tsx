@@ -1,17 +1,18 @@
 import { Building2, Plus, Trash2, UserRound, Check, ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SearchableMultiSelect, splitList } from './SearchableSelect';
+import { PreliminaryPersonFields } from './PreliminaryPersonFields';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { CORPORATE_ENTITY, chainParentId, directOwnershipTotal, indirectUboPercentage, overOwnedCompanies, ownersAndSelfIds, ownershipChainOrder } from '../utils/preliminary-ownership-chain';
 
-type Owner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
-type Props = { shareholders: Owner[]; ubos: Owner[]; countries: string[]; nationalities: string[]; onChange: (shareholders: Owner[], ubos: Owner[]) => void };
+type Owner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean; passportNumber?: string; passportExpiry?: string; qidNumber?: string; qidExpiry?: string; dateOfBirth?: string; isPep?: string };
+type Props = { shareholders: Owner[]; ubos: Owner[]; countries: string[]; nationalities: string[]; onChange: (shareholders: Owner[], ubos: Owner[]) => void; onIdentityFile?: (file: File, type: 'PASSPORT' | 'QID', personName: string) => void };
 const blank = (parentRowId = ''): Owner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId, fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
-const populated = (row: Owner) => Boolean(row.fullName || row.identityNumber || row.nationality || row.address || row.ownershipPercentage || row.parentRowId);
+const populated = (row: Owner) => Boolean(row.fullName || row.identityNumber || row.passportNumber || row.qidNumber || row.nationality || row.address || row.ownershipPercentage || row.parentRowId);
 const inputClass = 'mt-1.5 min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950 focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500';
 const companyName = (row: Owner | undefined) => row?.fullName.trim() || 'Unnamed company';
 
-export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nationalities, onChange }: Props) {
+export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nationalities, onChange, onIdentityFile }: Props) {
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -82,7 +83,8 @@ export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nati
         {isShareholder && !isParentCompany && <div role="group" aria-label="Shareholder type" className="inline-flex gap-1 rounded-md bg-slate-100 p-1">{[['Individual', 'Person', UserRound], [CORPORATE_ENTITY, 'Company', Building2]].map(([value, label, ButtonIcon]) => { const TypeIcon = ButtonIcon as typeof UserRound; return <button key={String(value)} type="button" aria-pressed={(row.shareholderType || 'Individual') === value} onClick={() => patch(row, true, { shareholderType: String(value) })} className={`inline-flex min-h-9 items-center gap-2 rounded px-3 text-sm font-medium ${(row.shareholderType || 'Individual') === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600'}`}><TypeIcon className="h-4 w-4" />{String(label)}</button>; })}</div>}
         <div className="grid min-w-0 gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>
           <label className="min-w-0 text-sm font-medium text-slate-700">{isCompany ? 'Company name' : 'Full name'}<input className={inputClass} value={row.fullName} onChange={(event) => patch(row, isShareholder, { fullName: event.target.value })} /></label>
-          <label className="min-w-0 text-sm font-medium text-slate-700">{isCompany ? 'Registration number (CR)' : 'Passport or QID number'}<input type="text" className={inputClass} value={row.identityNumber} onChange={(event) => patch(row, isShareholder, { identityNumber: event.target.value })} /></label>
+          {isCompany && <label className="min-w-0 text-sm font-medium text-slate-700">Registration number (CR)<input type="text" className={inputClass} value={row.identityNumber} onChange={(event) => patch(row, isShareholder, { identityNumber: event.target.value })} /></label>}
+          <PreliminaryPersonFields row={row} isCompany={isCompany} onChange={(change) => patch(row, isShareholder, change)} onIdentityFile={onIdentityFile ? (file, type) => onIdentityFile(file, type, row.fullName) : undefined} />
           <div className="min-w-0">{isCompany ? <label className="text-sm font-medium text-slate-700">Country of registration<select className={inputClass} value={row.nationality} onChange={(event) => patch(row, true, { nationality: event.target.value })}><option value="">Select country</option>{countries.filter(Boolean).map((country) => <option key={country}>{country}</option>)}</select></label> : <SearchableMultiSelect label="Nationality" value={splitList(row.nationality)} options={nationalities.filter(Boolean)} onChange={(value) => patch(row, isShareholder, { nationality: value.join(', ') })} placeholder="Select nationality" />}</div>
           <label className="min-w-0 text-sm font-medium text-slate-700">Country of residence<select className={inputClass} value={row.address} onChange={(event) => patch(row, isShareholder, { address: event.target.value })}><option value="">Select country</option>{countries.filter(Boolean).map((country) => <option key={country}>{country}</option>)}</select></label>
           {isCompany && <label className="min-w-0 text-sm font-medium text-slate-700">Shareholder of<select className={inputClass} value={chainParentId(row, shareholders)} onChange={(event) => patch(row, true, { parentRowId: event.target.value })}><option value="">Client company (direct)</option>{ownedCompanyOptions.map(({ row: company, depth: level }) => <option key={company.id} value={company.id}>{`${' '.repeat(level)}${companyName(company)}`}</option>)}</select></label>}

@@ -1,6 +1,8 @@
 import { ArrowLeft, Save, Trash2 } from 'lucide-react';
 import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
+import { withSplitIdentity } from '../components/PreliminaryPersonFields';
+import { identitySummary } from '../utils/person-identity';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { directOwnershipTotal, overOwnedCompanies, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
@@ -24,7 +26,7 @@ const enquiryTypeLabels: Record<EnquiryType, string> = {
 };
 
 const legalForms = ['', 'QFC Holding', 'QFC SPC', 'QFC LLC', 'QFZ LLC', 'MOCI LLC'];
-const jurisdictions = ['', 'QFC', 'MOCI', 'Free Zone'];
+const jurisdictions = ['', 'QFC', 'MOCI', 'Free Zone', 'Company House', 'Other'];
 const countryOptions = countryDialOptions.map((country) => country.name);
 const nationalityOptions = countryOptions;
 const identityTypeOptions = ['Passport', 'QID'];
@@ -44,7 +46,8 @@ const positionOptions = [
   'SEF',
   'Company Secretary',
   'Compliance Officer',
-  'Finance Manager'
+  'Finance Manager',
+  'Principal Representative'
 ];
 
 type AttachmentDraft = {
@@ -68,8 +71,11 @@ type StoredAttachmentFile = NonNullable<AttachmentDraft['storedFiles']>[number];
 
 type EnquiryStep = 'type' | 'details' | 'ownership' | 'management' | 'contact' | 'declaration' | 'exposure' | 'attachments' | 'notes';
 
-type PreliminaryOwner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
-type PreliminaryManagementPerson = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
+// Passport / QID split with expiries, date of birth (incorporation for a company) and PEP Yes / No, as on the KYC form.
+type PersonDetails = { passportNumber?: string; passportExpiry?: string; qidNumber?: string; qidExpiry?: string; dateOfBirth?: string; isPep?: string };
+type PreliminaryOwner = PersonDetails & { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
+type PreliminaryManagementPerson = PersonDetails & { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[]; positionOther?: string };
+const IDENTITY_COPIES_DOCUMENT = 'Passport / QID copies';
 type PreliminaryDeclaration = {
   fullName: string;
   position: string;
@@ -107,6 +113,7 @@ type EnquiryValidationForm = {
   proposedLegalForm: string;
   proposedLegalFormOther: string;
   jurisdictionOfRegistration: string;
+  jurisdictionOfRegistrationOther: string;
   countryOfIncorporation: string;
   proposedBusinessActivity: string;
   sourceOfInitialCapital: string;
@@ -268,7 +275,7 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (form.enquiryType === 'PROPOSED_COMPANY') {
       if (!form.proposedCompanyName.trim()) return 'Proposed company name is required.';
       if (!resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther)) return 'Proposed legal form is required.';
-      if (!form.jurisdictionOfRegistration) return 'Jurisdiction of registration is required.';
+      if (!form.jurisdictionOfRegistration || (form.jurisdictionOfRegistration === 'Other' && !form.jurisdictionOfRegistrationOther.trim())) return 'Jurisdiction of registration is required.';
       if (!form.countryOfIncorporation) return 'Country of incorporation is required.';
       if (!form.proposedBusinessActivity.trim()) return 'Proposed business activity is required.';
       if (!form.sourceOfInitialCapital.trim()) return 'Source of initial capital is required.';
@@ -389,6 +396,7 @@ export function AddEnquiryPage() {
     proposedLegalForm: '',
     proposedLegalFormOther: '',
     jurisdictionOfRegistration: '',
+    jurisdictionOfRegistrationOther: '',
     // QFC, MOCI and the free zones are all in Qatar, so new proposed companies start with Qatar (editable).
     countryOfIncorporation: 'Qatar',
     proposedBusinessActivity: '',
@@ -447,15 +455,16 @@ export function AddEnquiryPage() {
           areaOfOperation: enquiry.areaOfOperation || '',
           proposedLegalForm: proposedLegalForm.value,
           proposedLegalFormOther: proposedLegalForm.otherValue,
-          jurisdictionOfRegistration: String(details.jurisdictionOfRegistration || ''),
+          jurisdictionOfRegistration: splitOtherValue(String(details.jurisdictionOfRegistration || ''), jurisdictions).value,
+          jurisdictionOfRegistrationOther: splitOtherValue(String(details.jurisdictionOfRegistration || ''), jurisdictions).otherValue,
           // Enquiries saved before this field existed show Qatar when a (Qatari) jurisdiction is already chosen.
           countryOfIncorporation: String(details.countryOfIncorporation || (details.preliminaryKyc as Record<string, unknown> | undefined)?.countryOfIncorporation || (details.jurisdictionOfRegistration ? 'Qatar' : '')),
           proposedBusinessActivity: String(details.proposedBusinessActivity || ''),
           sourceOfInitialCapital: String(details.sourceOfInitialCapital || ''),
           proposedRegisteredOfficeAddress: String(details.proposedRegisteredOfficeAddress || ''),
-          preliminaryShareholders: Array.isArray(preliminary.shareholders) && preliminary.shareholders.length ? (preliminary.shareholders as PreliminaryOwner[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
-          preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? (preliminary.ubos as PreliminaryOwner[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
-          preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? (preliminary.management as PreliminaryManagementPerson[]).map((row) => ({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryManagement()],
+          preliminaryShareholders: Array.isArray(preliminary.shareholders) && preliminary.shareholders.length ? (preliminary.shareholders as PreliminaryOwner[]).map((row) => withSplitIdentity({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
+          preliminaryUbos: Array.isArray(preliminary.ubos) && preliminary.ubos.length ? (preliminary.ubos as PreliminaryOwner[]).map((row) => withSplitIdentity({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryOwner()],
+          preliminaryManagement: Array.isArray(preliminary.management) && preliminary.management.length ? (preliminary.management as PreliminaryManagementPerson[]).map((row) => withSplitIdentity({ ...row, id: row.id || crypto.randomUUID() })) : [blankPreliminaryManagement()],
           preliminaryDeclaration: preliminary.declaration && typeof preliminary.declaration === 'object'
             ? {
                 fullName: String(preliminary.declaration.fullName || ''),
@@ -514,7 +523,7 @@ export function AddEnquiryPage() {
         ? {
             ...keyContactDetails,
             proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
-            jurisdictionOfRegistration: form.jurisdictionOfRegistration,
+            jurisdictionOfRegistration: resolveOtherValue(form.jurisdictionOfRegistration, form.jurisdictionOfRegistrationOther),
             countryOfIncorporation: form.countryOfIncorporation,
             proposedBusinessActivity: form.proposedBusinessActivity,
             sourceOfInitialCapital: form.sourceOfInitialCapital,
@@ -522,7 +531,7 @@ export function AddEnquiryPage() {
             preliminaryKyc: {
               companyName: form.proposedCompanyName,
               proposedLegalForm: resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther),
-              jurisdiction: form.jurisdictionOfRegistration,
+              jurisdiction: resolveOtherValue(form.jurisdictionOfRegistration, form.jurisdictionOfRegistrationOther),
               countryOfIncorporation: form.countryOfIncorporation,
               businessActivity: form.proposedBusinessActivity,
               registeredOfficeAddress: form.proposedRegisteredOfficeAddress,
@@ -530,7 +539,7 @@ export function AddEnquiryPage() {
               expectedBusiness: resolvedRequestedServices(form),
               shareholders: form.preliminaryShareholders,
               ubos: form.preliminaryUbos,
-              management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.join(', ') || row.position })),
+              management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.length ? row.positions.map((item) => (item === 'Other' ? row.positionOther?.trim() || '' : item)).filter(Boolean).join(', ') : row.position })),
               contact: {
                 fullName: form.keyContactName,
                 position: resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther),
@@ -988,11 +997,11 @@ export function AddEnquiryPage() {
           ) : null}
 
           {currentStep.id === 'ownership' && form.enquiryType === 'PROPOSED_COMPANY' ? (
-            <PreliminaryOwnershipForm form={form} onChange={setForm} />
+            <PreliminaryOwnershipForm form={form} onChange={setForm} onIdentityFile={(file) => setAttachments((current) => withIdentityCopy(current, file))} />
           ) : null}
 
           {currentStep.id === 'management' && form.enquiryType === 'PROPOSED_COMPANY' ? (
-            <PreliminaryManagementForm form={form} onChange={setForm} />
+            <PreliminaryManagementForm form={form} onChange={setForm} onIdentityFile={(file) => setAttachments((current) => withIdentityCopy(current, file))} />
           ) : null}
 
           {currentStep.id === 'exposure' ? (
@@ -1095,7 +1104,7 @@ function ProposedCompanyDetails({
           }}
           allowOther
         />
-        <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} options={jurisdictions} onChange={(value) => onFormChange({ ...form, jurisdictionOfRegistration: value })} />
+        <SearchableSelect label="Jurisdiction of registration *" value={form.jurisdictionOfRegistration} otherValue={form.jurisdictionOfRegistrationOther} options={jurisdictions.filter((item) => item !== 'Other')} onChange={(value) => onFormChange({ ...form, jurisdictionOfRegistration: value, ...(value === 'Other' ? {} : { jurisdictionOfRegistrationOther: '' }) })} onOtherChange={(value) => onFormChange({ ...form, jurisdictionOfRegistrationOther: value })} allowOther />
         <SearchableSelect label="Country of incorporation *" value={form.countryOfIncorporation} options={countryOptions} onChange={(value) => onFormChange({ ...form, countryOfIncorporation: value })} />
         <label className="text-sm font-medium text-slate-700">
           Proposed business activity <RequiredMark />
@@ -1134,7 +1143,7 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
         <PdfTable headers={['No.', ''] } rows={[
           ['1', `Proposed Company Name (if available): ${value(form.proposedCompanyName)}`],
           ['2', `Proposed Legal Form (LLC, Branch, Partnership, etc.): ${value(legalForm)}`],
-          ['3', `Jurisdiction of Registration (QFC/MOCI): ${value(form.jurisdictionOfRegistration)}`],
+          ['3', `Jurisdiction of Registration: ${value(resolveOtherValue(form.jurisdictionOfRegistration, form.jurisdictionOfRegistrationOther))}`],
           ['4', `Country of incorporation: ${value(form.countryOfIncorporation)}`],
           ['5', `Proposed Registered Office Address: ${value(form.proposedRegisteredOfficeAddress)}`],
           ['6', `Proposed Business Activity: ${value(form.proposedBusinessActivity)}`],
@@ -1144,15 +1153,15 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
       </PdfSection>
       <PdfSection title="Section B: Shareholders & Beneficial Owners (Proposed)">
         <p className="font-bold">Proposed Shareholders</p>
-        <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'Nationality', 'Country of Residence', 'Shareholder of', 'Ownership %']} rows={ownershipChainOrder(form.preliminaryShareholders).map(({ row, number }) => [number, value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), shareholderOfLabel(row, form.preliminaryShareholders), value(row.ownershipPercentage)])} />
+        <PdfTable headers={['No.', 'Name', 'Passport/QID/C.R. No', 'DOB / Incorporation', 'Nationality', 'Country of Residence', 'Shareholder of', 'Ownership %', 'PEP']} rows={ownershipChainOrder(form.preliminaryShareholders).map(({ row, number }) => [number, value(row.fullName), value(previewIdentity(row)), value(row.dateOfBirth), value(row.nationality), value(row.address), shareholderOfLabel(row, form.preliminaryShareholders), value(row.ownershipPercentage), row.shareholderType === 'Corporate Entity' ? 'N/A' : value(row.isPep)])} />
         <p className="mt-1 font-bold">Total direct ownership %: {directOwnershipTotal(form.preliminaryShareholders).toFixed(2)}%</p>
         <p className="mt-2 font-bold">Ultimate Beneficial owners (Natural Person Only)</p>
-        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Nationality', 'Country of Residence', 'UBO %']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+        <PdfTable headers={['No.', 'Name', 'Passport/QID', 'Date of Birth', 'Nationality', 'Country of Residence', 'UBO %', 'PEP']} rows={mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos).map((row, index) => [String(index + 1), value(row.fullName), value(previewIdentity(row)), value(row.dateOfBirth), value(row.nationality), value(row.address), value(row.ownershipPercentage), value(row.isPep)])} />
         <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(form.preliminaryShareholders, form.preliminaryUbos))}%</p>
         <p className="mt-2">If a shareholder is a corporate entity, please provide its Commercial Registration (or equivalent incorporation document) and ownership structure until the ultimate beneficial owner(s) (natural person(s)) are identified.</p>
       </PdfSection>
       <PdfSection title="Section C: Proposed Management & Control Persons (Directors, Secretary, SEF, Authorized Signatory)">
-        <PdfTable headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={form.preliminaryManagement.map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />
+        <PdfTable headers={['No.', 'Name', 'Passport / QID', 'Date of Birth', 'Nationality', 'Position', 'PEP']} rows={form.preliminaryManagement.map((row, index) => [String(index + 1), value(row.fullName), value(previewIdentity(row)), value(row.dateOfBirth), value(row.nationality), value(row.position || row.positions?.join(', ')), value(row.isPep)])} />
       </PdfSection>
       <PdfSection title="Section D: Required Documents">
         <PdfTable headers={['No.', 'Documents', 'Description', 'Yes/No']} rows={[
@@ -1206,12 +1215,29 @@ function totalOwnership(rows: PreliminaryOwner[]) {
   return rows.reduce((total, row) => total + (Number.parseFloat(row.ownershipPercentage) || 0), 0).toFixed(2);
 }
 
-function PreliminaryOwnershipForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
-  return <PreliminaryOwnershipEditor shareholders={form.preliminaryShareholders} ubos={form.preliminaryUbos} countries={countryOptions} nationalities={nationalityOptions} onChange={(shareholders, ubos) => onChange({ ...form, preliminaryShareholders: shareholders, preliminaryUbos: ubos })} />;
+type IdentityFileHandler = (file: File, type: 'PASSPORT' | 'QID', personName: string) => void;
+
+function PreliminaryOwnershipForm({ form, onChange, onIdentityFile }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void; onIdentityFile: IdentityFileHandler }) {
+  return <PreliminaryOwnershipEditor shareholders={form.preliminaryShareholders} ubos={form.preliminaryUbos} countries={countryOptions} nationalities={nationalityOptions} onChange={(shareholders, ubos) => onChange({ ...form, preliminaryShareholders: shareholders, preliminaryUbos: ubos })} onIdentityFile={onIdentityFile} />;
 }
 
-function PreliminaryManagementForm({ form, onChange }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void }) {
-  return <PreliminaryManagementEditor people={form.preliminaryManagement} nationalities={nationalityOptions} positions={positionOptions} onChange={(people) => onChange({ ...form, preliminaryManagement: people })} />;
+function PreliminaryManagementForm({ form, onChange, onIdentityFile }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void; onIdentityFile: IdentityFileHandler }) {
+  return <PreliminaryManagementEditor people={form.preliminaryManagement} nationalities={nationalityOptions} positions={positionOptions} onChange={(people) => onChange({ ...form, preliminaryManagement: people })} onIdentityFile={onIdentityFile} />;
+}
+
+// Printed identity in the preview: QID / passport with expiry dates; a company keeps its CR number.
+function previewIdentity(row: PersonDetails & { shareholderType?: string; identityNumber?: string }) {
+  if (row.shareholderType === 'Corporate Entity') return row.identityNumber || '';
+  const part = (label: string, number?: string, expiry?: string) => number?.trim() ? `${label}: ${number.trim()}${expiry ? ` (exp. ${expiry})` : ''}` : '';
+  return [part('QID', row.qidNumber, row.qidExpiry), part('Passport', row.passportNumber, row.passportExpiry)].filter(Boolean).join(' / ') || identitySummary(row);
+}
+
+// A passport / QID copy read on the Ownership or Management step is attached to the enquiry under one document type.
+function withIdentityCopy(attachments: AttachmentDraft[], file: File): AttachmentDraft[] {
+  const existing = attachments.find((attachment) => attachment.documentType === IDENTITY_COPIES_DOCUMENT);
+  if (existing?.files?.some((item) => item.name === file.name && item.size === file.size)) return attachments;
+  if (!existing) return [...attachments, { documentType: IDENTITY_COPIES_DOCUMENT, fileName: file.name, files: [file] }];
+  return attachments.map((attachment) => attachment === existing ? { ...attachment, files: [...(attachment.files || []), file], fileName: [attachment.fileName, file.name].filter(Boolean).join(', ') } : attachment);
 }
 
 function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label: string; description: string }> {

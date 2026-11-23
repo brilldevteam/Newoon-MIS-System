@@ -13,6 +13,7 @@ import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
+import { identitySummary, identityTokens, sameParty } from '../common/person-identity';
 
 const MANDATORY_CHECKS: ScreeningCheckType[] = [
   ScreeningCheckType.NCTC,
@@ -566,7 +567,7 @@ export class ScreeningService {
   private extractEntities(
     kycCase: Awaited<ReturnType<ScreeningService['findCase']>>,
     sections: Record<string, JsonRecord>,
-    managers: Array<{ id: string; fullName: string; identityNumber: string | null; nationality: string | null; position: string | null }>
+    managers: Array<{ id: string; fullName: string; identityNumber: string | null; qidNumber?: string | null; passportNumber?: string | null; nationality: string | null; position: string | null }>
   ) {
     const entities: ScreeningEntityOption[] = [];
     const sectionA = sections.sectionA || {};
@@ -588,7 +589,7 @@ export class ScreeningService {
         sourceId: `shareholder:${this.stringValue(row.id) || index}`,
         entityType: this.stringValue(row.shareholderType) === 'Corporate Entity' ? ScreeningEntityType.SHAREHOLDER : ScreeningEntityType.UBO,
         name: this.stringValue(row.fullName),
-        identifier: this.stringValue(row.identityNumber),
+        identifier: identitySummary(row),
         country: this.firstText(row.nationality),
         role: this.stringValue(row.shareholderType) || 'Shareholder',
         linkedClientId: this.stringValue(row.linkedClientId)
@@ -601,7 +602,7 @@ export class ScreeningService {
         sourceId: `ubo:${this.stringValue(row.id) || index}`,
         entityType: ScreeningEntityType.UBO,
         name: this.stringValue(row.fullName),
-        identifier: this.stringValue(row.identityNumber),
+        identifier: identitySummary(row),
         country: this.firstText(row.nationality),
         role: 'UBO',
         linkedClientId: this.stringValue(row.linkedClientId)
@@ -613,7 +614,7 @@ export class ScreeningService {
         sourceId: `manager:${manager.id}`,
         entityType: ScreeningEntityType.MANAGER,
         name: manager.fullName,
-        identifier: manager.identityNumber,
+        identifier: identitySummary(manager),
         country: this.firstText(manager.nationality),
         role: manager.position || 'Manager / authorized signatory'
       });
@@ -652,20 +653,21 @@ export class ScreeningService {
     }, {});
   }
 
+  // One option per person or company: someone who is shareholder, UBO, director and SEF is screened once. The same
+  // person is recognised by any matching passport / QID / CR number (or by name when one side has no number).
   private pushEntity(entities: ScreeningEntityOption[], entity: ScreeningEntityOption) {
     if (!entity.name) return;
-    const normalizedName = entity.name.trim().toLowerCase();
-    const normalizedIdentifier = (entity.identifier || '').trim().toLowerCase();
-    const existing = entities.find((item) => {
-      const itemIdentifier = (item.identifier || '').trim().toLowerCase();
-      return normalizedIdentifier ? itemIdentifier === normalizedIdentifier : !itemIdentifier && item.name.trim().toLowerCase() === normalizedName;
-    });
-    if (!existing) {
+    const party = (item: ScreeningEntityOption) => ({ name: item.name, tokens: identityTokens(item.identifier) });
+    const existing = entities.find((item) => item.entityType !== ScreeningEntityType.CLIENT_COMPANY && sameParty(party(item), party(entity)));
+    if (!existing || entity.entityType === ScreeningEntityType.CLIENT_COMPANY) {
       entities.push(entity);
       return;
     }
 
-    existing.role = Array.from(new Set([existing.role, entity.role].filter(Boolean))).join(' / ');
+    const roles = (value: string) => value.split(' / ').map((role) => role.trim()).filter(Boolean);
+    existing.role = Array.from(new Set([...roles(existing.role), ...roles(entity.role)])).join(' / ');
+    // Keep the fullest ID (for example "QID: ... / Passport: ...") so the record covers every role's number.
+    if ((entity.identifier || '').length > (existing.identifier || '').length) existing.identifier = entity.identifier;
     existing.country ||= entity.country;
     existing.linkedClientId ||= entity.linkedClientId;
   }

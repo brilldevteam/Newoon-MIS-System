@@ -10,7 +10,7 @@ import { kycNextStep, kycStatusOwner } from '../utils/kyc-status-labels';
 const STAGES = ['KYC preparation', 'DMLRO review', 'MLRO / SEF approval', 'Final KYC', 'Convert to client', 'Client active'] as const;
 
 const PREPARATION = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUBMITTED_TO_AML', 'AML_REVIEW_STARTED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_REVIEW_IN_PROGRESS', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED', 'FINAL_SIGNATURES_PENDING', 'FINAL_DOCUMENTS_PENDING'];
-export const SUBMITTABLE_STATUSES = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'];
+export const SUBMITTABLE_STATUSES = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'];
 
 // A full-KYC amendment draft is prepared by AML and submitted to DMLRO like a new file (same checklist).
 export function isAmlAmendmentDraft(kycCase: Pick<KycCase, 'status' | 'kycForm'>) {
@@ -147,7 +147,7 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
   }
 
   function PreparationChecklist() {
-    const resubmit = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(status) || isAmlAmendmentDraft(kycCase);
+    const resubmit = ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'].includes(status) || isAmlAmendmentDraft(kycCase);
     const links: Record<string, Action> = {
       documents: { label: 'Upload documents', to: `${caseUrl}/documents` },
       // Opens the first section with missing required details (the check carries that section).

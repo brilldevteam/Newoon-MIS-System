@@ -1053,3 +1053,27 @@ function downloadBlob(url: string, fileName: string) {
 function safeDownloadName(value: string) {
   return (value || 'attachments').replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim() || 'attachments';
 }
+
+// Passport / QID details read on the server from an uploaded copy, to pre-fill a person on the enquiry form.
+export type EnquiryIdentityReading =
+  | { found: false; message: string }
+  | {
+      found: true;
+      identityType: 'PASSPORT' | 'QID' | null;
+      typeMatches: boolean;
+      documentNumber: string | null;
+      documentNumberCheck: 'OK' | 'CORRECTED' | 'FAILED';
+      expiryDate: string | null;
+      expiryValid: boolean;
+      dateOfBirth: string | null;
+      nameOnDocument: string;
+      nationality: string;
+      issuingCountry: string;
+    };
+
+export function readEnquiryIdentityDocument(identityType: 'PASSPORT' | 'QID', file: File) {
+  const data = new FormData();
+  data.append('identityType', identityType);
+  data.append('files', file);
+  return api.post<EnquiryIdentityReading>('/enquiries/identity-documents/read', data, { timeout: 120000 }).then((response) => response.data);
+}

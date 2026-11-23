@@ -7,6 +7,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException
 } from '@nestjs/common';
 import { EnquiryStatus, EnquiryType, KycCaseStatus, KycFormSectionKey, NotificationType, Prisma } from '@prisma/client';
@@ -18,7 +19,9 @@ import { beneficialOwners } from '../common/ownership';
 import { chainParentId, directOwnershipTotal, overOwnedCompanies } from '../common/preliminary-ownership-chain';
 import { KycPdfRenderer } from '../kyc/export/kyc-pdf-renderer';
 import { preliminaryPdfHtml } from './preliminary-pdf';
-import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
+import { isPathInsideRoot, standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
+import { MrzResult } from '../common/mrz';
+import { IdDocumentReaderService } from '../compliance-clients/id-document-reader.service';
 import { RequestUser } from '../common/types/request-user.type';
 import { userSummarySelect } from '../common/user-summary';
 import { PrismaService } from '../prisma/prisma.service';
@@ -522,6 +525,7 @@ export class EnquiriesService {
             id: row.id,
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
             identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
+            dateOfBirth: this.preliminaryDate(row.dateOfBirth),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
           }))
         });
@@ -531,6 +535,7 @@ export class EnquiriesService {
             id: row.id,
             tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', nationality: this.optionalText(row.nationality),
             identityNumber: this.optionalText(row.identityNumber), residenceAddress: this.optionalText(row.address), ownershipPercentage: this.ownershipPercentageValue(row.ownershipPercentage),
+            dateOfBirth: this.preliminaryDate(row.dateOfBirth),
             sortOrder: index, createdBy: user.id, updatedBy: user.id
           })) });
         }
@@ -538,7 +543,10 @@ export class EnquiriesService {
       if (preliminaryManagement.length) {
         await prisma.kycManager.createMany({ data: preliminaryManagement.filter((row) => this.optionalText(row.fullName)).map((row, index) => ({
           tenantId, kycCaseId: createdCase.id, kycFormId: form.id, fullName: this.optionalText(row.fullName) || '', identityNumber: this.optionalText(row.identityNumber),
-          nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', ') || null, sortOrder: index, createdBy: user.id, updatedBy: user.id
+          nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', ') || null,
+          dateOfBirth: this.preliminaryDate(row.dateOfBirth), qidNumber: this.optionalText(row.qidNumber), qidExpiry: this.preliminaryDate(row.qidExpiry),
+          passportNumber: this.optionalText(row.passportNumber), passportExpiry: this.preliminaryDate(row.passportExpiry), isPep: row.isPep === 'Yes' || row.isPep === 'No' ? row.isPep : null,
+          sortOrder: index, createdBy: user.id, updatedBy: user.id
         })) });
       }
 
@@ -987,7 +995,7 @@ export class EnquiriesService {
         where: { sourceEnquiryId: enquiryId, ...this.tenantWhere(user) },
         select: { status: true }
       });
-      const preparationStatuses: KycCaseStatus[] = [KycCaseStatus.INQUIRY_RECEIVED, KycCaseStatus.PROPOSAL_OPTIONAL, KycCaseStatus.LEGAL_DOCUMENTS_PENDING, KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED, KycCaseStatus.RETURNED_TO_BD, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED];
+      const preparationStatuses: KycCaseStatus[] = [KycCaseStatus.INQUIRY_RECEIVED, KycCaseStatus.PROPOSAL_OPTIONAL, KycCaseStatus.LEGAL_DOCUMENTS_PENDING, KycCaseStatus.LEGAL_DOCUMENTS_UPLOADED, KycCaseStatus.RETURNED_TO_BD, KycCaseStatus.SUPERVISOR_REVIEW_PENDING, KycCaseStatus.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED, KycCaseStatus.DMLRO_ADDITIONAL_INFORMATION_REQUIRED, KycCaseStatus.MLRO_ADDITIONAL_INFORMATION_REQUIRED];
       if (cases.some((item) => !preparationStatuses.includes(item.status))) return false;
     }
     if (this.hasAnyRole(user, ['COMPANY_ADMIN', 'SUPER_ADMIN', 'AML_SUPERVISOR', 'AML_TEAM'])) {
@@ -1026,15 +1034,19 @@ export class EnquiriesService {
       shareholders: ((rows) => rows.map((row) => ({ ...row, parentRowId: chainParentId(row, rows) })))(this.asArray<Record<string, unknown>>(dto.shareholders).map((row) => ({
         id: this.optionalText(row.id) || randomUUID(), shareholderType: row.shareholderType === 'Corporate Entity' ? 'Corporate Entity' : 'Individual', parentRowId: this.optionalText(row.parentRowId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
+        ...this.preliminaryPersonFields(row),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), isUbo: Boolean(row.isUbo)
       }))),
       ubos: this.asArray<Record<string, unknown>>(dto.ubos).map((row) => ({
         id: this.optionalText(row.id) || randomUUID(), shareholderType: 'Individual', parentRowId: this.optionalText(row.parentRowId), sourceShareholderId: this.optionalText(row.sourceShareholderId),
         fullName: this.optionalText(row.fullName), nationality: this.optionalText(row.nationality), identityNumber: this.optionalText(row.identityNumber),
+        ...this.preliminaryPersonFields(row),
         address: this.optionalText(row.address), ownershipPercentage: this.optionalText(row.ownershipPercentage), ...(row.parentRowId ? { uboPercentage: this.optionalText(row.uboPercentage) || '' } : {}), isUbo: true
       })),
       management: this.asArray<Record<string, unknown>>(dto.management).map((row) => ({
-        fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', '), positions: this.asArray<string>(row.positions).map(String).filter(Boolean)
+        id: this.optionalText(row.id) || randomUUID(),
+        fullName: this.optionalText(row.fullName), identityNumber: this.optionalText(row.identityNumber), nationality: this.optionalText(row.nationality), ...this.preliminaryPersonFields(row),
+        position: this.optionalText(row.position) || this.asArray<string>(row.positions).map(String).filter(Boolean).join(', '), positions: this.asArray<string>(row.positions).map(String).filter(Boolean), positionOther: this.optionalText(row.positionOther)
       })),
       documents: this.asArray<Record<string, unknown>>(dto.documents).map((row) => ({
         documentType: this.optionalText(row.documentType), description: this.optionalText(row.description), available: Boolean(row.available)
@@ -1042,6 +1054,25 @@ export class EnquiriesService {
       contact: this.objectValue(dto.contact),
       declaration: this.objectValue(dto.declaration),
       updatedAt: new Date().toISOString()
+    };
+  }
+
+  // A YYYY-MM-DD date typed on the enquiry form; anything else is left empty rather than failing the conversion.
+  private preliminaryDate(value: unknown) {
+    const text = this.optionalText(value);
+    if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    const date = new Date(`${text}T00:00:00.000Z`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // Passport / QID split (number + expiry), date of birth (or incorporation for a company) and PEP Yes / No.
+  // Field names match the KYC form rows, so they carry over when the enquiry becomes a KYC case.
+  private preliminaryPersonFields(row: Record<string, unknown>) {
+    return {
+      dateOfBirth: this.optionalText(row.dateOfBirth),
+      passportNumber: this.optionalText(row.passportNumber), passportExpiry: this.optionalText(row.passportExpiry),
+      qidNumber: this.optionalText(row.qidNumber), qidExpiry: this.optionalText(row.qidExpiry),
+      isPep: row.isPep === 'Yes' || row.isPep === 'No' ? row.isPep : null
     };
   }
 

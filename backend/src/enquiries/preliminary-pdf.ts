@@ -10,6 +10,14 @@ const value = (item: unknown) => escape(item || '-');
 const table = (title: string, headers: string[], data: unknown[][]) => `<section><h3>${escape(title)}</h3><table><thead><tr>${headers.map((header) => `<th${header === 'No.' ? ' style="width:5%"' : ''}>${escape(header)}</th>`).join('')}</tr></thead><tbody>${data.length ? data.map((row) => `<tr>${row.map((cell) => `<td>${value(cell)}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${headers.length}">-</td></tr>`}</tbody></table></section>`;
 const artwork = (input: unknown) => typeof input === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/.test(input) ? `<img src="${escape(input)}" alt="Declaration artwork">` : '-';
 
+// QID / passport with their expiry dates; a company row (or an older row) keeps its single number.
+const idText = (row: Row) => {
+  const part = (label: string, number: unknown, expiry: unknown) => String(number ?? '').trim() ? `${label}: ${String(number).trim()}${String(expiry ?? '').trim() ? ` (exp. ${String(expiry).trim()})` : ''}` : '';
+  const split = [part('QID', row.qidNumber, row.qidExpiry), part('Passport', row.passportNumber, row.passportExpiry)].filter(Boolean).join(' / ');
+  return row.shareholderType === 'Corporate Entity' ? row.identityNumber : split || row.identityNumber;
+};
+const pep = (row: Row) => row.shareholderType === 'Corporate Entity' ? 'N/A' : row.isPep;
+
 export function preliminaryPdfHtml(data: Row): string {
   const shareholders = rows(data.shareholders);
   const ubos = beneficialOwners(shareholders, rows(data.ubos));
@@ -17,7 +25,7 @@ export function preliminaryPdfHtml(data: Row): string {
   const declaration = object(data.declaration);
   const total = (items: Row[]) => items.reduce((sum, row) => sum + (Number(row.ownershipPercentage) || 0), 0).toFixed(2);
   // Chain order: each direct shareholder followed by its parent companies, numbered 1, 1.1, 1.1.1.
-  const parties = (items: Row[]) => ownershipChainOrder(items).map(({ row, number }) => [number, row.fullName, row.identityNumber, row.nationality, row.address, shareholderOfLabel(row, items), row.ownershipPercentage]);
+  const parties = (items: Row[]) => ownershipChainOrder(items).map(({ row, number }) => [number, row.fullName, idText(row), row.dateOfBirth, row.nationality, row.address, shareholderOfLabel(row, items), row.ownershipPercentage, pep(row)]);
   const contactEntries = [['Full Name', contact.fullName], ['Position', contact.position], ['Nationality', contact.nationality], ['Passport Number', contact.passportNumber], ['Passport Expiry Date', contact.passportExpiryDate], ['QID Number', contact.qidNumber], ['QID Expiry Date', contact.qidExpiryDate], ['Mobile Number', contact.mobileNumber], ['Email', contact.email]].filter(([, item]) => String(item ?? '').trim() && String(item).trim() !== '-');
   const date = data.completedAt ? new Date(String(data.completedAt)).toLocaleDateString('en-GB', { timeZone: 'UTC' }) : '-';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -26,9 +34,9 @@ export function preliminaryPdfHtml(data: Row): string {
   ${table('Section A: Basic Client Details', ['No.', 'Details'], [
     [1, `Proposed Company Name: ${data.companyName || '-'}`], [2, `Proposed Legal Form: ${data.proposedLegalForm || '-'}`], [3, `Jurisdiction of Registration: ${data.jurisdiction || '-'}`], [4, `Country of incorporation: ${data.countryOfIncorporation || '-'}`], [5, `Proposed Registered Office Address: ${data.registeredOfficeAddress || '-'}`], [6, `Proposed Business Activity: ${data.businessActivity || '-'}`], [7, `Expected Source of Initial Capital: ${data.sourceOfFunds || '-'}`], [8, `Expected Business from Newoon: ${Array.isArray(data.expectedBusiness) ? data.expectedBusiness.join(', ') : data.expectedBusiness || '-'}`]
   ])}
-  ${table('Section B: Proposed Shareholders', ['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %'], parties(shareholders))}<p><strong>Total direct ownership %: ${directOwnershipTotal(shareholders).toFixed(2)}%</strong></p>
-  ${table('Ultimate Beneficial Owners (Natural Person Only)', ['No.', 'Name', 'Company', 'Passport/QID', 'Nationality', 'Residence', 'UBO %'], ubos.map((row, index) => [index + 1, row.fullName, uboCompanyName(row, shareholders), row.identityNumber, row.nationality, row.address, row.ownershipPercentage]))}<p><strong>Total UBO %: ${total(ubos)}%</strong></p>
-  ${table('Section C: Proposed Management & Control Persons', ['No.', 'Name', 'Passport / QID', 'Nationality', 'Position'], rows(data.management).map((row, index) => [index + 1, row.fullName, row.identityNumber, row.nationality, Array.isArray(row.positions) && row.positions.length ? row.positions.join(', ') : row.position]))}
+  ${table('Section B: Proposed Shareholders', ['No.', 'Name', 'Passport/QID/CR', 'DOB / Incorporation', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %', 'PEP'], parties(shareholders))}<p><strong>Total direct ownership %: ${directOwnershipTotal(shareholders).toFixed(2)}%</strong></p>
+  ${table('Ultimate Beneficial Owners (Natural Person Only)', ['No.', 'Name', 'Company', 'Passport/QID', 'Date of Birth', 'Nationality', 'Residence', 'UBO %', 'PEP'], ubos.map((row, index) => [index + 1, row.fullName, uboCompanyName(row, shareholders), idText(row), row.dateOfBirth, row.nationality, row.address, row.ownershipPercentage, row.isPep]))}<p><strong>Total UBO %: ${total(ubos)}%</strong></p>
+  ${table('Section C: Proposed Management & Control Persons', ['No.', 'Name', 'Passport / QID', 'Date of Birth', 'Nationality', 'Position', 'PEP'], rows(data.management).map((row, index) => [index + 1, row.fullName, idText(row), row.dateOfBirth, row.nationality, row.position || (Array.isArray(row.positions) ? row.positions.join(', ') : ''), row.isPep]))}
   ${table('Section D: Required Documents', ['Document', 'Available'], rows(data.documents).map((row) => [row.documentType, row.available ? 'Yes' : 'No']))}
   ${table('Section E: Key Contact Person', ['No.', 'Field', 'Details'], contactEntries.map(([label, item], index) => [index + 1, label, item]))}
   <h3>Section F: Client Declaration</h3><p>By signing this document, I hereby confirm that all information and documents provided are true, complete, and up to date. I am authorised to represent and sign this document on behalf of the proposed entity.</p>

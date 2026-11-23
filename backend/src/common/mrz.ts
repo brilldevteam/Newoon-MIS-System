@@ -13,6 +13,8 @@ export type MrzResult = {
   documentNumberCheck: 'OK' | 'CORRECTED' | 'FAILED';
   expiryDate: string | null;
   expiryValid: boolean;
+  // Date of birth (YYYY-MM-DD) when it matches its check digit; null otherwise.
+  dateOfBirth: string | null;
   nationality: string;
   surname: string;
   givenNames: string;
@@ -74,6 +76,18 @@ function expiryDate(raw: string, check: string) {
   return { date: `${fullYear}-${value.slice(2, 4)}-${value.slice(4, 6)}`, valid };
 }
 
+// Birth years are in the past: a two-digit year later than this year belongs to the previous century.
+function birthDate(raw: string, check: string) {
+  const value = digits(raw);
+  if (!/^\d{6}$/.test(value) || !matches(value, check)) return null;
+  const year = Number(value.slice(0, 2));
+  const month = Number(value.slice(2, 4));
+  const day = Number(value.slice(4, 6));
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const fullYear = year + (year > new Date().getFullYear() % 100 ? 1900 : 2000);
+  return `${fullYear}-${value.slice(2, 4)}-${value.slice(4, 6)}`;
+}
+
 const clean = (value: string) => value.replace(/<+$/g, '');
 const names = (value: string) => {
   const [surname, given = ''] = value.split('<<');
@@ -104,6 +118,7 @@ function parseTd3(first: string, second: string): MrzResult {
     documentNumberCheck: number.check,
     expiryDate: expiry.date,
     expiryValid: expiry.valid,
+    dateOfBirth: birthDate(l2.slice(13, 19), l2[19]),
     nationality: clean(l2.slice(10, 13)),
     ...names(l1.slice(5)),
     lines: [l1, l2]
@@ -131,6 +146,7 @@ function parseTd1(first: string, second: string, third: string): MrzResult {
     documentNumberCheck: number.check,
     expiryDate: expiry.date,
     expiryValid: expiry.valid,
+    dateOfBirth: birthDate(l2.slice(0, 6), l2[6]),
     nationality: clean(l2.slice(15, 18)),
     ...names(l3),
     lines: [l1, l2, l3]

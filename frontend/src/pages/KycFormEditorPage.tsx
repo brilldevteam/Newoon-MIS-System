@@ -1041,7 +1041,7 @@ export function KycFormEditorPage() {
     [form.sectionB.shareholders]
   );
   const canEditAllSections = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
-  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase?.status || '') ||
+  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase?.status || '') ||
     (kycCase?.status === 'AML_REVIEW_STARTED' && form.fullKycStarted === true && form.status === 'AMENDMENT_DRAFT' && !form.isLocked);
   const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
   const sectionHMode: SectionHMode = canEditAllSections ? 'ALL' : hasAnyRole(user, ['DMLRO']) ? 'DMLRO' : hasAnyRole(user, ['MLRO']) ? 'MLRO' : hasAnyRole(user, ['SEF']) ? 'SEF' : 'AML';

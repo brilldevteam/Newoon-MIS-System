@@ -12,13 +12,13 @@ import { ComplianceDocumentsService } from './compliance-documents.service';
 import { ComplianceMonitoringController, ComplianceRemindersController } from './compliance-monitoring.controller';
 import { ComplianceMonitoringService } from './compliance-monitoring.service';
 import { ComplianceRemindersService } from './compliance-reminders.service';
-import { IdDocumentReaderService } from './id-document-reader.service';
+import { IdDocumentReaderModule } from './id-document-reader.module';
 
 @Module({
-  imports: [KycModule, AiSettingsModule],
+  imports: [KycModule, AiSettingsModule, IdDocumentReaderModule],
   controllers: [ComplianceClientsController, ComplianceDocumentsController, ComplianceMonitoringController, ComplianceRemindersController, ClientLegalDocumentsController, ClientIdentityDocumentsController],
   providers: [
-    ComplianceClientsService, ComplianceDocumentsService, ComplianceMonitoringService, ComplianceRemindersService, IdDocumentReaderService,
+    ComplianceClientsService, ComplianceDocumentsService, ComplianceMonitoringService, ComplianceRemindersService,
     ClientLegalDocumentsService, DocumentReaderService, LegalDocumentsAccessGuard
   ]
 })

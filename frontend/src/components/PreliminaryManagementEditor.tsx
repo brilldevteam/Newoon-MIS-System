@@ -1,12 +1,16 @@
 import { ChevronDown, Plus, Trash2, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SearchableMultiSelect, splitList } from './SearchableSelect';
+import { PreliminaryPersonFields } from './PreliminaryPersonFields';
 
-type Person = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[] };
-type Props = { people: Person[]; nationalities: string[]; positions: string[]; onChange: (people: Person[]) => void };
+type Person = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[]; positionOther?: string; passportNumber?: string; passportExpiry?: string; qidNumber?: string; qidExpiry?: string; dateOfBirth?: string; isPep?: string };
+type Props = { people: Person[]; nationalities: string[]; positions: string[]; onChange: (people: Person[]) => void; onIdentityFile?: (file: File, type: 'PASSPORT' | 'QID', personName: string) => void };
+
+// "Other" positions are typed in positionOther; position is the printed list with the typed value in its place.
+const resolvedPosition = (positions: string[], other = '') => positions.map((item) => (item === 'Other' ? other.trim() : item)).filter(Boolean).join(', ');
 const inputClass = 'mt-1.5 min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950 focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500';
 
-export function PreliminaryManagementEditor({ people, nationalities, positions, onChange }: Props) {
+export function PreliminaryManagementEditor({ people, nationalities, positions, onChange, onIdentityFile }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState('');
   const personRefs = useRef(new Map<string, HTMLElement>());
@@ -41,7 +45,7 @@ export function PreliminaryManagementEditor({ people, nationalities, positions, 
         <header className={`flex items-center gap-2 px-3 py-2 ${expanded ? 'border-b border-slate-200' : ''}`}>
           <button type="button" aria-expanded={expanded} aria-controls={panelId} onClick={() => setCollapsed((ids) => { const next = new Set(ids); if (next.has(key)) next.delete(key); else next.add(key); return next; })} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded px-1 py-2 text-left hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-600">
             <UserRound className="h-5 w-5 shrink-0 text-slate-500" />
-            <span className="min-w-0 flex-1"><span className="block break-words text-sm font-semibold text-slate-950">{row.fullName || `Person ${index + 1}`}</span>{!expanded && <span className="mt-1 block break-words text-xs text-slate-600">{selectedPositions.join(', ') || 'Position not selected'}</span>}</span>
+            <span className="min-w-0 flex-1"><span className="block break-words text-sm font-semibold text-slate-950">{row.fullName || `Person ${index + 1}`}</span>{!expanded && <span className="mt-1 block break-words text-xs text-slate-600">{resolvedPosition(selectedPositions, row.positionOther) || 'Position not selected'}</span>}</span>
             <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${expanded ? 'rotate-180' : ''}`} />
           </button>
           <button type="button" title="Remove person" aria-label={`Remove ${row.fullName || `person ${index + 1}`}`} disabled={people.length === 1} onClick={() => onChange(people.filter((_, rowIndex) => rowIndex !== index))} className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
@@ -49,9 +53,9 @@ export function PreliminaryManagementEditor({ people, nationalities, positions, 
         <div id={panelId} hidden={!expanded} className="p-4">
           <div className="grid min-w-0 gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>
             <label className="min-w-0 text-sm font-medium text-slate-700">Full name<input className={inputClass} value={row.fullName} onChange={(event) => update(index, { fullName: event.target.value })} /></label>
-            <label className="min-w-0 text-sm font-medium text-slate-700">Passport or QID number<input type="text" className={inputClass} value={row.identityNumber} onChange={(event) => update(index, { identityNumber: event.target.value })} /></label>
             <div className="min-w-0"><SearchableMultiSelect label="Nationality" value={splitList(row.nationality)} options={nationalities.filter(Boolean)} onChange={(value) => update(index, { nationality: value.join(', ') })} placeholder="Select nationalities" /></div>
-            <div className="min-w-0"><SearchableMultiSelect label="Positions" value={selectedPositions} options={positions.filter(Boolean)} onChange={(value) => update(index, { positions: value, position: value.join(', ') })} placeholder="Select positions" /></div>
+            <div className="min-w-0"><SearchableMultiSelect label="Positions" value={selectedPositions} options={positions.filter((item) => item && item !== 'Other')} allowOther otherValue={row.positionOther || ''} onOtherChange={(value) => update(index, { positionOther: value, position: resolvedPosition(selectedPositions, value) })} onChange={(value) => update(index, { positions: value, ...(value.includes('Other') ? {} : { positionOther: '' }), position: resolvedPosition(value, value.includes('Other') ? row.positionOther : '') })} placeholder="Select positions" /></div>
+            <PreliminaryPersonFields row={row} onChange={(change) => update(index, change)} onIdentityFile={onIdentityFile ? (file, type) => onIdentityFile(file, type, row.fullName) : undefined} />
           </div>
         </div>
       </article>;
