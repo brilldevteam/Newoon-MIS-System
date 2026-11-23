@@ -3238,7 +3238,7 @@ export class KycService {
     await this.audit(tx, user, kycCase.tenantId, 'InternalReviewSubmission', submissionId, { action: 'MLRO_REQUESTED_ADDITIONAL_INFORMATION', decision: ReviewDecision.REQUEST_ADDITIONAL_INFORMATION });
     await this.createNotification(
       tx, kycCase, NotificationType.ADDITIONAL_INFORMATION_REQUESTED, 'Additional information requested by MLRO',
-      `${kycCase.title} was returned to the AML team: ${reason ? reason.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) : note}. Update the file and resubmit it to DMLRO.`
+      `${kycCase.title} was returned to the AML team: ${reason ? reason.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300).replace(/[.\s]+$/, '') : note}. Update the file and resubmit it to DMLRO.`
     );
     return tx.kycCase.findUniqueOrThrow({ where: { id }, include: this.caseInclude() });
   }
