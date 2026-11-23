@@ -44,7 +44,41 @@ const REQUIRED_DOCUMENT_TYPES = [
 export class EnquiriesService {
   private readonly logger = new Logger(EnquiriesService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly preliminaryPdf: KycPdfRenderer) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly preliminaryPdf: KycPdfRenderer,
+    @Optional() private readonly idReader?: IdDocumentReaderService
+  ) {}
+
+  // Pre-fills a person's passport / QID details on the enquiry form. Reading is a convenience: when the file cannot
+  // be read the user types the values. Nothing is stored; the copy itself is uploaded with the enquiry attachments.
+  async readIdentityDocument(identityType: string | undefined, files: Array<{ originalname: string; mimetype: string; size: number; buffer: Buffer }>) {
+    if (files.length !== 1) throw new BadRequestException('Select one file to read.');
+    validateUploadFiles(files, standardDocumentKinds, 'document');
+    let read: MrzResult | null = null;
+    try {
+      read = this.idReader ? await this.idReader.read(files[0]) : null;
+    } catch {
+      read = null;
+    }
+    if (!read || (!read.documentNumber && !read.expiryDate)) {
+      return { found: false, message: 'The details could not be read from this file. Enter them from the document.' };
+    }
+    const detectedType = read.format === 'TD3' && read.documentType.startsWith('P') ? 'PASSPORT' : read.format === 'TD1' ? 'QID' : null;
+    return {
+      found: true,
+      identityType: detectedType || (identityType === 'QID' || identityType === 'PASSPORT' ? identityType : null),
+      typeMatches: !identityType || !detectedType || identityType === detectedType,
+      documentNumber: read.documentNumber,
+      documentNumberCheck: read.documentNumberCheck,
+      expiryDate: read.expiryDate,
+      expiryValid: read.expiryValid,
+      dateOfBirth: read.dateOfBirth,
+      nameOnDocument: [read.givenNames, read.surname].filter(Boolean).join(' '),
+      nationality: read.nationality,
+      issuingCountry: read.issuingCountry
+    };
+  }
 
   async downloadPreliminaryPdf(user: RequestUser, id: string) {
     const { data } = await this.getPreliminaryKyc(user, id);

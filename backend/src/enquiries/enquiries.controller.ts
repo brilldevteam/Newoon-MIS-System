@@ -5,7 +5,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
+import { safeResponseFileName, standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
@@ -39,6 +39,15 @@ export class EnquiriesController {
     @Query('excludeId') excludeId?: string
   ) {
     return this.enquiriesService.findOpenDuplicate(user, { enquiryType, name, clientId, excludeId });
+  }
+
+  // Reads the number, expiry date, name and date of birth from a passport or QID copy to pre-fill a person on the
+  // enquiry form. Read on this server (MRZ); nothing is stored. Declared before ':id' routes.
+  @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post('identity-documents/read')
+  @UseInterceptors(FilesInterceptor('files', 1, uploadInterceptorOptions(standardDocumentKinds)))
+  readIdentityDocument(@Body('identityType') identityType: string | undefined, @UploadedFiles() files: Array<{ originalname: string; mimetype: string; size: number; buffer: Buffer }>) {
+    return this.enquiriesService.readIdentityDocument(identityType, files || []);
   }
 
   @Roles('AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
