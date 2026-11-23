@@ -67,15 +67,17 @@ export function PreliminaryPersonFields<T extends PersonIdentity>({ row, isCompa
         ? { qidNumber: result.documentNumber || row.qidNumber || '', qidExpiry: result.expiryDate || row.qidExpiry || '' }
         : { passportNumber: result.documentNumber || row.passportNumber || '', passportExpiry: result.expiryDate || row.passportExpiry || '' };
       if (result.dateOfBirth && !row.dateOfBirth) change.dateOfBirth = result.dateOfBirth;
-      if (result.nameOnDocument && !row.fullName.trim()) change.fullName = titleCase(result.nameOnDocument);
+      const nameFilled = Boolean(result.nameOnDocument && !row.fullName.trim());
+      if (nameFilled) change.fullName = titleCase(result.nameOnDocument);
       patch(change as Partial<T>);
       const checks = [
         result.documentNumberCheck !== 'OK' ? 'the number' : '',
-        result.expiryDate && !result.expiryValid ? 'the expiry date' : ''
+        result.expiryDate && !result.expiryValid ? 'the expiry date' : '',
+        nameFilled ? 'the name' : ''
       ].filter(Boolean);
       const label = type === 'QID' ? 'QID' : 'Passport';
       setMessage({
-        tone: checks.length || !result.typeMatches ? 'warn' : 'ok',
+        tone: checks.some((item) => item !== 'the name') || !result.typeMatches ? 'warn' : 'ok',
         text: `${label} details filled from the copy${result.typeMatches ? '' : ` (the file looks like a ${label}, not a ${readType === 'QID' ? 'QID' : 'passport'})`}.${checks.length ? ` Compare ${checks.join(' and ')} with the document.` : ' Check them against the document.'}`
       });
     } catch {

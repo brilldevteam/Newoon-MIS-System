@@ -6,6 +6,13 @@ import { uboCompanyName } from '../utils/ubo-display-name';
 export function PreliminaryKycDocument({ data, embedded = false }: { data: Record<string, any>; embedded?: boolean }) {
   const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
   const value = (item: unknown) => String(item || '-');
+  // QID / passport with expiry dates (a company keeps its CR number); PEP and date of birth / incorporation per person.
+  const idText = (row: Record<string, any>) => {
+    if (row.shareholderType === 'Corporate Entity') return value(row.identityNumber);
+    const part = (label: string, number: unknown, expiry: unknown) => String(number || '').trim() ? `${label}: ${String(number).trim()}${expiry ? ` (exp. ${expiry})` : ''}` : '';
+    return value([part('QID', row.qidNumber, row.qidExpiry), part('Passport', row.passportNumber, row.passportExpiry)].filter(Boolean).join(' / ') || row.identityNumber);
+  };
+  const pep = (row: Record<string, any>) => row.shareholderType === 'Corporate Entity' ? 'N/A' : value(row.isPep);
   const totalOwnership = (items: Array<Record<string, any>>) => items.reduce((total, item) => total + (Number.parseFloat(String(item.ownershipPercentage || '')) || 0), 0).toFixed(2);
   const expectedBusiness = Array.isArray(data.expectedBusiness) ? data.expectedBusiness.filter(Boolean).join(', ') : data.expectedBusiness;
   const contact = data.contact && typeof data.contact === 'object' ? data.contact as Record<string, any> : {};
@@ -21,11 +28,11 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
         ['5', `Proposed Registered Office Address: ${value(data.registeredOfficeAddress)}`], ['6', `Proposed Business Activity: ${value(data.businessActivity)}`],
         ['7', `Expected Source of Initial Capital: ${value(data.sourceOfFunds)}`], ['8', `Expected Business from Newoon: ${value(expectedBusiness)}`]
       ]} />
-      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %']} rows={ownershipChainOrder(rows(data.shareholders)).map(({ row, number }) => [number, value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.address), shareholderOfLabel(row, rows(data.shareholders)), value(row.ownershipPercentage)])} />
+      <PreliminaryTable title="Section B: Proposed Shareholders" headers={['No.', 'Name', 'Passport/QID/CR', 'DOB / Incorporation', 'Nationality', 'Residence', 'Shareholder of', 'Ownership %', 'PEP']} rows={ownershipChainOrder(rows(data.shareholders)).map(({ row, number }) => [number, value(row.fullName), idText(row), value(row.dateOfBirth), value(row.nationality), value(row.address), shareholderOfLabel(row, rows(data.shareholders)), value(row.ownershipPercentage), pep(row)])} />
       <p className="mt-1 font-bold">Total direct ownership %: {directOwnershipTotal(rows(data.shareholders)).toFixed(2)}%</p>
-      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Company', 'Passport/QID', 'Nationality', 'Residence', 'UBO %']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), uboCompanyName(row, rows(data.shareholders)), value(row.identityNumber), value(row.nationality), value(row.address), value(row.ownershipPercentage)])} />
+      <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Company', 'Passport/QID', 'Date of Birth', 'Nationality', 'Residence', 'UBO %', 'PEP']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), uboCompanyName(row, rows(data.shareholders)), idText(row), value(row.dateOfBirth), value(row.nationality), value(row.address), value(row.ownershipPercentage), pep(row)])} />
       <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)))}%</p>
-      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Nationality', 'Position']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), value(row.identityNumber), value(row.nationality), value(row.positions?.join(', ') || row.position)])} />
+      <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Date of Birth', 'Nationality', 'Position', 'PEP']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), idText(row), value(row.dateOfBirth), value(row.nationality), value(row.position || row.positions?.join(', ')), pep(row)])} />
       <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
       <PreliminaryTable title="Section E: Key Contact Person" headers={['No.', 'Field', 'Details']} rows={filledContactRows([
         ['1', 'Full Name', value(contact.fullName)], ['2', 'Position', value(contact.position)], ['3', 'Nationality', value(contact.nationality)],

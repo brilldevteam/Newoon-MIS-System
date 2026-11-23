@@ -89,9 +89,12 @@ function birthDate(raw: string, check: string) {
 }
 
 const clean = (value: string) => value.replace(/<+$/g, '');
+// OCR often reads the '<' filler as K, L or I ("ALPHAKKKLLL"): words made only of those letters (3 or more) and
+// lone K's are dropped, so a misread filler does not end up in the person's name. Staff still check the name.
+const dropFiller = (value: string) => value.replace(/</g, ' ').split(/\s+/).filter((word) => word && word !== 'K' && !/^[KLI]{3,}$/.test(word)).join(' ');
 const names = (value: string) => {
   const [surname, given = ''] = value.split('<<');
-  return { surname: surname.replace(/</g, ' ').trim(), givenNames: given.replace(/</g, ' ').trim() };
+  return { surname: dropFiller(surname), givenNames: dropFiller(given) };
 };
 
 // OCR text to candidate MRZ lines: upper case, spaces removed, chevron look-alikes mapped to '<'.
