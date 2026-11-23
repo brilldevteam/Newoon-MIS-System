@@ -584,8 +584,39 @@ const sefDecisionLabels: Record<string, string> = {
 };
 
 // Review decisions move the file to someone else and cannot be undone from this page, so the reviewer confirms first.
-function confirmReviewDecision(stage: string, decisionLabel: string, outcome: string) {
-  return window.confirm(`Submit the ${stage} decision "${decisionLabel}"?\n\n${outcome} This cannot be undone from this page.`);
+// What happens to the file after each decision, worded before it is sent.
+const reviewDecisionOutcomes: Record<string, Record<string, string>> = {
+  DMLRO: {
+    APPROVE: 'The file goes to MLRO for the final decision.',
+    APPROVE_WITH_CONDITIONS: 'The file goes to MLRO with your conditions.',
+    DMLRO_FINAL_APPROVE: 'The KYC becomes final without MLRO review.',
+    REQUEST_ADDITIONAL_INFORMATION: 'The file goes back to the AML Supervisor to provide the information.',
+    RETURN_TO_SUPERVISOR: 'The file goes back to the AML Supervisor.'
+  },
+  MLRO: {
+    APPROVE: 'The KYC becomes final.',
+    APPROVE_WITH_CONDITIONS: 'The KYC becomes final with your conditions.',
+    REJECT: 'The KYC file is rejected.',
+    REQUEST_ADDITIONAL_INFORMATION: 'The file goes back to the AML team to provide the information, then through DMLRO again.',
+    RETURN_TO_DMLRO: 'The file goes back to DMLRO.',
+    SEND_TO_SEF: 'The file goes to SEF for a management decision.'
+  },
+  SEF: {
+    APPROVE: 'The KYC becomes final.',
+    APPROVE_WITH_CONDITIONS: 'The KYC becomes final with your conditions.',
+    RETURN_TO_MLRO: 'The file goes back to MLRO.',
+    REJECT: 'The KYC file is rejected.'
+  }
+};
+
+// Review decisions move the file to someone else and cannot be undone from this page, so the reviewer confirms first.
+function confirmReviewDecision(stage: 'DMLRO' | 'MLRO' | 'SEF', decision: string, decisionLabel: string) {
+  const outcome = reviewDecisionOutcomes[stage][decision] || '';
+  return window.confirm(`Submit the ${stage} decision "${decisionLabel}"?${outcome ? `
+
+${outcome}` : ''}
+
+This cannot be undone from this page.`);
 }
 
 function dmlroDecisionSuccessMessage(decision: string) {
@@ -1233,7 +1264,7 @@ export function KycFormEditorPage() {
       setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
-    if (!confirmReviewDecision('DMLRO', dmlroDecisionLabels[decision] || decision, dmlroDecisionSuccessMessage(decision))) return;
+    if (!confirmReviewDecision('DMLRO', decision, dmlroDecisionLabels[decision] || decision)) return;
 
     setSaving(true);
     setMessage('');
@@ -1301,7 +1332,7 @@ export function KycFormEditorPage() {
       setError('High-risk KYC files must be sent to SEF for management decision before final approval.');
       return;
     }
-    if (!confirmReviewDecision('MLRO', mlroDecisionLabels[decision] || decision, mlroDecisionSuccessMessage(decision))) return;
+    if (!confirmReviewDecision('MLRO', decision, mlroDecisionLabels[decision] || decision)) return;
 
     setSaving(true);
     setMessage('');
@@ -1363,7 +1394,7 @@ export function KycFormEditorPage() {
       setError('Add SEF conditions or comments before submitting this decision.');
       return;
     }
-    if (!confirmReviewDecision('SEF', sefDecisionLabels[decision] || decision, sefDecisionSuccessMessage(decision))) return;
+    if (!confirmReviewDecision('SEF', decision, sefDecisionLabels[decision] || decision)) return;
 
     setSaving(true);
     setMessage('');
