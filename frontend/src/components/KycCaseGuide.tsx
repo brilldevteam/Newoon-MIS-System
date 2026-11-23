@@ -166,7 +166,7 @@ export function KycCaseGuide({ kycCase, user, readiness, readinessError, isPreli
       <div className="rounded-md border border-sky-200 bg-sky-50/60 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-slate-950">{isAmlAmendmentDraft(kycCase) ? 'Your next step: complete the amendment, then resubmit it to DMLRO' : resubmit ? 'Your next step: fix the points DMLRO raised, then resubmit' : 'Your next step: prepare the KYC file and submit it to DMLRO'}</p>
+            <p className="text-sm font-semibold text-slate-950">{isAmlAmendmentDraft(kycCase) ? 'Your next step: complete the amendment, then resubmit it to DMLRO' : resubmit ? `Your next step: fix the points ${status === 'MLRO_ADDITIONAL_INFORMATION_REQUIRED' ? 'MLRO' : 'DMLRO'} raised, then resubmit` : 'Your next step: prepare the KYC file and submit it to DMLRO'}</p>
             <p className="mt-0.5 text-xs text-slate-600">
               {!readiness ? (readinessError ? 'The checklist could not be loaded.' : 'Checking what is left…') : left ? `${left} item${left === 1 ? '' : 's'} left. Work through them in this order.` : 'Everything is ready. Submit it to DMLRO.'}
             </p>
