@@ -6,12 +6,15 @@ import { identitySummary } from '../utils/person-identity';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { directOwnershipTotal, overOwnedCompanies, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
 import { DocumentFillBar } from '../components/DocumentFillBar';
+import { PeopleLink, PeopleLinkContext, SamePersonPicker } from '../components/SamePersonPicker';
+import { PeopleAdapter, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
+import { withDerivedIdentity } from '../utils/person-identity';
 import { companyFill, companyFillOutcome, FillOutcome } from '../utils/document-fill';
 import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
@@ -129,6 +132,49 @@ type EnquiryValidationForm = {
 
 const blankPreliminaryOwner = (): PreliminaryOwner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId: '', fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
 const blankPreliminaryManagement = (): PreliminaryManagementPerson => ({ id: crypto.randomUUID(), fullName: '', identityNumber: '', nationality: '', position: '', positions: [] });
+
+// The people of the enquiry (shareholders, beneficial owners, management, key contact) for "Same person as ..." and
+// for keeping one person's details the same on all their rows. Enquiry rows keep nationality as "A, B"; the key
+// contact has its own field names and a nationality list.
+const enquiryPeople: PeopleAdapter<EnquiryValidationForm> = {
+  read: (form) => {
+    const shareholderIds = new Set(form.preliminaryShareholders.map((row) => row.id).filter(Boolean));
+    const contact = {
+      fullName: form.keyContactName, nationality: form.keyContactNationality, nationalityOther: form.keyContactNationalityOther,
+      qidNumber: form.keyContactQidNumber, qidExpiry: form.keyContactQidExpiryDate, passportNumber: form.keyContactPassportNumber, passportExpiry: form.keyContactPassportExpiryDate
+    };
+    const proposed = form.enquiryType === 'PROPOSED_COMPANY';
+    return [
+      ...(proposed ? form.preliminaryShareholders.map((row, index) => ({ slot: `shareholders:${index}`, role: row.isUbo ? 'Shareholder, UBO' : 'Shareholder', row, source: row, hidden: row.shareholderType === 'Corporate Entity' })) : []),
+      ...(proposed ? form.preliminaryUbos.map((row, index) => ({ slot: `ubos:${index}`, role: 'Beneficial owner', row, source: row, hidden: Boolean((row.id && shareholderIds.has(row.id)) || (row.sourceShareholderId && shareholderIds.has(row.sourceShareholderId))) })) : []),
+      ...(proposed ? form.preliminaryManagement.map((row, index) => ({ slot: `management:${index}`, role: row.position || 'Management', row, source: row })) : []),
+      { slot: 'contact', role: 'Key contact', row: contact, source: contact }
+    ];
+  },
+  write: (form, slot, change) => {
+    const [list, position] = slot.split(':');
+    const index = Number(position);
+    const rowChange = { ...change, ...('nationality' in change ? { nationality: toList(change.nationality).join(', ') } : {}) };
+    if (list === 'shareholders') return { ...form, preliminaryShareholders: form.preliminaryShareholders.map((row, rowIndex) => (rowIndex === index ? withDerivedIdentity({ ...row, ...rowChange }) : row)) };
+    if (list === 'ubos') return { ...form, preliminaryUbos: form.preliminaryUbos.map((row, rowIndex) => (rowIndex === index ? withDerivedIdentity({ ...row, ...rowChange }) : row)) };
+    if (list === 'management') return { ...form, preliminaryManagement: form.preliminaryManagement.map((row, rowIndex) => (rowIndex === index ? withDerivedIdentity({ ...row, ...rowChange }) : row)) };
+    if (list !== 'contact') return form;
+    const next = { ...form };
+    if ('fullName' in change) next.keyContactName = String(change.fullName ?? '');
+    if ('nationality' in change) next.keyContactNationality = toList(change.nationality);
+    if ('nationalityOther' in change) next.keyContactNationalityOther = String(change.nationalityOther ?? '');
+    if ('qidNumber' in change) next.keyContactQidNumber = String(change.qidNumber ?? '');
+    if ('qidExpiry' in change) next.keyContactQidExpiryDate = String(change.qidExpiry ?? '');
+    if ('passportNumber' in change) next.keyContactPassportNumber = String(change.passportNumber ?? '');
+    if ('passportExpiry' in change) next.keyContactPassportExpiryDate = String(change.passportExpiry ?? '');
+    // Show the ID fields that now hold a number.
+    const types = new Set(next.keyContactIdentityTypes);
+    if (next.keyContactQidNumber.trim()) types.add('QID');
+    if (next.keyContactPassportNumber.trim()) types.add('Passport');
+    next.keyContactIdentityTypes = identityTypeOptions.filter((option) => types.has(option));
+    return next;
+  }
+};
 
 const existingLegalEntityAttachments = [
   'Key Contact QID / Passport attachment',
@@ -371,7 +417,7 @@ export function AddEnquiryPage() {
   const [success, setSuccess] = useState('');
   const [activeStep, setActiveStep] = useState<EnquiryStep>('type');
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(attachmentTemplates('EXISTING_LEGAL_ENTITY'));
-  const [form, setForm] = useState<EnquiryValidationForm>({
+  const [form, setFormState] = useState<EnquiryValidationForm>({
     enquiryType: 'EXISTING_LEGAL_ENTITY' as EnquiryType,
     clientId: '',
     companyName: '',
@@ -410,6 +456,21 @@ export function AddEnquiryPage() {
     preliminaryDeclaration: { fullName: '', position: '', date: '', authorizedSignature: '', authorizedSignatureDataUrl: '', companyStamp: '', companyStampDataUrl: '' },
     notes: ''
   });
+  // Every form change goes through here so a person's details stay the same on all their rows (linked by QID / passport).
+  const setForm = useCallback((value: SetStateAction<EnquiryValidationForm>) => {
+    setFormState((current) => syncLinkedPeople(current, typeof value === 'function' ? value(current) : value, enquiryPeople));
+  }, []);
+  const people = useMemo(() => enquiryPeople.read(form), [form]);
+  const peopleLink = useMemo<PeopleLink>(() => ({
+    people,
+    slotOf: (row) => people.find((person) => person.source === row)?.slot,
+    // Picking copies the chosen person's details onto the row; it is not a change to sync to other rows.
+    pick: (slot, sourceSlot) => setFormState((current) => {
+      const source = enquiryPeople.read(current).find((person) => person.slot === sourceSlot);
+      return source ? enquiryPeople.write(current, slot, personDetails(source.row)) : current;
+    })
+  }), [people]);
+
   const [declarationFiles, setDeclarationFiles] = useState<{ authorizedSignature?: File; companyStamp?: File }>({});
 
   useEffect(() => {
@@ -783,6 +844,7 @@ export function AddEnquiryPage() {
   }
 
   return (
+    <PeopleLinkContext.Provider value={peopleLink}>
     <form onSubmit={submit} className="space-y-6">
       <div>
         <Link to={id ? `/enquiries/${id}` : '/enquiries'} className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
@@ -898,6 +960,7 @@ export function AddEnquiryPage() {
 
           {currentStep.id === 'contact' ? (
             <div className="grid gap-4 md:grid-cols-2">
+              <SamePersonPicker people={people} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} />
               <label className="text-sm font-medium text-slate-700">
                 Full name <RequiredMark />
                 <input required value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -1084,6 +1147,7 @@ export function AddEnquiryPage() {
         {form.enquiryType === 'PROPOSED_COMPANY' ? <ProposedCompanyPreview form={form} attachments={attachments} /> : null}
       </section>
     </form>
+    </PeopleLinkContext.Provider>
   );
 }
 

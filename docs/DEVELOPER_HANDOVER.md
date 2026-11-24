@@ -1,5 +1,16 @@
 # Newoon MIS Developer Handover
 
+## Same Person on Several Rows: Enquiry and KYC Forms (2026-11-24)
+
+One person can be a shareholder, a beneficial owner, a manager and the key contact. Both forms now let staff pick that person instead of typing them again, and keep the rows connected.
+
+- **"Same person as ..."** on every individual row: enquiry shareholders, beneficial owners, management and key contact (`PreliminaryPersonFields`, contact step); KYC shareholders, beneficial persons (Section B), managers (Section C) and the key communication person (Section E). The list shows each person once with all their roles (rows sharing a QID / passport number are one person); company shareholders are not offered. Picking copies the **person details** (name, title, nationality, date of birth, QID and passport with expiry dates, PEP and details, dual citizenship) and keeps the **role details** of the row (share %, UBO %, position, signatory, address, contact phone / email).
+- **Linked rows**: rows with the same QID or passport number (spaces and case ignored) are the same person, as for screening and the client records. A change to the person details on one row (including a new number or expiry, or a passport / QID read from a copy) is copied to the linked rows; the row shows "Linked by QID / passport number. Also: ...". Nothing is copied when rows were added or removed in the same change, and a field edited on both rows at once keeps each value. A person without any QID / passport number is copied once and not kept linked.
+- **The shareholder-is-UBO case** keeps its existing tick ("Beneficial owner (UBO)" / "Mark as beneficial person"), which does not need a second row.
+- **Across the application**: the same numbers carry the link onwards: enquiry rows become the KYC rows on conversion, screening merges one person across roles by number, and activation / re-KYC approval keep one client person record per individual with all roles (Phase 1).
+- **Code**: `frontend/src/utils/linked-people.ts` (person fields, matching, sync, choices), `components/SamePersonPicker.tsx`; adapters `enquiryPeople` (`AddEnquiryPage.tsx`, all enquiry form changes pass through `setForm`) and `kycPeople` (`KycFormEditorPage.tsx`, applied in `setSection` and the fill-from-copy updates). Frontend only; no API or database change.
+- **Checks**: build passes; the linking rules were checked with a throw-away script (choices with roles, copy keeps role fields, edits and a changed QID follow to linked rows, removals copy nothing, unlinked name-only rows, passport spacing/case). **Not verified in a browser.**
+
 ## Fill from a Copy on the Enquiry and KYC Forms (2026-11-24)
 
 Requirement A03: uploading a company's CR or a person's passport / QID fills the form, including the expiry dates. Builds on the readers from Phase 2 (`DocumentReaderService`: the company's AI service when it is set up, otherwise this server) and the passport / QID reader (`IdDocumentReaderService`, machine-readable lines, always on this server). Nothing is saved by reading: values are filled in, the note says what was filled and what to check, and staff save the form as usual.

@@ -3,6 +3,7 @@ import { readEnquiryIdentityDocument } from '../services/kyc-workflow.service';
 import { withDerivedIdentity } from '../utils/person-identity';
 import { FillOutcome, identityFill } from '../utils/document-fill';
 import { DocumentFillBar } from './DocumentFillBar';
+import { LinkedPersonPicker } from './SamePersonPicker';
 
 // Identity fields shared by every person on the Preliminary enquiry (shareholders, beneficial owners, management):
 // passport and QID numbers with their expiry dates, date of birth (date of incorporation for a company) and PEP.
@@ -59,6 +60,7 @@ export function PreliminaryPersonFields<T extends PersonIdentity>({ row, isCompa
   }
 
   return <>
+    <LinkedPersonPicker row={row} />
     <label className="min-w-0 text-sm font-medium text-slate-700">Passport number<input className={inputClass} value={row.passportNumber || ''} onChange={(event) => patch({ passportNumber: event.target.value } as Partial<T>)} /></label>
     <label className="min-w-0 text-sm font-medium text-slate-700">Passport expiry<TypedDateInput value={row.passportExpiry || ''} onChange={(value) => onChange({ passportExpiry: value } as Partial<T>)} className={inputClass} /></label>
     <label className="min-w-0 text-sm font-medium text-slate-700">QID number<input className={inputClass} inputMode="numeric" value={row.qidNumber || ''} onChange={(event) => patch({ qidNumber: event.target.value } as Partial<T>)} /></label>

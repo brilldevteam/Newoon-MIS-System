@@ -35,6 +35,8 @@ import {
   readKycIdentityDocument
 } from '../services/kyc-workflow.service';
 import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
+import { SamePersonPicker } from '../components/SamePersonPicker';
+import { PeopleAdapter, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
 import { CompanyTarget, companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
@@ -76,6 +78,29 @@ const CORPORATE_PARTY_CR_DOCUMENT = 'CR of legal entity parties';
 // The person rows that can be filled from a passport / QID copy (or, for a corporate shareholder, from its CR).
 type FillTarget = { list: 'shareholders' | 'ubos' | 'managers' | 'contact'; index: number; row: Row; corporate?: boolean };
 type FillBarRenderer = (target: FillTarget) => ReactNode;
+
+const fillTargetSlot = (target: FillTarget) => (target.list === 'contact' ? 'contact' : `${target.list}:${target.index}`);
+
+// The people of the KYC form (shareholders, beneficial persons, managers, key contact) for "Same person as ..." and for
+// keeping one person's details the same on all their rows (linked by QID / passport number).
+const kycPeople: PeopleAdapter<any> = {
+  read: (form) => [
+    ...((form.sectionB?.shareholders || []) as Row[]).map((row, index) => ({ slot: `shareholders:${index}`, role: row.isUbo ? 'Shareholder, beneficial person' : 'Shareholder', row, hidden: (row.shareholderType || 'Individual') === 'Corporate Entity' })),
+    ...((form.sectionB?.ubos || []) as Row[]).map((row, index) => ({ slot: `ubos:${index}`, role: 'Beneficial person', row })),
+    ...((form.sectionC?.managers || []) as Row[]).map((row, index) => ({ slot: `managers:${index}`, role: toList(row.position).join(', ') || 'Manager', row })),
+    { slot: 'contact', role: 'Key contact', row: (form.sectionE || {}) as Row }
+  ],
+  write: (form, slot, change) => {
+    const rowChange = { ...change, ...('nationality' in change ? { nationality: toList(change.nationality) } : {}) };
+    const merge = (row: Row) => withDerivedIdentity({ ...row, ...rowChange });
+    if (slot === 'contact') return { ...form, sectionE: merge(form.sectionE || {}) };
+    const [list, position] = slot.split(':');
+    const index = Number(position);
+    const section = list === 'managers' ? 'sectionC' : 'sectionB';
+    const data = form[section] || {};
+    return { ...form, [section]: { ...data, [list]: ((data[list] || []) as Row[]).map((row, rowIndex) => (rowIndex === index ? merge(row) : row)) } };
+  }
+};
 
 function createAdditionalDocumentRow(): Row {
   return {
@@ -1127,9 +1152,10 @@ export function KycFormEditorPage() {
     }
   }, [id, canEditAllSections, canPrepareKyc, requestedSection, visibleSections]);
 
+  // A change to a person's details is copied to their other rows (same QID / passport number).
   function setSection(section: SectionKey, value: Record<string, any>) {
     setForm((current) => {
-      const next = { ...current, [section]: value };
+      const next = syncLinkedPeople(current, { ...current, [section]: value }, kycPeople);
       formRef.current = next;
       return next;
     });
@@ -1210,6 +1236,18 @@ export function KycFormEditorPage() {
         const rows: Row[] = data[target.list] || [];
         next = { ...current, [section]: { ...data, [target.list]: rows.map((row, index) => (index === target.index ? merge(row) : row)) } };
       }
+      next = syncLinkedPeople(current, next, kycPeople);
+      formRef.current = next;
+      return next;
+    });
+  }
+
+  // "Same person as ...": copies the chosen person's details onto this row (not a change to copy to other rows).
+  function pickSamePerson(slot: string, sourceSlot: string) {
+    setForm((current) => {
+      const source = kycPeople.read(current).find((person) => person.slot === sourceSlot);
+      if (!source) return current;
+      const next = kycPeople.write(current, slot, personDetails(source.row));
       formRef.current = next;
       return next;
     });
@@ -1242,7 +1280,8 @@ export function KycFormEditorPage() {
   const renderFillBar: FillBarRenderer = (target) => {
     const expiries = target.corporate ? '' : [target.row.qidExpiry ? `QID expiry ${target.row.qidExpiry}` : '', target.row.passportExpiry ? `passport expiry ${target.row.passportExpiry}` : ''].filter(Boolean).join(' · ');
     return (
-      <div key={`fill-${target.list}-${target.index}`} className="min-w-0 md:col-span-2" style={{ gridColumn: '1 / -1' }}>
+      <div key={`fill-${target.list}-${target.index}`} className="min-w-0 space-y-2 md:col-span-2" style={{ gridColumn: '1 / -1' }}>
+        {target.corporate ? null : <SamePersonPicker people={kycPeople.read(form)} slot={fillTargetSlot(target)} onPick={(source) => pickSamePerson(fillTargetSlot(target), source)} disabled={!canEditVisibleForm} />}
         <DocumentFillBar
           label={target.corporate ? "Fill from the company's CR:" : 'Fill from a copy:'}
           options={target.corporate ? [{ value: 'COMPANY', label: 'CR' }] : [{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]}
