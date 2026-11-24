@@ -9,7 +9,6 @@ import { CrrfListPage } from '../pages/CrrfListPage';
 import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
-import { DashboardPage } from '../pages/DashboardPage';
 import { WorkspaceHomePage } from '../pages/WorkspaceHomePage';
 import { ModuleDashboardPage } from '../pages/ModuleDashboardPage';
 import { ChangePasswordPage } from '../pages/ChangePasswordPage';
@@ -54,7 +53,7 @@ export const router = createBrowserRouter([
           { path: '/kyc-workflow/dashboard', element: <ModuleDashboardPage module="kyc" /> },
           { path: '/compliance/dashboard', element: <ModuleDashboardPage module="compliance" /> },
           { path: '/access-denied', element: <AccessDeniedPage /> },
-          { path: '/dashboard', element: <DashboardPage /> },
+          { path: '/dashboard', element: <Navigate to="/workspace" replace /> },
           { path: '/account/password', element: <ChangePasswordPage /> },
           { path: '/account/profile', element: <MyProfilePage /> },
           {

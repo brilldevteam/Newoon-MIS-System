@@ -3,6 +3,7 @@ import { ArrowRight, Eye, EyeOff, KeyRound, LoaderCircle, Mail, ShieldCheck } fr
 import { useNavigate } from 'react-router-dom';
 import { isCodeChallenge, login, LoginCodeChallenge, LoginSession, resendLoginCode, verifyLoginCode } from '../services/auth.service';
 import { getApiErrorMessage } from '../services/api';
+import { defaultRouteForUser } from '../utils/access-control';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -26,7 +27,7 @@ export function LoginPage() {
   function finish(session: LoginSession) {
     localStorage.setItem('newoon_token', session.accessToken);
     setPassword(''); setCode('');
-    navigate('/dashboard', { replace: true });
+    navigate(defaultRouteForUser(session.user), { replace: true });
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

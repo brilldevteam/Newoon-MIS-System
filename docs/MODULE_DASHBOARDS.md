@@ -6,7 +6,7 @@ Each workspace tile opens a dedicated dashboard:
 - KYC: `/kyc-workflow/dashboard`
 - Compliance Clients: `/compliance/dashboard`
 
-The sidebar Dashboard link follows the active module. Existing register/detail/bookmark/notification routes and workflow guards are retained. The workspace selector remains sidebar-free, with its top-bar return shortcut.
+The sidebar Dashboard link follows the active module. Existing register/detail/notification routes and workflow guards are retained. The workspace selector remains sidebar-free, with its top-bar return shortcut. Successful password and OTP login always land there; the legacy `/dashboard` URL now redirects to `/workspace` (see `WORKSPACE_LOGIN.md`).
 
 ## Data And Presentation
 
@@ -29,4 +29,4 @@ node frontend/scripts/check-intake-preview-preservation.cjs
 
 Browser checks need Chrome; set CHROMIUM_PATH when its executable is not at the script's default Windows location. They use synthetic API fixtures, not the application database. Checks cover module-only data sources, authoritative totals, chart arithmetic, month controls, missing/empty/error states, restricted accounts and 1440/768/390/320px layouts. Desktop/mobile screenshots are written to the operating-system temporary directory.
 
-Before deployment, verify real tenant data and permissions on staging. Very large enquiry/KYC registers may need separately scoped aggregate endpoints; this UI does not claim new server-side analytics or full SaaS readiness. The legacy `/dashboard` remains unchanged.
+Before deployment, verify real tenant data and permissions on staging. Very large enquiry/KYC registers may need separately scoped aggregate endpoints; this UI does not claim new server-side analytics or full SaaS readiness.
