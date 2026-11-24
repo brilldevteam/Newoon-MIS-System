@@ -1,6 +1,6 @@
 import { downloadExpiryExcel, ExpiryWindow } from '../services/legal-documents.service';
 import { AlertTriangle, CalendarClock, Download, Eye, Search, ShieldAlert, ShieldCheck, UserCheck, UserX } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StatCard } from '../components/StatCard';
 import { useToast } from '../components/ToastProvider';
@@ -81,6 +81,7 @@ export function ComplianceClientListPage() {
 
   const [filters, setFilters] = useState<ComplianceClientFilters>({ status: 'ALL', riskLevel: 'ALL', cddType: 'ALL', jurisdiction: 'ALL', review: 'ALL', attention: 'ALL', page: 1, pageSize: PAGE_SIZE });
   const [searchInput, setSearchInput] = useState('');
+  const loadSequence = useRef(0);
   const [data, setData] = useState<ComplianceClientPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -91,16 +92,18 @@ export function ComplianceClientListPage() {
   const [deactivating, setDeactivating] = useState<ComplianceClient | null>(null);
 
   const load = useCallback((current: ComplianceClientFilters) => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError('');
     listComplianceClients(current)
-      .then(setData)
-      .catch((requestError) => setError(getApiErrorMessage(requestError, 'Unable to load compliance clients.')))
-      .finally(() => setLoading(false));
+      .then(next => { if (sequence === loadSequence.current) setData(next); })
+      .catch((requestError) => { if (sequence === loadSequence.current) setError(getApiErrorMessage(requestError, 'Unable to load compliance clients.')); })
+      .finally(() => { if (sequence === loadSequence.current) setLoading(false); });
   }, []);
 
   useEffect(() => {
     load(filters);
+    return () => { loadSequence.current += 1; };
   }, [filters, load]);
 
   // Debounce free-text search so each keystroke does not hit the API.
@@ -257,7 +260,8 @@ export function ComplianceClientListPage() {
             <input
               value={searchInput}
               onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Search name, code, CR/QFC no., email, contact, engagement or KYC no."
+              placeholder="Search clients, people, QID, passport, role or company details"
+              aria-label="Search compliance clients and linked people"
               className="w-full rounded-md border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
             />
           </div>

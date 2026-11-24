@@ -24,6 +24,7 @@ import { expiryState } from './compliance-monitoring.service';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
+import { clientSearchWhere } from './client-search';
 
 export type ComplianceClientQuery = {
   search?: string;
@@ -1205,16 +1206,7 @@ export class ComplianceClientsService {
 
     const search = this.optionalText(query.search)?.slice(0, 120);
     if (search) {
-      const or: Prisma.ClientWhereInput[] = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { clientCode: { contains: search, mode: 'insensitive' } },
-        { registrationNumber: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { contacts: { some: { OR: [{ name: { contains: search, mode: 'insensitive' } }, { email: { contains: search, mode: 'insensitive' } }] } } },
-        { engagements: { some: { OR: [{ engagementNumber: { contains: search, mode: 'insensitive' } }, { serviceName: { contains: search, mode: 'insensitive' } }] } } },
-        { kycCases: { some: { kycNumber: { contains: search, mode: 'insensitive' } } } }
-      ];
-      and.push({ OR: or });
+      and.push(clientSearchWhere(user, search));
     }
 
     return { AND: and };
