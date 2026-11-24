@@ -1,5 +1,12 @@
 # Newoon MIS Developer Handover
 
+## Module Workspaces And SaaS Assessment (2026-11-24)
+
+- Authenticated home/login redirects now land on `/workspace`: permission-aware Enquiry, KYC and Compliance Clients tiles. Each module retains its existing route guards and gets a contextual sidebar. All Workspaces switches modules; Dashboard and authorized administration remain accessible.
+- No backend authorization, schema, environment, export, preview or workflow change accompanies this navigation. Tiles reflect role grants, not paid-plan module entitlements.
+- Read `docs/saas-review/README.md` before offering shared SaaS: it records current blockers and unresolved business/operational controls. Source inventory is regenerated there without overwriting the October review.
+- Build from the repository root, then run `node frontend/scripts/check-workspace-modules.cjs` and `node frontend/scripts/check-intake-preview-preservation.cjs`. Browser checks use synthetic API responses, not a real tenant database.
+
 ## Automatic Document Inbox (2026-11-24)
 
 - See `docs/DOCUMENT_INTAKE.md` for scope, verification commands and current limitations.

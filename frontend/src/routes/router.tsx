@@ -10,6 +10,7 @@ import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
 import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
+import { WorkspaceHomePage } from '../pages/WorkspaceHomePage';
 import { ChangePasswordPage } from '../pages/ChangePasswordPage';
 import { MyProfilePage } from '../pages/MyProfilePage';
 import { AddEnquiryPage } from '../pages/AddEnquiryPage';
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
         element: <AppLayout />,
         children: [
           { path: '/', element: <HomeRedirect /> },
+          { path: '/workspace', element: <WorkspaceHomePage /> },
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
           { path: '/account/password', element: <ChangePasswordPage /> },

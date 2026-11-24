@@ -5,7 +5,9 @@ const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '../..');
-const out = __dirname;
+const out = process.argv[2] ? path.resolve(root, process.argv[2]) : __dirname;
+const reviewDate = process.argv[3] || '2026-10-27';
+fs.mkdirSync(out, { recursive: true });
 const rel = (p) => path.relative(root, p).replaceAll('\\', '/');
 const parse = (p) => ts.createSourceFile(p, fs.readFileSync(p, 'utf8'), ts.ScriptTarget.Latest, true, p.endsWith('tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const walk = (node, fn) => { fn(node); ts.forEachChild(node, (child) => walk(child, fn)); };
@@ -99,11 +101,28 @@ const enums = [...schema.matchAll(/enum (\w+)\s*\{([^}]+)\}/g)].map((m) => ({ na
 const models = [...schema.matchAll(/model (\w+)\s*\{([^}]+)\}/g)].map((m) => ({ name: m[1], fields: m[2].split(/\r?\n/).map((v) => v.trim()).filter(Boolean) }));
 const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const branch = cp.execFileSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8' }).trim();
-const data = { baseline: { commit, branch, reviewDate: '2026-10-27', basis: 'Static source inspection, not server attestation' }, registeredControllers: [...registered].sort(), modules: [...modules].sort(), endpoints, routes, enums, models };
+const dirty = Boolean(cp.execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim());
+const data = { baseline: { commit, branch, dirty, reviewDate, basis: 'Static source inspection including working-tree changes, not server attestation' }, registeredControllers: [...registered].sort(), modules: [...modules].sort(), endpoints, routes, enums, models };
 fs.writeFileSync(path.join(out, 'inventory.json'), JSON.stringify(data, null, 2) + '\n');
-let md = '# Technical Workflow and API Appendix\n\nBaseline `' + commit + '` on `' + branch + '`. Review date 27 October 2026.\n\n';
+let md = '# Technical Workflow and API Appendix\n\nBaseline `' + commit + '` on `' + branch + '`. Review date ' + reviewDate + '. Uncommitted working-tree changes present: ' + dirty + '.\n\n';
 md += `Coverage: ${registered.size} registered controllers, ${endpoints.length} HTTP operations, ${routes.length} frontend routes, ${models.length} database models, ${enums.length} enums. Resolved from AppModule imports and module controllers; no application startup or database access.\n\n`;
-md += '## How to interpret this inventory\n\nThis is a source-derived contract index, not an OpenAPI specification or a claim that every endpoint has passed QA. IDs are stable hashes of method/path. Source links are relative to this repository. DTO declarations below define decorator validation; Record<string, unknown> bodies depend on service checks. Output schemas are generally inferred rather than explicit DTOs: linked controller/service methods are authoritative. QA must capture redacted real response shapes on staging before freezing a client API contract.\n\nRoles below are FALLBACK DECORATORS, not an unconditional allow-list. RolesGuard can replace them with area grants when configured. JWT validates current user roles/status. Methods without @Roles bypass RolesGuard area enforcement. Service role/status and tenant checks still apply where implemented. Global error shape is {statusCode,timestamp,path,error}; error can be an object or message. Typical failures: 400 validation/state, 401 session, 403 role, 404 scoped resource, 413/415 upload limits/types where implemented, 500 unhandled/DB errors, 503 PDF renderer. Exact errors detected below are candidate branches, not promised for every input.\n\nGET classification follows same-service helper calls and detected Prisma writes; it is not a proof of purity or complete dependency traversal. File writes and database writes are not one transaction. Audit/notification entries appear in the detected writes, not a guarantee every successful action emits them. Standard JSON success defaults follow Nest (POST 201, others 200 unless overridden); binary responses follow controller.\n\nRead the [workflow specification](WORKFLOWS.md), [findings](FINDINGS.md) and [QA checklist](QA_HANDOVER.md) alongside this appendix.\n\n## Frontend entry points\n\n| ID | Route | Page or redirect | Inherited presentation guard | Evidence |\n|---|---|---|---|---|\n';
+md += `## How to interpret this inventory
+
+This is a source-derived contract index, not an OpenAPI specification or proof that every endpoint passed QA. IDs are stable method/path hashes. DTO decorators describe input validation; generic bodies and output contracts depend on service checks. QA must capture redacted staging response contracts.
+
+Roles are fallback decorators, not an unconditional allow-list. Configured area grants can replace them. Before configuration, compliance endpoints without role metadata follow area defaults. Platform-only controllers remain role-restricted. JWT validates user status/roles/session version, but not tenant activation. Service checks still apply. Audit the current RolesGuard, not the October review's description.
+
+Global errors: {statusCode,timestamp,path,error}. Candidate failures include 400 validation/state, 401 session, 403 access, 404 scoped resource, 413/415 upload limits/types where enforced, 500 database/unhandled errors and 503 renderer. Exact behavior requires endpoint tests.
+
+GET classification follows same-service calls and detected Prisma writes, not arbitrary dependency injection or runtime dispatch. It is not a proof of purity. Filesystem/database writes are not one transaction; detected audit calls do not prove complete coverage. Default success statuses follow Nest unless overridden; binary responses follow controllers.
+
+The historical [workflows](../architecture-review/WORKFLOWS.md), [findings](../architecture-review/FINDINGS.md) and [QA checklist](../architecture-review/QA_HANDOVER.md) are references, not current validation. Read the November SaaS assessment for rechecked findings.
+
+## Frontend entry points
+
+| ID | Route | Page or redirect | Inherited presentation guard | Evidence |
+|---|---|---|---|---|
+`;
 for (const r of routes) md += `| ${r.id} | \`${r.path}\` | \`${r.element}\` | \`${r.guards.join('; ') || 'No explicit wrapper here'}\` | ${r.source} |\n`;
 md += '\n## API operation index\n\n| ID | Method and path | Handler | Classification |\n|---|---|---|---|\n';
 for (const e of endpoints) md += `| [${e.id}](#${e.id.toLowerCase()}) | \`${e.method} ${e.route}\` | ${e.controller}.${e.handler} | ${e.classification} |\n`;

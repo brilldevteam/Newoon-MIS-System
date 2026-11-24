@@ -72,10 +72,7 @@ export function roleList(user: AuthUser | null | undefined) {
 }
 
 export function defaultRouteForUser(user: AuthUser | null | undefined) {
-  if (hasAnyRole(user, workflowRoles.clientIntake)) return '/dashboard';
-  if (hasAnyRole(user, workflowRoles.kycPreparation)) return '/kyc-workflow';
-  if (hasAnyRole(user, workflowRoles.reviewTasks)) return '/review-tasks';
-  return '/dashboard';
+  return user ? '/workspace' : '/login';
 }
 
 export function allowedReviewStages(user: AuthUser | null | undefined) {

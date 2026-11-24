@@ -32,6 +32,7 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { AppNotification, getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/kyc-workflow.service';
 import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { enquiryNotificationLink } from '../utils/enquiry-notification-link';
+import { navigationInWorkspace, workspaceForPath, workspaceModules } from '../utils/workspace-modules';
 
 type NavLinkItem = { to: string; label: string; icon: ComponentType<{ className?: string }>; roles: string[]; area?: string };
 type NavGroupItem = { key: string; label: string; icon: ComponentType<{ className?: string }>; pathPrefix: string; children: NavLinkItem[] };
@@ -40,6 +41,7 @@ type NavItem = NavLinkItem | NavGroupItem;
 const isNavGroup = (item: NavItem): item is NavGroupItem => 'children' in item;
 
 const navItems: NavItem[] = [
+  { to: '/workspace', label: 'All Workspaces', icon: Layers, roles: [] },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
   { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
   // Ordered as a client moves through the system: enquiry -> KYC (screening, CRRF, reviews) -> compliance.
@@ -81,6 +83,7 @@ export function AppLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const online = useOnlineStatus();
   const visibleNavItems = navItems
+    .filter((item) => navigationInWorkspace(location.pathname, isNavGroup(item) ? item.pathPrefix : item.to))
     .map((item) => (isNavGroup(item) ? { ...item, children: item.children.filter((child) => canAccessNavigation(user, child.roles, child.area)) } : item))
     .filter((item) => (isNavGroup(item) ? item.children.length > 0 : canAccessNavigation(user, item.roles, item.area)));
 
@@ -261,7 +264,7 @@ export function AppLayout() {
             </Link>
             <p className="truncate text-base font-semibold text-slate-950">
               <span className="lg:hidden">Newoon MIS</span>
-              <span className="hidden lg:inline">Newoon Operations</span>
+              <span className="hidden lg:inline">{workspaceModules.find((module) => module.id === workspaceForPath(location.pathname))?.label || 'Newoon Operations'}</span>
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
