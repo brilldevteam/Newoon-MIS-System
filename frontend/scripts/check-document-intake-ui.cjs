@@ -53,6 +53,11 @@ async function main() {
       await page.waitForFunction(() => window.intakeState().attempts['retry.png'] === 2 && document.getElementById('root').textContent.includes('3 / 3 processed'));
       await page.screenshot({ path: path.join(output, `inbox-${width}.png`), fullPage: true });
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Inbox must fit viewport');
+      const boxes = await page.$$eval('[data-document-card]', cards => cards.map(card => { const box = card.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width }; }));
+      assert.equal(boxes.length, 3, 'Each document must have its own box');
+      if (width >= 768) {
+        assert.ok(Math.abs(boxes[0].y - boxes[1].y) < 1 && boxes[1].x > boxes[0].x, 'Attachment boxes should sit side by side');
+      } else assert.ok(boxes[1].y > boxes[0].y, 'Mobile attachment boxes should stack');
       assert.deepEqual(errors, []); await page.close();
     }
     console.log(`Automatic inbox checks passed at 1440, 768, 390 and 320px: no review, protected existing values, both identity numbers/expiries, nationality, sequential reading and individual retry. Screenshots: ${output}`);

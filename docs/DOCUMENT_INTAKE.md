@@ -5,6 +5,7 @@ The previous reviewed inbox was released as `fd30e01`; this update removes its r
 
 ## Behavior
 
+- The inbox presents attachments as responsive document boxes (one column on mobile, multiple columns on wider screens). The separate Enquiry Details to complete panel is removed; existing Next/Submit validation remains unchanged.
 - Upload multiple supported documents into the inbox on an editable Enquiry or KYC form. Up to 20 PDF/PNG/JPEG/WebP files, each up to 10 MB; existing type and file validation remain enforced.
 - Files read one at a time through the existing authorized, tenant-scoped readers. Extracted values automatically fill valid, empty draft fields. No review dialog, field checkboxes or Apply button remains.
 - Unknown files try the local identity reader first, then the company's existing document reader/provider if no identity is found. Filename type suggestions can be changed when incorrect.

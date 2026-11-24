@@ -31,6 +31,7 @@ async function main() {
     });
     await page.goto('https://intake-integration.test/enquiries/synthetic/edit');
     await page.waitForSelector('input[aria-label="Add documents to inbox"]');
+    assert.equal(await page.$('[aria-label="Enquiry completion checklist"]'), null, 'Do not show the removed Details to complete panel');
     await (await page.$('input[aria-label="Add documents to inbox"]')).uploadFile(file);
     await page.waitForFunction(() => document.getElementById('root').textContent.includes('1 / 1 processed'));
     assert.equal(await page.$('[role=dialog]'), null, 'No review should be required');
