@@ -8,7 +8,8 @@ import { personKeys } from './linked-people';
 // fields are filled and new positions added. Nothing typed is overwritten.
 
 type Row = Record<string, any>;
-type ReadPerson = DocumentReading['people'][number];
+export type DocumentPerson = DocumentReading['people'][number] & { partyType?: 'INDIVIDUAL' | 'CORPORATE' };
+type ReadPerson = DocumentPerson;
 
 const ROLE_POSITIONS: Record<string, string[]> = {
   DIRECTOR: ['Director'],
@@ -22,6 +23,7 @@ const ROLE_POSITIONS: Record<string, string[]> = {
 };
 
 const COMPANY_NAME = /\b(?:llc|l\.l\.c|w\.?l\.?l|ltd|limited|company|holding|holdings|inc|plc|s\.?a\.?|s\.?p\.?c|gmbh|b\.?v|fz[ce]?|corporation|corp|group|trust|fund)\b/i;
+export const suggestedPartyType = (name: string): 'CORPORATE' | 'INDIVIDUAL' => COMPANY_NAME.test(name) ? 'CORPORATE' : 'INDIVIDUAL';
 const normalizeName = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const blank = (value: unknown) => (Array.isArray(value) ? value.length === 0 : String(value ?? '').trim() === '');
 
@@ -70,7 +72,7 @@ export function addPeopleFromDocument(people: ReadPerson[], shareholders: Row[],
   };
 
   for (const person of people) {
-    const isCompany = COMPANY_NAME.test(person.fullName);
+    const isCompany = person.partyType ? person.partyType === 'CORPORATE' : COMPANY_NAME.test(person.fullName);
     const personValues: Row = { fullName: person.fullName, nationality: isCompany ? undefined : nationality(person), ...(isCompany ? {} : identity(person)) };
 
     if (person.roles.includes('SHAREHOLDER')) {

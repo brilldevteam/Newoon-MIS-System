@@ -1,5 +1,13 @@
 # Newoon MIS Developer Handover
 
+## Reviewed Document Inbox (2026-11-24)
+
+- See `docs/DOCUMENT_INTAKE.md` for scope, verification commands and current limitations.
+- Adds a multi-file, page-lifetime extraction queue to editable enquiry/KYC preparation screens. Data is staged for explicit review; existing values are protected and identity files require a person selection.
+- Reuses existing readers and save/upload authorization. No schema, export-template, environment or dependency changes are introduced by the inbox.
+- KYC preview/diagram rendering is preserved from the preceding preview-only update. `check-intake-preview-preservation.cjs` records this boundary.
+- This is not a persistent backend queue and does not claim page-level provenance or calibrated extraction confidence. Those require a separate persistence/provider design before implementation.
+
 ## Reading Documents Everywhere They Are Entered (2026-11-24)
 
 Audit of every upload in the application and what it fills (read on the server, or by the company's AI service for CRs when it is on; staff check and save as usual; nothing typed is overwritten):

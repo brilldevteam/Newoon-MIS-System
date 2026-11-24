@@ -3,6 +3,10 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
+import { OwnershipStructureDiagram } from '../components/OwnershipStructureDiagram';
+import { DocumentPreviewFrame } from '../components/DocumentPreviewFrame';
+import { DocumentIntakePanel } from '../components/DocumentIntakePanel';
+import { appendReviewedPerson, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { uboCompanyName } from '../utils/ubo-display-name';
 import { Link, useParams, useSearchParams, useNavigate } from 'react-router-dom';
@@ -1149,6 +1153,8 @@ export function KycFormEditorPage() {
         ? ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase?.status || '')
         : false;
   const canEditVisibleForm = !form.isLocked && (canEditAllSections || canPrepareKyc || reviewerEditable);
+  const intakeContext = useRef({ id, allowed: false });
+  intakeContext.current = { id, allowed: canEditVisibleForm && (canEditAllSections || canPrepareKyc) && !saving };
   const isPreliminaryProposedCompanyForm = form.sectionA.formVariant === 'PRELIMINARY_PROPOSED_COMPANY' && !form.fullKycStarted;
   const visibleSections = useMemo(
     () => sections.filter((section) => (!isPreliminaryProposedCompanyForm || section.key !== 'sectionD') && (canEditAllSections || canPrepareKyc || section.key === 'sectionH')),
@@ -1219,6 +1225,50 @@ export function KycFormEditorPage() {
       formRef.current = next;
       return next;
     });
+  }
+
+  async function applyIntake(application: IntakeApplication) {
+    if (!id || !canEditVisibleForm || !(canEditAllSections || canPrepareKyc) || saving) throw new Error('The KYC form is not available for preparation.');
+    const makeNext = () => {
+      if (intakeContext.current.id !== id || !intakeContext.current.allowed) throw new Error('The case or its editing access changed. Reopen the case before applying details.');
+      const current = formRef.current;
+      if (current.isLocked) throw new Error('This form is locked. Refresh the case before continuing.');
+      if (application.kind === 'COMPANY') {
+        const change = reviewedPatch(current.sectionA || {}, application.fields);
+        if (!application.people.length) return { ...current, sectionA: { ...current.sectionA, ...change } };
+        const found = addPeopleFromDocument(application.people, current.sectionB.shareholders || [], current.sectionC.managers || [], kycPeopleLayout);
+        return { ...current, sectionA: { ...current.sectionA, ...change }, sectionB: { ...current.sectionB, shareholders: found.shareholders.map(withDerivedIdentity) }, sectionC: { ...current.sectionC, managers: found.officers.map(withDerivedIdentity) } };
+      }
+      if (application.target.startsWith('new:')) {
+        if (!newIntakePersonTargets.some(target => target.value === application.target)) throw new Error('Choose a person on this form.');
+        const patch = reviewedPatch({}, application.fields);
+        if (application.target === 'new:shareholder' || application.target === 'new:ubo') {
+          const row = withDerivedIdentity({ ...createOwnershipRow(), ...patch, isUbo: application.target === 'new:ubo' });
+          const list = application.target === 'new:ubo' ? 'ubos' : 'shareholders';
+          return { ...current, sectionB: { ...current.sectionB, [list]: appendReviewedPerson(current.sectionB[list] || [], row) } };
+        }
+        const row = withDerivedIdentity({ id: crypto.randomUUID(), ...patch, position: [application.target === 'new:director' ? 'Director' : 'Manager'] });
+        return { ...current, sectionC: { ...current.sectionC, managers: appendReviewedPerson(current.sectionC.managers || [], row) } };
+      }
+      const target = kycPeople.read(current).find(person => person.slot === application.target);
+      if (!target || JSON.stringify(target.row) !== JSON.stringify(application.expectedPerson)) throw new Error('This person changed in the form. Reopen the review and choose the person again.');
+      return kycPeople.write(current, application.target, reviewedPatch(target.row, application.fields)) as KycFormData;
+    };
+    makeNext();
+    const allowedTypes = application.kind === 'COMPANY' ? ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)] : [IDENTITY_COPIES_DOCUMENT];
+    const documentType = application.documentType || allowedTypes[0];
+    if (!allowedTypes.includes(documentType)) throw new Error('Choose a valid document category.');
+    const attached = await attachToChecklist(documentType, application.file);
+    if (!attached) throw new Error('The document could not be attached. No extracted details were applied. Try again.');
+    const next = makeNext();
+    formRef.current = next;
+    setForm(current => {
+      if (intakeContext.current.id !== id) return current;
+      const combined = { ...next, sectionF: current.sectionF };
+      formRef.current = combined;
+      return combined;
+    });
+    setMessage('Reviewed details applied to the draft. Save Draft to keep the form changes.');
   }
 
   // Reads the company's CR into Section A: empty fields are filled, typed values that differ are listed with the
@@ -1826,15 +1876,22 @@ export function KycFormEditorPage() {
         </section>
       ) : null}
 
+      <div hidden={activeReviewPackage !== 'kyc'}>
+        {canEditVisibleForm && (canEditAllSections || canPrepareKyc) && <DocumentIntakePanel key={id} company={form.sectionA} companyTargets={crTargets} attachmentTypes={{ COMPANY: ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)], IDENTITY: [IDENTITY_COPIES_DOCUMENT] }} targets={[...kycPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row })), ...newIntakePersonTargets]} disabled={saving || Boolean(generatingType)} read={(file, kind) => {
+          if (!id) throw new Error('Save the KYC case first.');
+          return readIntakeDocument(file, kind, value => readKycCompanyDocument(id, value), (type, value) => readKycIdentityDocument(id, type, value));
+        }} apply={applyIntake} />}
+      </div>
+
       {activeReviewPackage === 'kyc' ? (
-        <div className="grid min-w-0 gap-5 min-[1800px]:grid-cols-[minmax(180px,220px)_minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] 2xl:grid-cols-[190px_minmax(0,1fr)_minmax(0,1.05fr)]">
           <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
           <section className="min-w-0 rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
-              <p className="text-sm font-semibold text-slate-950">{isPreliminaryProposedCompanyForm ? 'Preliminary Proposed Company KYC Form' : sections.find((item) => item.key === activeSection)?.label}</p>
-      <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-medium text-slate-500">{isPreliminaryProposedCompanyForm ? 'Preliminary KYC' : 'KYC form'}</p><span className="text-xs tabular-nums text-slate-400">{visibleSections.findIndex((item) => item.key === activeSection) + 1} / {visibleSections.length}</span></div>
+              <h2 className="text-base font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</h2>
             </div>
-            <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
+            <fieldset disabled={!canEditVisibleForm} className="min-w-0 overflow-x-auto p-5 disabled:opacity-75 xl:max-h-[calc(100dvh-250px)] xl:overflow-y-auto">
               {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} uploadedCrs={uploadedFiles('company')} onReadUploadedCr={(documentId) => readCompanyCr(documentId, false)} crFileNames={fileNameList((form.sectionF?.documents || []).find((row: Row) => row.documentType === CR_DOCUMENT)?.fileName)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
@@ -1863,18 +1920,19 @@ export function KycFormEditorPage() {
 
 function KycFormSectionSidebar({ sections, active, onChange }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void }) {
   return (
-    <aside className="rounded-lg border border-slate-200 bg-white p-2 min-[1800px]:sticky min-[1800px]:top-20 min-[1800px]:h-fit">
-      {sections.map((section) => (
+    <aside aria-label="KYC form sections" className="min-w-0 rounded-lg border border-slate-200 bg-white p-2 xl:col-span-2 2xl:sticky 2xl:top-20 2xl:col-span-1 2xl:h-fit"><div className="flex gap-1 overflow-x-auto 2xl:flex-col">
+      {sections.map((section, index) => (
         <button
           key={section.key}
           type="button"
           onClick={() => onChange(section.key)}
-          className={`block w-full rounded-md px-3 py-2 text-left text-sm font-medium ${active === section.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'}`}
+          aria-current={active === section.key ? 'step' : undefined}
+          className={`flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium 2xl:w-full ${active === section.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'}`}
         >
-          {section.label}
+          <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${active === section.key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{index + 1}</span><span>{section.label.replace(/^[A-H]\.\s*/, '')}</span>
         </button>
       ))}
-    </aside>
+    </div></aside>
   );
 }
 
@@ -2199,121 +2257,6 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
   );
 }
 
-function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string; rows: Row[]; ubos: Row[] }) {
-  const hasRows = rows.length > 0;
-  const uboIds = new Set([
-    ...rows.filter((row) => row.isUbo).map((row, index) => row.id || String(index)),
-    ...ubos.map((row) => String(row.identityNumber || row.fullName || ''))
-  ]);
-  const linkedUbos = ubos.filter((row) => row.parentRowId && !rows.some((party) => party.id === row.id || party.fullName === row.fullName && party.identityNumber === row.identityNumber));
-  const normalizedRows: Row[] = [...rows, ...linkedUbos.map<Row>((row) => ({ ...row, isUbo: true, shareholderType: 'Individual' }))].map((row, index) => ({ ...row, id: row.id || `ownership-${index + 1}` }));
-  const childrenByParent = new Map<string, Row[]>();
-  normalizedRows.forEach((row) => {
-    const parent = row.parentRowId || 'ROOT';
-    childrenByParent.set(parent, [...(childrenByParent.get(parent) || []), row]);
-  });
-  type DiagramNode = Row & { id: string; parentId: string; depth: number; x: number };
-  const diagramNodes: DiagramNode[] = [{ id: 'ROOT', parentId: '', depth: 0, x: 0.5, fullName: rootName || 'Client company', shareholderType: 'Client company' } as DiagramNode];
-  let leafIndex = 0;
-  let maxDepth = 0;
-  const walk = (parentId: string, depth: number): number => {
-    const children = childrenByParent.get(parentId) || [];
-    if (!children.length) return leafIndex++;
-    const childXs = children.map((row) => {
-      const childX = walk(row.id, depth + 1);
-      diagramNodes.push({ ...(row as Row), id: String(row.id), parentId, depth, x: childX } as DiagramNode);
-      maxDepth = Math.max(maxDepth, depth);
-      return childX;
-    });
-    return childXs.reduce((sum, value) => sum + value, 0) / childXs.length;
-  };
-  const rootX = walk('ROOT', 1);
-  const leafCount = Math.max(1, leafIndex);
-  diagramNodes.forEach((node) => {
-    node.x = ((node.id === 'ROOT' ? rootX : node.x) + 0.5) / leafCount;
-  });
-  const layerColors = ['bg-slate-950 text-white', 'bg-blue-50 text-slate-950 border-blue-300', 'bg-green-50 text-slate-950 border-green-300', 'bg-amber-50 text-slate-950 border-amber-300', 'bg-purple-50 text-slate-950 border-purple-300', 'bg-red-50 text-slate-950 border-red-300', 'bg-cyan-50 text-slate-950 border-cyan-300'];
-  const layerCount = Math.max(1, maxDepth + 1);
-  const diagramWidth = Math.max(920, leafCount * 250 + 170);
-  const rowHeight = 128;
-  const nodeWidth = 220;
-  const nodeHeight = 92;
-  const diagramHeight = 84 + layerCount * rowHeight;
-  const leftRail = 122;
-  const topOffset = 62;
-  const usableWidth = diagramWidth - leftRail - 55;
-  const nodeCenterX = (node: DiagramNode) => leftRail + 30 + node.x * usableWidth;
-  const nodeTop = (node: DiagramNode) => topOffset + node.depth * rowHeight;
-  const nodeDetail = (node: DiagramNode) => {
-    if (node.id === 'ROOT') return 'Layer 0';
-    if (Array.isArray(node.nationality)) return node.nationality.join(', ');
-    return node.nationality || node.residenceAddress || '';
-  };
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <p className="text-sm font-semibold text-slate-950">Control Structure</p>
-      {!hasRows ? (
-        <p className="mt-3 rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No control structure generated.</p>
-      ) : (
-        <div className="mt-4 overflow-x-auto rounded-md border-2 border-slate-800 bg-white p-3">
-          <div className="relative mx-auto" style={{ width: diagramWidth, height: diagramHeight }}>
-            <h4 className="absolute left-0 right-0 top-3 text-center text-lg font-bold uppercase tracking-wide text-slate-950">
-              {rootName || 'Client company'} - Control Structure
-            </h4>
-            {Array.from({ length: layerCount }).map((_, depth) => (
-              <div
-                key={depth}
-                className={`absolute left-3 flex h-12 w-24 items-center justify-center rounded-md border text-sm font-bold shadow-sm ${layerColors[depth] || 'border-slate-300 bg-slate-50 text-slate-950'}`}
-                style={{ top: topOffset + depth * rowHeight + 12 }}
-              >
-                Layer {depth}
-              </div>
-            ))}
-            <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${diagramWidth} ${diagramHeight}`} preserveAspectRatio="none">
-              {diagramNodes.filter((node) => node.parentId).map((node) => {
-                const parent = diagramNodes.find((candidate) => candidate.id === node.parentId);
-                if (!parent) return null;
-                const x1 = nodeCenterX(parent);
-                const y1 = nodeTop(parent) + nodeHeight;
-                const x2 = nodeCenterX(node);
-                const y2 = nodeTop(node);
-                const elbowY = (y1 + y2) / 2;
-                return (
-                  <g key={`${node.parentId}-${node.id}`}>
-                    <path d={`M ${x1} ${y1} V ${elbowY} H ${x2} V ${y2}`} fill="none" stroke="#111827" strokeWidth="2" />
-                    <path d={`M ${x2 - 5} ${y2 - 8} L ${x2} ${y2} L ${x2 + 5} ${y2 - 8}`} fill="none" stroke="#111827" strokeWidth="2" />
-                    <text x={x2 + 8} y={Math.max(y2 - 12, elbowY - 4)} className="fill-slate-950 text-[13px] font-bold">
-                      {node.ownershipPercentage ? `${node.ownershipPercentage}%` : ''}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-            {diagramNodes.map((node) => {
-              const isRoot = node.id === 'ROOT';
-              const isUbo = Boolean(node.isUbo) || uboIds.has(String(node.identityNumber || node.fullName || ''));
-              const top = nodeTop(node);
-              const left = nodeCenterX(node) - nodeWidth / 2;
-              return (
-                <div
-                  key={node.id}
-                  className={`absolute flex flex-col items-center justify-center rounded-md border px-8 py-2 text-center text-xs shadow-sm ${isRoot ? 'border-slate-950 bg-slate-950 text-white' : layerColors[node.depth] || 'border-slate-300 bg-white text-slate-950'}`}
-                  style={{ width: nodeWidth, height: nodeHeight, left, top }}
-                >
-                  <p className="line-clamp-2 min-h-[28px] font-bold uppercase leading-tight">{node.fullName || 'Unnamed party'}</p>
-                  <p className={`mt-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{node.shareholderType || 'Individual'}</p>
-                  <p className={`mt-0.5 line-clamp-1 leading-tight ${isRoot ? 'text-slate-200' : 'text-slate-600'}`}>{nodeDetail(node)}</p>
-                  {isUbo ? <span className="absolute right-2 top-2 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-bold leading-none text-cyan-800">Beneficial</span> : null}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
 
 function SectionCForm({ data, onChange, fillBar }: FormProps & { fillBar?: FillBarRenderer }) {
   return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'managers', index, row }) : undefined} fields={[
@@ -2791,8 +2734,8 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
 
 export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
   return (
-    <aside className="min-w-0 max-h-[calc(100vh-160px)] overflow-auto rounded-lg border border-slate-200 bg-slate-200 p-4">
-      {form.preliminaryDocument ? <PreliminaryKycDocument data={form.preliminaryDocument} embedded /> : null}
+    <DocumentPreviewFrame structure={<OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />}>
+      {form.preliminaryDocument ? <PreliminaryKycDocument data={form.preliminaryDocument} ownership={{ rootName: form.sectionA.legalName || 'Client company', shareholders: form.sectionB.shareholders || [], ubos: form.sectionB.ubos || [] }} embedded /> : null}
       <div className={`mx-auto w-full max-w-[794px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-sm ${form.preliminaryDocument ? 'mt-4' : 'min-h-[1120px]'}`}>
         {!form.preliminaryDocument ? <>
         <div className="flex items-start justify-between border-b-4 border-brand-600 pb-4">
@@ -2823,7 +2766,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
           <PreviewGroup title="UBO List">
             <PreviewTable headers={['Beneficial person', 'Company', 'Nationality', 'DOB', 'Identity No.', 'UBO %', 'Address']} widths={[17, 22, 10, 10, 14, 8, 19]} rows={effectiveUboRows(form.sectionB).map((row: Row) => [row.fullName, uboCompanyName(row, form.sectionB.shareholders || []), displaySelectedList(row.nationality, row.nationalityOther), displayDate(row.dateOfBirth), row.identityNumber, row.uboInterestPercentage ?? row.ownershipPercentage, row.residenceAddress])} />
           </PreviewGroup>
-          <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} />
+          <OwnershipStructureDiagram rootName={form.sectionA.legalName || 'Client company'} rows={form.sectionB.shareholders || []} ubos={form.sectionB.ubos || []} fit />
         </PreviewSection>
         <PreviewSection title="D. Compliance and Risk Information">
           <PreviewGrid rows={[
@@ -2870,7 +2813,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         </PreviewSection>
         <div className="mt-8 border-t border-slate-300 pt-2 text-center text-[10px] font-medium text-slate-500">Newoon Corporate Services | KYC onboarding, engagement workflow and AML review support</div>
       </div>
-    </aside>
+    </DocumentPreviewFrame>
   );
 }
 

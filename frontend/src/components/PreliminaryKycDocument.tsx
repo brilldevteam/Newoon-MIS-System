@@ -2,8 +2,9 @@ import { mergeBeneficialOwners } from '../utils/ownership';
 import { directOwnershipTotal, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
 import { uboCompanyName } from '../utils/ubo-display-name';
+import { OwnershipStructureDiagram } from './OwnershipStructureDiagram';
 
-export function PreliminaryKycDocument({ data, embedded = false }: { data: Record<string, any>; embedded?: boolean }) {
+export function PreliminaryKycDocument({ data, embedded = false, ownership }: { data: Record<string, any>; embedded?: boolean; ownership?: { rootName: string; shareholders: Record<string, any>[]; ubos: Record<string, any>[] } }) {
   const rows = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, any>> : [];
   const value = (item: unknown) => String(item || '-');
   // QID / passport with expiry dates (a company keeps its CR number); PEP and date of birth / incorporation per person.
@@ -32,6 +33,7 @@ export function PreliminaryKycDocument({ data, embedded = false }: { data: Recor
       <p className="mt-1 font-bold">Total direct ownership %: {directOwnershipTotal(rows(data.shareholders)).toFixed(2)}%</p>
       <PreliminaryTable title="Ultimate Beneficial Owners (Natural Person Only)" headers={['No.', 'Name', 'Company', 'Passport/QID', 'Date of Birth', 'Nationality', 'Residence', 'UBO %', 'PEP']} rows={mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)).map((row, index) => [String(index + 1), value(row.fullName), uboCompanyName(row, rows(data.shareholders)), idText(row), value(row.dateOfBirth), value(row.nationality), value(row.address), value(row.ownershipPercentage), pep(row)])} />
       <p className="mt-1 font-bold">Total UBO %: {totalOwnership(mergeBeneficialOwners(rows(data.shareholders), rows(data.ubos)))}%</p>
+      <div className="mt-3"><OwnershipStructureDiagram rootName={ownership?.rootName || data.companyName || 'Client company'} rows={ownership?.shareholders || rows(data.shareholders)} ubos={ownership?.ubos || rows(data.ubos)} fit /></div>
       <PreliminaryTable title="Section C: Proposed Management & Control Persons" headers={['No.', 'Name', 'Passport / QID', 'Date of Birth', 'Nationality', 'Position', 'PEP']} rows={rows(data.management).map((row, index) => [String(index + 1), value(row.fullName), idText(row), value(row.dateOfBirth), value(row.nationality), value(row.position || row.positions?.join(', ')), pep(row)])} />
       <PreliminaryTable title="Section D: Required Documents" headers={['Document', 'Available']} rows={rows(data.documents).map((row) => [value(row.documentType), row.available ? 'Yes' : 'No'])} />
       <PreliminaryTable title="Section E: Key Contact Person" headers={['No.', 'Field', 'Details']} rows={filledContactRows([
