@@ -22,6 +22,8 @@ import { preliminaryPdfHtml } from './preliminary-pdf';
 import { isPathInsideRoot, standardDocumentKinds, validateUploadFiles } from '../common/security/upload-security';
 import { MrzResult } from '../common/mrz';
 import { IdDocumentReaderService } from '../compliance-clients/id-document-reader.service';
+import { DocumentReaderService } from '../compliance-clients/document-reader.service';
+import { identityReading } from '../common/identity-reading';
 import { RequestUser } from '../common/types/request-user.type';
 import { userSummarySelect } from '../common/user-summary';
 import { PrismaService } from '../prisma/prisma.service';
@@ -47,7 +49,8 @@ export class EnquiriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly preliminaryPdf: KycPdfRenderer,
-    @Optional() private readonly idReader?: IdDocumentReaderService
+    @Optional() private readonly idReader?: IdDocumentReaderService,
+    @Optional() private readonly documentReader?: DocumentReaderService
   ) {}
 
   // Pre-fills a person's passport / QID details on the enquiry form. Reading is a convenience: when the file cannot
@@ -61,23 +64,16 @@ export class EnquiriesService {
     } catch {
       read = null;
     }
-    if (!read || (!read.documentNumber && !read.expiryDate)) {
-      return { found: false, message: 'The details could not be read from this file. Enter them from the document.' };
-    }
-    const detectedType = read.format === 'TD3' && read.documentType.startsWith('P') ? 'PASSPORT' : read.format === 'TD1' ? 'QID' : null;
-    return {
-      found: true,
-      identityType: detectedType || (identityType === 'QID' || identityType === 'PASSPORT' ? identityType : null),
-      typeMatches: !identityType || !detectedType || identityType === detectedType,
-      documentNumber: read.documentNumber,
-      documentNumberCheck: read.documentNumberCheck,
-      expiryDate: read.expiryDate,
-      expiryValid: read.expiryValid,
-      dateOfBirth: read.dateOfBirth,
-      nameOnDocument: [read.givenNames, read.surname].filter(Boolean).join(' '),
-      nationality: read.nationality,
-      issuingCountry: read.issuingCountry
-    };
+    return identityReading(read, identityType);
+  }
+
+  // Reads a company's Commercial Registration to pre-fill the company and its corporate shareholders on the enquiry
+  // form: with the company's AI service when it is set up, otherwise on this server. Nothing is stored.
+  async readCompanyDocument(user: RequestUser, files: Array<{ originalname: string; mimetype: string; size: number; buffer: Buffer }>) {
+    if (files.length !== 1) throw new BadRequestException('Select one file to read.');
+    validateUploadFiles(files, standardDocumentKinds, 'document');
+    if (!this.documentReader) throw new BadRequestException('Document reading is not available.');
+    return this.documentReader.read(user.tenantId || '', 'CR_EXTRACT_EN', files[0]);
   }
 
   async downloadPreliminaryPdf(user: RequestUser, id: string) {

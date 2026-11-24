@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, InternalServerErrorException, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { hasComment, safeComment } from '../common/review-comments';
 import { nextClientCode, nextEngagementNumber, nextReviewDateFor, onboardingRiskProfile } from '../common/client-compliance';
 import { beneficialOwners } from '../common/ownership';
@@ -34,7 +34,11 @@ import {
 import PizZip from 'pizzip';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
-import { isPathInsideRoot, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
+import { isPathInsideRoot, standardDocumentKinds, validateUploadFile, validateUploadFiles } from '../common/security/upload-security';
+import { identityReading } from '../common/identity-reading';
+import { MrzResult } from '../common/mrz';
+import { DocumentReaderService } from '../compliance-clients/document-reader.service';
+import { IdDocumentReaderService } from '../compliance-clients/id-document-reader.service';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -87,8 +91,37 @@ export class KycService {
   private readonly logger = new Logger(KycService.name);
   constructor(
     private readonly prisma: PrismaService,
-    private readonly pdfRenderer: KycPdfRenderer
+    private readonly pdfRenderer: KycPdfRenderer,
+    @Optional() private readonly documentReader?: DocumentReaderService,
+    @Optional() private readonly idReader?: IdDocumentReaderService
   ) {}
+
+  // Reads an uploaded copy to pre-fill the KYC form: a Commercial Registration (the company's AI service when it is
+  // set up, otherwise this server) or a passport / QID (machine-readable zone, on this server). Nothing is stored;
+  // the form fills in the values and staff check them. Only while the form can be edited.
+  async readFormDocument(
+    user: RequestUser,
+    id: string,
+    kind: string | undefined,
+    files: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>
+  ) {
+    if (files.length !== 1) throw new BadRequestException('Select one file to read.');
+    validateUploadFiles(files, standardDocumentKinds, 'document');
+    const kycCase = await this.requireWritableCase(user, id);
+    if (kind === 'COMPANY') {
+      if (!this.documentReader) throw new BadRequestException('Document reading is not available.');
+      return this.documentReader.read(kycCase.tenantId, 'CR_EXTRACT_EN', files[0]);
+    }
+    if (kind !== 'PASSPORT' && kind !== 'QID') throw new BadRequestException('Choose what to read: COMPANY, PASSPORT or QID.');
+    let read: MrzResult | null = null;
+    try {
+      read = this.idReader ? await this.idReader.read(files[0]) : null;
+    } catch {
+      // Reading is a convenience: a file that cannot be read falls back to manual entry.
+      read = null;
+    }
+    return identityReading(read, kind);
+  }
 
   async findAll(user: RequestUser) {
     const where: Prisma.KycCaseWhereInput = this.tenantWhere(user);

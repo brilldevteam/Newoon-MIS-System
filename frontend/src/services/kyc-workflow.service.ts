@@ -1,5 +1,6 @@
 import { trackDownload } from '../utils/download-progress';
 import { api } from './api';
+import type { DocumentReading } from './legal-documents.service';
 
 export type KycCaseStatus =
   | 'INQUIRY_RECEIVED'
@@ -1076,4 +1077,27 @@ export function readEnquiryIdentityDocument(identityType: 'PASSPORT' | 'QID', fi
   data.append('identityType', identityType);
   data.append('files', file);
   return api.post<EnquiryIdentityReading>('/enquiries/identity-documents/read', data, { timeout: 120000 }).then((response) => response.data);
+}
+
+// Company details (and, with the company's AI service, the people listed) read from a Commercial Registration copy
+// to pre-fill the enquiry form. Nothing is stored.
+export function readEnquiryCompanyDocument(file: File) {
+  const data = new FormData();
+  data.append('files', file);
+  return api.post<DocumentReading>('/enquiries/company-documents/read', data, { timeout: 150000 }).then((response) => response.data);
+}
+
+// The same readers for the KYC form (only while the form can be edited). Nothing is stored.
+export function readKycCompanyDocument(caseId: string, file: File) {
+  const data = new FormData();
+  data.append('kind', 'COMPANY');
+  data.append('files', file);
+  return api.post<DocumentReading>(`/kyc/${caseId}/form/read-document`, data, { timeout: 150000 }).then((response) => response.data);
+}
+
+export function readKycIdentityDocument(caseId: string, identityType: 'PASSPORT' | 'QID', file: File) {
+  const data = new FormData();
+  data.append('kind', identityType);
+  data.append('files', file);
+  return api.post<EnquiryIdentityReading>(`/kyc/${caseId}/form/read-document`, data, { timeout: 120000 }).then((response) => response.data);
 }

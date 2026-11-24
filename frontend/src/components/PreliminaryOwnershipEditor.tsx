@@ -2,17 +2,20 @@ import { Building2, Plus, Trash2, UserRound, Check, ChevronDown } from 'lucide-r
 import { useEffect, useRef, useState } from 'react';
 import { SearchableMultiSelect, splitList } from './SearchableSelect';
 import { PreliminaryPersonFields } from './PreliminaryPersonFields';
+import { DocumentFillBar } from './DocumentFillBar';
+import { readEnquiryCompanyDocument } from '../services/kyc-workflow.service';
+import { companyFill, companyFillOutcome, FillOutcome } from '../utils/document-fill';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { CORPORATE_ENTITY, chainParentId, directOwnershipTotal, indirectUboPercentage, overOwnedCompanies, ownersAndSelfIds, ownershipChainOrder } from '../utils/preliminary-ownership-chain';
 
 type Owner = { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean; passportNumber?: string; passportExpiry?: string; qidNumber?: string; qidExpiry?: string; dateOfBirth?: string; isPep?: string };
-type Props = { shareholders: Owner[]; ubos: Owner[]; countries: string[]; nationalities: string[]; onChange: (shareholders: Owner[], ubos: Owner[]) => void; onIdentityFile?: (file: File, type: 'PASSPORT' | 'QID', personName: string) => void };
+type Props = { shareholders: Owner[]; ubos: Owner[]; countries: string[]; nationalities: string[]; onChange: (shareholders: Owner[], ubos: Owner[]) => void; onIdentityFile?: (file: File, type: 'PASSPORT' | 'QID', personName: string) => void; onCompanyFile?: (file: File) => void };
 const blank = (parentRowId = ''): Owner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId, fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
 const populated = (row: Owner) => Boolean(row.fullName || row.identityNumber || row.passportNumber || row.qidNumber || row.nationality || row.address || row.ownershipPercentage || row.parentRowId);
 const inputClass = 'mt-1.5 min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-950 focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500';
 const companyName = (row: Owner | undefined) => row?.fullName.trim() || 'Unnamed company';
 
-export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nationalities, onChange, onIdentityFile }: Props) {
+export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nationalities, onChange, onIdentityFile, onCompanyFile }: Props) {
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -56,6 +59,27 @@ export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nati
     if (becomesPerson) next = reattachChildren(next, row);
     onChange(isShareholder ? next : shareholders, isShareholder ? ubos : next);
   };
+  // A corporate shareholder's CR fills its name, CR number, date of incorporation and country (empty fields only).
+  // The read finishes later (and "use the document values" later still), so it patches the row by id on the latest rows.
+  const latest = useRef({ shareholders, ubos });
+  latest.current = { shareholders, ubos };
+  const patchCompany = (id: string | undefined, change: Partial<Owner>) => {
+    const { shareholders: rows, ubos: owners } = latest.current;
+    onChange(rows.map((item) => (item.id === id ? { ...item, ...change } : item)), owners);
+  };
+  const readCompanyCopy = async (row: Owner, file: File): Promise<FillOutcome> => {
+    const reading = await readEnquiryCompanyDocument(file);
+    onCompanyFile?.(file);
+    const result = companyFill(row, reading, [
+      { field: 'legalName', key: 'fullName', label: 'company name' },
+      { field: 'commercialRegistrationNo', key: 'identityNumber', label: 'CR number' },
+      { field: 'dateOfIncorporation', key: 'dateOfBirth', label: 'date of incorporation' },
+      { field: 'countryOfIncorporation', key: 'nationality', label: 'country of registration', options: countries }
+    ]);
+    if (Object.keys(result.filled).length) patchCompany(row.id, result.filled);
+    const outcome = companyFillOutcome(reading, result, () => patchCompany(row.id, result.replace));
+    return { ...outcome, text: `${outcome.text}${onCompanyFile ? ' The copy was added to the attachments.' : ''}` };
+  };
   const remove = (row: Owner, isShareholder: boolean) => {
     if (!isShareholder) return onChange(shareholders, ubos.filter((item) => item !== row));
     onChange(reattachChildren(shareholders.filter((item) => item !== row), row), ubos.filter((item) => !row.id || item.id !== row.id && item.sourceShareholderId !== row.id).map((item) => row.id && item.parentRowId === row.id ? { ...item, parentRowId: '' } : item));
@@ -84,6 +108,7 @@ export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nati
         <div className="grid min-w-0 gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>
           <label className="min-w-0 text-sm font-medium text-slate-700">{isCompany ? 'Company name' : 'Full name'}<input className={inputClass} value={row.fullName} onChange={(event) => patch(row, isShareholder, { fullName: event.target.value })} /></label>
           {isCompany && <label className="min-w-0 text-sm font-medium text-slate-700">Registration number (CR)<input type="text" className={inputClass} value={row.identityNumber} onChange={(event) => patch(row, isShareholder, { identityNumber: event.target.value })} /></label>}
+          {isCompany && <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => readCompanyCopy(row, file)} />}
           <PreliminaryPersonFields row={row} isCompany={isCompany} onChange={(change) => patch(row, isShareholder, change)} onIdentityFile={onIdentityFile ? (file, type) => onIdentityFile(file, type, row.fullName) : undefined} />
           <div className="min-w-0">{isCompany ? <label className="text-sm font-medium text-slate-700">Country of registration<select className={inputClass} value={row.nationality} onChange={(event) => patch(row, true, { nationality: event.target.value })}><option value="">Select country</option>{countries.filter(Boolean).map((country) => <option key={country}>{country}</option>)}</select></label> : <SearchableMultiSelect label="Nationality" value={splitList(row.nationality)} options={nationalities.filter(Boolean)} onChange={(value) => patch(row, isShareholder, { nationality: value.join(', ') })} placeholder="Select nationality" />}</div>
           <label className="min-w-0 text-sm font-medium text-slate-700">Country of residence<select className={inputClass} value={row.address} onChange={(event) => patch(row, isShareholder, { address: event.target.value })}><option value="">Select country</option>{countries.filter(Boolean).map((country) => <option key={country}>{country}</option>)}</select></label>

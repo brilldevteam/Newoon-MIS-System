@@ -135,7 +135,7 @@ parties, Signed Engagement Letter.
 |---|---|---|
 | A01 | The tenant's admin can enter their own OpenAI API key in the application (Administration settings) | Done in Phase 2 (Administration > AI Document Reading) |
 | A02 | The key is stored encrypted on the server, never sent back to the browser (shown masked), never logged, and can be replaced, tested and removed; every change is audited | Done in Phase 2 (AES-256-GCM with SETTINGS_ENCRYPTION_KEY; masked; test; remove; audited) |
-| A03 | When a key is set, uploads are read by the AI service (scans, Arabic and any layout) and return the auto-fill fields in section D as structured data; staff still confirm before saving | Done in Phase 2 for the legal documents register (enquiry and KYC form: Phase 5). Not yet tried with a real key |
+| A03 | When a key is set, uploads are read by the AI service (scans, Arabic and any layout) and return the auto-fill fields in section D as structured data; staff still confirm before saving | Done in Phase 2 for the legal documents register; enquiry and KYC form added 2026-11-24 (CR and passport / QID, with expiry dates). Not yet tried with a real key |
 | A04 | Without a key, or if the AI call fails, the local server reader is used (digital PDF text layer, then local OCR for passport/QID) | Done in Phase 2 (PDF text layer, English OCR, passport / QID machine-readable lines) |
 | A05 | Settings state that documents are sent to OpenAI when a key is set; the tenant chooses this by adding the key | Done in Phase 2 (warning on the settings page) |
 | A06 | Provider layer is swappable (OpenAI first; other providers later) | Done in Phase 2 (provider field; OpenAI only for now) |

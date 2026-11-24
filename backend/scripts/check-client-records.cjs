@@ -225,6 +225,24 @@ async function checkSeedAndExpiry() {
   return db;
 }
 
+// The CR expiry date on the KYC form (Section A, usually read from the CR copy) is kept on the client and its
+// expiry list; an empty or invalid value never clears it.
+async function checkCrExpiryFromKyc() {
+  const db = memoryDb();
+  const withCr = (value) => { const form = onboardingForm(); form.sectionA = { ...form.sectionA, crExpiryDate: value }; return form; };
+  const sync = (value) => store.syncClientRecordsFromKyc(db, { client, kycCaseId: 'k1', form: withCr(value), userId: 'u', since: null });
+  const crExpiry = () => db.entity[0].crExpiryDate && db.entity[0].crExpiryDate.toISOString().slice(0, 10);
+  await sync('2027-03-31');
+  assert.equal(crExpiry(), '2027-03-31', 'Seeded from the KYC form');
+  assert.ok(db.expiry.some((item) => item.isActive && item.expiryDate && item.expiryDate.toISOString().slice(0, 10) === '2027-03-31'), 'Listed on the Expiry tab');
+  await sync('');
+  assert.equal(crExpiry(), '2027-03-31', 'An empty KYC value keeps the client date');
+  await sync('31/03/2028');
+  assert.equal(crExpiry(), '2027-03-31', 'Only YYYY-MM-DD dates are taken');
+  await sync('2028-03-31');
+  assert.equal(crExpiry(), '2028-03-31', 'A later KYC updates the date');
+}
+
 async function checkRekycMerge() {
   const db = memoryDb();
   await store.syncClientRecordsFromKyc(db, { client, kycCaseId: 'k1', form: onboardingForm(), userId: 'u', since: null });
@@ -410,6 +428,7 @@ async function checkService() {
 async function main() {
   checkMapping();
   await checkSeedAndExpiry();
+  await checkCrExpiryFromKyc();
   await checkRekycMerge();
   checkRekycPrefill();
   await checkService();

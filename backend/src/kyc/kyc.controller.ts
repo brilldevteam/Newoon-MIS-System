@@ -6,7 +6,7 @@ import { Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
+import { safeResponseFileName, standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
 import { AssignServiceDto } from './dto/assign-service.dto';
@@ -224,6 +224,19 @@ export class KycController {
     @UploadedFile() file: { originalname: string; mimetype?: string; size: number; buffer?: Buffer }
   ) {
     return this.kycService.uploadLegalDocumentFile(user, id, documentType, file);
+  }
+
+  // Reads a CR (kind COMPANY) or a passport / QID copy to pre-fill the KYC form. Nothing is stored.
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post(':id/form/read-document')
+  @UseInterceptors(FilesInterceptor('files', 1, uploadInterceptorOptions(standardDocumentKinds)))
+  readFormDocument(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body('kind') kind: string | undefined,
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>
+  ) {
+    return this.kycService.readFormDocument(user, id, kind, files || []);
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')

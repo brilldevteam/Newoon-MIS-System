@@ -30,8 +30,12 @@ import {
   uploadLegalDocumentFiles,
   viewCrrfDocument,
   viewMergedScreeningDocument,
-  viewScreeningDocument
+  viewScreeningDocument,
+  readKycCompanyDocument,
+  readKycIdentityDocument
 } from '../services/kyc-workflow.service';
+import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
+import { CompanyTarget, companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
 import { newoonServiceOptions as prospectiveServiceOptions } from '../utils/newoon-services';
@@ -63,6 +67,15 @@ const requiredDocuments = [
   'Latest Audited Financial Statements',
   'Tax Card'
 ];
+
+// Copies read with "Fill from a copy" are also kept in the Section F checklist under these document types.
+const CR_DOCUMENT = 'Commercial Registration / CR Extract';
+const IDENTITY_COPIES_DOCUMENT = 'QID / Passport copies';
+const CORPORATE_PARTY_CR_DOCUMENT = 'CR of legal entity parties';
+
+// The person rows that can be filled from a passport / QID copy (or, for a corporate shareholder, from its CR).
+type FillTarget = { list: 'shareholders' | 'ubos' | 'managers' | 'contact'; index: number; row: Row; corporate?: boolean };
+type FillBarRenderer = (target: FillTarget) => ReactNode;
 
 function createAdditionalDocumentRow(): Row {
   return {
@@ -1122,6 +1135,118 @@ export function KycFormEditorPage() {
     });
   }
 
+  // Uploads a copy that was read into the Section F checklist row of that document type (added when missing), so
+  // it does not have to be uploaded twice. Returns false when the upload failed; the values are filled either way.
+  async function attachToChecklist(documentType: string, file: File) {
+    if (!id) return false;
+    try {
+      const updatedCase = await uploadLegalDocumentFiles(id, { documentType, files: [file] });
+      const uploaded = updatedCase?.legalDocuments.find((document) => document.documentType === documentType && document.fileName === file.name);
+      const fileName = uploaded?.fileName || file.name;
+      setForm((current) => {
+        const sectionF = current.sectionF || {};
+        const documents: Row[] = sectionF.documents || [];
+        const patchRow = (row: Row) => ({
+          ...row,
+          isProvided: true,
+          fileName: appendFileNameText(row.fileName, fileName),
+          storagePath: row.storagePath || uploaded?.storagePath,
+          ...(row.fileName ? {} : { mimeType: uploaded?.mimeType || file.type || undefined, size: uploaded?.size || file.size })
+        });
+        const nextDocuments = documents.some((row) => row.documentType === documentType)
+          ? documents.map((row) => (row.documentType === documentType ? patchRow(row) : row))
+          : [...documents, patchRow({ documentType, fileName: '' })];
+        const next = { ...current, sectionF: { ...sectionF, documents: nextDocuments } };
+        formRef.current = next;
+        return next;
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function patchSectionA(change: Record<string, any>) {
+    setForm((current) => {
+      const next = { ...current, sectionA: { ...current.sectionA, ...change } };
+      formRef.current = next;
+      return next;
+    });
+  }
+
+  // Reads the company's CR into Section A: empty fields are filled, typed values that differ are listed with the
+  // option to replace them. `attach` also keeps the copy in Section F (not needed when it was uploaded there).
+  async function readCompanyCr(file: File, attach: boolean): Promise<FillOutcome> {
+    if (!id) return { tone: 'warn', text: 'Save the KYC case first.' };
+    const reading = await readKycCompanyDocument(id, file);
+    const attached = attach ? await attachToChecklist(CR_DOCUMENT, file) : false;
+    const result = companyFill(formRef.current.sectionA || {}, reading, crTargets);
+    if (Object.keys(result.filled).length) patchSectionA(result.filled);
+    const outcome = companyFillOutcome(reading, result, () => patchSectionA(result.replace), attach ? '' : ' in Section A');
+    const people = reading.people.map((person) => [person.fullName, person.roles.length ? `(${person.roles.map((role) => role.toLowerCase().replace(/_/g, ' ')).join(', ')}${person.sharePercentage ? ` ${person.sharePercentage}%` : ''})` : ''].filter(Boolean).join(' '));
+    const extra = [
+      people.length ? `The CR lists: ${people.join('; ')}. Add them in Sections B and C.` : '',
+      attach ? (attached ? `The CR was added to Section F (${CR_DOCUMENT}).` : 'The CR could not be added to Section F; upload it there.') : ''
+    ].filter(Boolean).join(' ');
+    return { ...outcome, text: [outcome.text, extra].filter(Boolean).join(' ') };
+  }
+
+  function patchPerson(target: FillTarget, change: Row) {
+    setForm((current) => {
+      const merge = (row: Row) => (target.corporate ? { ...row, ...change } : withDerivedIdentity({ ...row, ...change }));
+      let next = current;
+      if (target.list === 'contact') {
+        next = { ...current, sectionE: merge(current.sectionE || {}) };
+      } else {
+        const section = target.list === 'managers' ? 'sectionC' : 'sectionB';
+        const data = current[section] || {};
+        const rows: Row[] = data[target.list] || [];
+        next = { ...current, [section]: { ...data, [target.list]: rows.map((row, index) => (index === target.index ? merge(row) : row)) } };
+      }
+      formRef.current = next;
+      return next;
+    });
+  }
+
+  async function readPersonCopy(target: FillTarget, file: File, kind: string): Promise<FillOutcome> {
+    if (!id) return { tone: 'warn', text: 'Save the KYC case first.' };
+    if (target.corporate) {
+      const reading = await readKycCompanyDocument(id, file);
+      const attached = await attachToChecklist(CORPORATE_PARTY_CR_DOCUMENT, file);
+      const result = companyFill(target.row, reading, [
+        { field: 'legalName', key: 'fullName', label: 'company name' },
+        { field: 'commercialRegistrationNo', key: 'identityNumber', label: 'CR number' },
+        { field: 'dateOfIncorporation', key: 'dateOfBirth', label: 'date of incorporation' },
+        { field: 'registeredOfficeAddress', key: 'residenceAddress', label: 'registered address' }
+      ]);
+      if (Object.keys(result.filled).length) patchPerson(target, result.filled);
+      const outcome = companyFillOutcome(reading, result, () => patchPerson(target, result.replace));
+      return { ...outcome, text: `${outcome.text} ${attached ? `The CR was added to Section F (${CORPORATE_PARTY_CR_DOCUMENT}).` : 'The CR could not be added to Section F; upload it there.'}` };
+    }
+    const readType = kind as IdentityType;
+    const result = await readKycIdentityDocument(id, readType, file);
+    const attached = await attachToChecklist(IDENTITY_COPIES_DOCUMENT, file);
+    const { change, outcome } = identityFill(target.row, result, readType);
+    if (Object.keys(change).length) patchPerson(target, change);
+    return { ...outcome, text: `${outcome.text} ${attached ? `The copy was added to Section F (${IDENTITY_COPIES_DOCUMENT}).` : 'The copy could not be added to Section F; upload it there.'}` };
+  }
+
+  // Expiry dates are kept with the person (and feed the client record and its reminders) but are not form fields.
+  const renderFillBar: FillBarRenderer = (target) => {
+    const expiries = target.corporate ? '' : [target.row.qidExpiry ? `QID expiry ${target.row.qidExpiry}` : '', target.row.passportExpiry ? `passport expiry ${target.row.passportExpiry}` : ''].filter(Boolean).join(' · ');
+    return (
+      <div key={`fill-${target.list}-${target.index}`} className="min-w-0 md:col-span-2" style={{ gridColumn: '1 / -1' }}>
+        <DocumentFillBar
+          label={target.corporate ? "Fill from the company's CR:" : 'Fill from a copy:'}
+          options={target.corporate ? [{ value: 'COMPANY', label: 'CR' }] : [{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]}
+          onRead={(file, kind) => readPersonCopy(target, file, kind)}
+          disabled={!canEditVisibleForm}
+        />
+        {expiries ? <p className="mt-1 text-xs text-slate-600">On file: {expiries}</p> : null}
+      </div>
+    );
+  };
+
   async function save(section: SectionKey) {
     if (!id) return;
     if (!canEditVisibleForm || saving) return null;
@@ -1607,7 +1732,7 @@ export function KycFormEditorPage() {
       <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
-              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} /> : null}
+              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
                   data={form.sectionB}
@@ -1615,12 +1740,13 @@ export function KycFormEditorPage() {
                   rootName={form.sectionA.legalName || kycCase.client.name}
                   currentClientId={kycCase.client.id}
                   onChange={(value) => setSection('sectionB', value)}
+                  fillBar={renderFillBar}
                 />
               ) : null}
-              {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} /> : null}
+              {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} fillBar={renderFillBar} /> : null}
               {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} personFlags={personFlags(form)} /> : null}
-              {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} /> : null}
-              {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} /> : null}
+              {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} fillBar={renderFillBar} /> : null}
+              {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} onCompanyDocumentUploaded={(file) => readCompanyCr(file, false)} /> : null}
               {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
               {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
             </fieldset>
@@ -1649,7 +1775,20 @@ function KycFormSectionSidebar({ sections, active, onChange }: { sections: Secti
   );
 }
 
-function SectionAForm({ data, onChange }: FormProps) {
+// Where each value read from a company's CR goes in Section A.
+const crTargets: CompanyTarget[] = [
+  { field: 'legalName', key: 'legalName', label: 'legal name' },
+  { field: 'commercialRegistrationNo', key: 'commercialRegistrationNo', label: 'CR number' },
+  { field: 'taxIdentificationNo', key: 'taxIdentificationNo', label: 'tax number' },
+  { field: 'dateOfIncorporation', key: 'dateOfIncorporation', label: 'date of incorporation' },
+  { field: 'crExpiryDate', key: 'crExpiryDate', label: 'CR expiry date' },
+  { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'country of incorporation', options: countryOptions, otherKey: 'countryOfIncorporationOther' },
+  { field: 'legalForm', key: 'legalForm', label: 'legal form', options: legalFormOptions, otherKey: 'legalFormOther' },
+  { field: 'registeredOfficeAddress', key: 'registeredOfficeAddress', label: 'registered office address' },
+  { field: 'licenseActivities', key: 'licenseActivities', label: 'license activities' }
+];
+
+function SectionAForm({ data, onChange, onReadCr }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome> }) {
   function setCountryOfIncorporation(country: string) {
     onChange({
       ...data,
@@ -1668,12 +1807,14 @@ function SectionAForm({ data, onChange }: FormProps) {
 
   return (
     <FormGrid>
+      {onReadCr ? <DocumentFillBar label="Fill from the Commercial Registration (CR):" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} hint="Empty fields are filled; the CR is also added to Section F." /> : null}
       <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
       <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
       <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
       <Field label="Commercial Registration No. *" value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
       <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
       <Field label="Date of Incorporation *" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
+      <Field label="CR Expiry Date" type="date" value={data.crExpiryDate} onChange={(value) => update(data, onChange, 'crExpiryDate', value)} />
       <Select label="Country of Incorporation *" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
       <Select label="Legal Form *" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
       <Field label="Telephone *" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
@@ -1718,7 +1859,7 @@ function uboInterestTotal(sectionB: Record<string, any>) {
   return effectiveUboRows(sectionB).reduce((sum: number, row: Row) => sum + Number(row.uboInterestPercentage ?? row.ownershipPercentage ?? 0), 0);
 }
 
-function SectionBForm({ data, total, rootName, currentClientId, onChange }: FormProps & { total: number; rootName: string; currentClientId: string }) {
+function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBar }: FormProps & { total: number; rootName: string; currentClientId: string; fillBar?: FillBarRenderer }) {
   const shareholders = data.shareholders || [];
   const totals = ownershipLayerTotals(shareholders);
   const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
@@ -1727,7 +1868,7 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
 
   return (
     <div className="space-y-5">
-      <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} />
+      <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} fillBar={fillBar} />
       <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
         Total shareholder %: {total.toFixed(2)}% | Total UBO %: {totalUboPercentage.toFixed(2)}%
         {invalidLayerTotals.length ? <span className="ml-2 font-medium">One or more control layers exceed 100%.</span> : null}
@@ -1741,14 +1882,14 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange }: Form
       {(data.ubos || []).map((ubo: Row, index: number) => <label key={ubo.id || index} className="block text-sm font-medium text-slate-700">Corporate shareholder for {ubo.fullName || `beneficial owner ${index + 1}`}<select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={ubo.parentRowId || ''} onChange={(event) => onChange({ ...data, ubos: data.ubos.map((row: Row, rowIndex: number) => rowIndex === index ? { ...row, parentRowId: event.target.value } : row) })}><option value="">Direct beneficial owner</option>{shareholders.filter((party: Row) => party.shareholderType === 'Corporate Entity').map((party: Row) => <option key={party.id} value={party.id}>{party.fullName || 'Unnamed corporate shareholder'}</option>)}</select></label>)}
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
-      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} fields={[
+      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'ubos', index, row }) : undefined} fields={[
         ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['passportNumber', 'Passport number'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
 }
 
-function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName: string; currentClientId: string; rows: Row[]; onChange: (rows: Row[]) => void }) {
+function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: { rootName: string; currentClientId: string; rows: Row[]; onChange: (rows: Row[]) => void; fillBar?: FillBarRenderer }) {
   const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
@@ -1897,6 +2038,7 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange }: { rootName
                       <Field label="PEP details" value={row.pepDetails} onChange={(value) => patchRow(index, { pepDetails: value })} />
                     </>
                   ) : null}
+                  {fillBar ? fillBar({ list: 'shareholders', index, row, corporate: (row.shareholderType || 'Individual') === 'Corporate Entity' }) : null}
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
                   <div className="text-sm font-medium text-slate-700">
                     <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID number (or passport) *')}</span>
@@ -2061,8 +2203,8 @@ function OwnershipStructureDiagram({ rootName, rows, ubos }: { rootName: string;
   );
 }
 
-function SectionCForm({ data, onChange }: FormProps) {
-  return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} fields={[
+function SectionCForm({ data, onChange, fillBar }: FormProps & { fillBar?: FillBarRenderer }) {
+  return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'managers', index, row }) : undefined} fields={[
     ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['passportNumber', 'Passport number (or QID) *'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
@@ -2191,7 +2333,7 @@ function SectionDSupportingDocuments({
   );
 }
 
-function SectionEContactForm({ data, onChange }: FormProps) {
+function SectionEContactForm({ data, onChange, fillBar }: FormProps & { fillBar?: FillBarRenderer }) {
   // Nationality is multi-select; the mobile dial code follows the first selected nationality.
   function setNationality(nationality: string[]) {
     onChange({
@@ -2213,6 +2355,7 @@ function SectionEContactForm({ data, onChange }: FormProps) {
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
+    {fillBar ? fillBar({ list: 'contact', index: 0, row: data }) : null}
     <Field label="QID number" value={data.qidNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, qidNumber: value }))} />
     <Field label="Passport number" value={data.passportNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, passportNumber: value }))} />
     <label className="block text-sm font-medium text-slate-700">
@@ -2231,11 +2374,13 @@ function SectionEContactForm({ data, onChange }: FormProps) {
   </FormGrid>;
 }
 
-function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProps & { caseId: string }) {
+function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyDocumentUploaded }: FormProps & { caseId: string; onCompanyDocumentUploaded?: (file: File) => Promise<FillOutcome> }) {
   const documents = data.documents || [];
   const additionalDocuments = data.additionalDocuments || [];
   const [uploadingKey, setUploadingKey] = useState('');
   const [uploadError, setUploadError] = useState('');
+  // Uploading the company's CR here also reads it into Section A; the note says what was filled.
+  const [crNote, setCrNote] = useState<{ index: number; outcome: FillOutcome } | null>(null);
 
   async function uploadDocument(index: number, files: File[]) {
     if (!files.length || !caseId) return;
@@ -2261,6 +2406,11 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
             : documentRow
         )
       });
+      if (documentType === CR_DOCUMENT && onCompanyDocumentUploaded) {
+        setUploadingKey(`reading-${index}`);
+        const outcome = await onCompanyDocumentUploaded(files[0]).catch((): FillOutcome => ({ tone: 'warn', text: 'The CR was uploaded but could not be read. Enter the details in Section A.' }));
+        setCrNote({ index, outcome });
+      }
     } catch (requestError: any) {
       setUploadError(getApiErrorMessage(requestError, 'Unable to upload this document.'));
     } finally {
@@ -2315,8 +2465,8 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
                 </label>
                 <MultiFileUploadControl
                   names={names}
-                  disabled={uploadingKey === `required-${index}`}
-                  buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : 'Upload files'}
+                  disabled={uploadingKey === `required-${index}` || uploadingKey === `reading-${index}`}
+                  buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : uploadingKey === `reading-${index}` ? 'Reading the CR...' : 'Upload files'}
                   placeholder="Select one or more files"
                   showFileList={false}
                   onSelect={(files) => uploadDocument(index, files)}
@@ -2328,6 +2478,8 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange }: FormProp
                 emptyText="Upload supporting files for this document type."
                 onRemove={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
               />
+              {document.documentType === CR_DOCUMENT && onCompanyDocumentUploaded && crNote?.index !== index ? <p className="mt-2 text-xs text-slate-500">Uploading the CR here also fills the company details in Section A.</p> : null}
+              {crNote?.index === index ? <FillNote outcome={crNote.outcome} onChange={(outcome) => setCrNote({ index, outcome })} /> : null}
             </div>
           );
         })}
@@ -2998,7 +3150,7 @@ function LegacyIdentityNote({ value }: { value: string }) {
   );
 }
 
-function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: Row[]; fields: DynamicField[]; onChange: (rows: Row[]) => void }) {
+function DynamicRows({ title, rows, fields, onChange, rowExtra }: { title: string; rows: Row[]; fields: DynamicField[]; onChange: (rows: Row[]) => void; rowExtra?: (row: Row, index: number) => ReactNode }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -3008,6 +3160,7 @@ function DynamicRows({ title, rows, fields, onChange }: { title: string; rows: R
       {rows.map((row, index) => (
         <div key={index} className="rounded-md border border-slate-200 p-3">
           <div className="grid gap-3 md:grid-cols-2">
+            {rowExtra ? rowExtra(row, index) : null}
             {fields.map(([key, label, type, options]) => {
               if (type === 'legacyIdentity') {
                 const legacy = legacyIdentity(row);

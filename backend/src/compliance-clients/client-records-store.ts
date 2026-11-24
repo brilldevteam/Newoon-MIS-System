@@ -182,10 +182,16 @@ export async function syncClientRecordsFromKyc(
 
   const existingEntity = await db.clientEntityProfile.findUnique({ where: { clientId: client.id } });
   const seeded = !existingEntity;
+  // The CR expiry date is on the KYC form (Section A, usually filled from the CR copy) but not printed on the KYC
+  // document. Like the other KYC values, an empty one never clears the client's date.
+  const sectionA = input.form?.sectionA && typeof input.form.sectionA === 'object' ? (input.form.sectionA as Record<string, unknown>) : {};
+  const crExpiryText = typeof sectionA.crExpiryDate === 'string' ? sectionA.crExpiryDate.trim() : '';
+  const crExpiry = /^\d{4}-\d{2}-\d{2}$/.test(crExpiryText) ? storedValue('crExpiryDate', crExpiryText) : null;
   if (!existingEntity) {
     const data: Record<string, string | Date | boolean | null> = {};
     for (const field of ENTITY_KYC_FIELDS) data[field] = storedValue(field, entityDraft[field] ?? null);
     if (!data.legalName && client.name) data.legalName = client.name;
+    if (crExpiry) data.crExpiryDate = crExpiry;
     const edited: Record<string, string> = {};
     for (const override of overrides.filter((item) => item.section === 'COMPANY')) {
       edited[override.field === 'prospectiveService' ? 'prospectiveServices' : override.field] = editedAt(override);
@@ -200,6 +206,7 @@ export async function syncClientRecordsFromKyc(
       const value = entityDraft[field];
       if (value !== null && value !== undefined && value !== '' && !lateEdit(edited, field)) data[field] = storedValue(field, value);
     }
+    if (crExpiry && !lateEdit(edited, 'crExpiryDate')) data.crExpiryDate = crExpiry;
     await db.clientEntityProfile.update({ where: { id: existingEntity.id }, data: { ...data, sourceKycCaseId: input.kycCaseId, updatedById: userId } });
   }
 

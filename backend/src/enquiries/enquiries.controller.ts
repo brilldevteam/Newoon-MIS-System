@@ -50,6 +50,15 @@ export class EnquiriesController {
     return this.enquiriesService.readIdentityDocument(identityType, files || []);
   }
 
+  // Reads a Commercial Registration copy to pre-fill the company (or a corporate shareholder) on the enquiry form.
+  // Uses the company's AI service when it is set up, otherwise this server. Nothing is stored.
+  @Roles('OPERATING_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Post('company-documents/read')
+  @UseInterceptors(FilesInterceptor('files', 1, uploadInterceptorOptions(standardDocumentKinds)))
+  readCompanyDocument(@CurrentUser() user: RequestUser, @UploadedFiles() files: Array<{ originalname: string; mimetype: string; size: number; buffer: Buffer }>) {
+    return this.enquiriesService.readCompanyDocument(user, files || []);
+  }
+
   @Roles('AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')
   @Post(':id/convert-to-kyc')
   convertToKyc(@CurrentUser() user: RequestUser, @Param('id') id: string) {

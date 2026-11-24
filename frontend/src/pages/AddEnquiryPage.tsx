@@ -11,7 +11,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
-import { checkEnquiryDuplicate, createEnquiry, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
+import { DocumentFillBar } from '../components/DocumentFillBar';
+import { companyFill, companyFillOutcome, FillOutcome } from '../utils/document-fill';
+import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 import { useAuth } from '../hooks/useAuth';
@@ -745,6 +747,17 @@ export function AddEnquiryPage() {
     if (previous) goToStep(previous.id);
   }
 
+  // The client company's CR on the Details step: fills the company name (when empty) and is attached to the enquiry.
+  async function readCompanyCr(file: File): Promise<FillOutcome> {
+    const reading = await readEnquiryCompanyDocument(file);
+    setAttachments((current) => withAttachmentCopy(current, 'Corporate Documents - Company', file));
+    const result = companyFill(form, reading, [{ field: 'legalName', key: 'companyName', label: 'company name' }]);
+    if (Object.keys(result.filled).length) setForm((current) => ({ ...current, ...result.filled }));
+    const outcome = companyFillOutcome(reading, result, () => setForm((current) => ({ ...current, ...result.replace })));
+    const number = reading.company.commercialRegistrationNo ? ` CR number on the copy: ${reading.company.commercialRegistrationNo}.` : '';
+    return { ...outcome, text: `${outcome.text}${number} The CR was added to the attachments.` };
+  }
+
   function setHeadOfficeCountry(country: string) {
     setForm((current) => ({
       ...current,
@@ -864,6 +877,10 @@ export function AddEnquiryPage() {
                   Company name <RequiredMark />
                   <input required value={form.companyName} onChange={(event) => setForm({ ...form, companyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
+              ) : null}
+
+              {form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? (
+                <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={readCompanyCr} hint="The company name is filled in; the CR is added to the attachments." />
               ) : null}
 
               <SearchableMultiSelect
@@ -997,7 +1014,7 @@ export function AddEnquiryPage() {
           ) : null}
 
           {currentStep.id === 'ownership' && form.enquiryType === 'PROPOSED_COMPANY' ? (
-            <PreliminaryOwnershipForm form={form} onChange={setForm} onIdentityFile={(file) => setAttachments((current) => withIdentityCopy(current, file))} />
+            <PreliminaryOwnershipForm form={form} onChange={setForm} onIdentityFile={(file) => setAttachments((current) => withIdentityCopy(current, file))} onCompanyFile={(file) => setAttachments((current) => withCorporateShareholderCopy(current, file))} />
           ) : null}
 
           {currentStep.id === 'management' && form.enquiryType === 'PROPOSED_COMPANY' ? (
@@ -1217,8 +1234,8 @@ function totalOwnership(rows: PreliminaryOwner[]) {
 
 type IdentityFileHandler = (file: File, type: 'PASSPORT' | 'QID', personName: string) => void;
 
-function PreliminaryOwnershipForm({ form, onChange, onIdentityFile }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void; onIdentityFile: IdentityFileHandler }) {
-  return <PreliminaryOwnershipEditor shareholders={form.preliminaryShareholders} ubos={form.preliminaryUbos} countries={countryOptions} nationalities={nationalityOptions} onChange={(shareholders, ubos) => onChange({ ...form, preliminaryShareholders: shareholders, preliminaryUbos: ubos })} onIdentityFile={onIdentityFile} />;
+function PreliminaryOwnershipForm({ form, onChange, onIdentityFile, onCompanyFile }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void; onIdentityFile: IdentityFileHandler; onCompanyFile: (file: File) => void }) {
+  return <PreliminaryOwnershipEditor shareholders={form.preliminaryShareholders} ubos={form.preliminaryUbos} countries={countryOptions} nationalities={nationalityOptions} onChange={(shareholders, ubos) => onChange({ ...form, preliminaryShareholders: shareholders, preliminaryUbos: ubos })} onIdentityFile={onIdentityFile} onCompanyFile={onCompanyFile} />;
 }
 
 function PreliminaryManagementForm({ form, onChange, onIdentityFile }: { form: EnquiryValidationForm; onChange: (form: EnquiryValidationForm) => void; onIdentityFile: IdentityFileHandler }) {
@@ -1234,9 +1251,21 @@ function previewIdentity(row: PersonDetails & { shareholderType?: string; identi
 
 // A passport / QID copy read on the Ownership or Management step is attached to the enquiry under one document type.
 function withIdentityCopy(attachments: AttachmentDraft[], file: File): AttachmentDraft[] {
-  const existing = attachments.find((attachment) => attachment.documentType === IDENTITY_COPIES_DOCUMENT);
+  return withAttachmentCopy(attachments, IDENTITY_COPIES_DOCUMENT, file);
+}
+
+// A CR read on the Ownership step goes with the corporate shareholder documents; the client company's own CR (Details
+// step) with "Corporate Documents - Company".
+const CORPORATE_SHAREHOLDER_DOCUMENTS = ['Corporate documents of corporate shareholders in case of multiple layers of UBO', 'Corporate shareholder documents'];
+function withCorporateShareholderCopy(attachments: AttachmentDraft[], file: File): AttachmentDraft[] {
+  const documentType = attachments.find((attachment) => CORPORATE_SHAREHOLDER_DOCUMENTS.includes(attachment.documentType))?.documentType || CORPORATE_SHAREHOLDER_DOCUMENTS[1];
+  return withAttachmentCopy(attachments, documentType, file);
+}
+
+function withAttachmentCopy(attachments: AttachmentDraft[], documentType: string, file: File): AttachmentDraft[] {
+  const existing = attachments.find((attachment) => attachment.documentType === documentType);
   if (existing?.files?.some((item) => item.name === file.name && item.size === file.size)) return attachments;
-  if (!existing) return [...attachments, { documentType: IDENTITY_COPIES_DOCUMENT, fileName: file.name, files: [file] }];
+  if (!existing) return [...attachments, { documentType, fileName: file.name, files: [file] }];
   return attachments.map((attachment) => attachment === existing ? { ...attachment, files: [...(attachment.files || []), file], fileName: [attachment.fileName, file.name].filter(Boolean).join(', ') } : attachment);
 }
 
