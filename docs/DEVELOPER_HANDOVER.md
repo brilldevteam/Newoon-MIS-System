@@ -1,5 +1,33 @@
 # Newoon MIS Developer Handover
 
+## Reading Documents Everywhere They Are Entered (2026-11-24)
+
+Audit of every upload in the application and what it fills (read on the server, or by the company's AI service for CRs when it is on; staff check and save as usual; nothing typed is overwritten):
+
+| Where | Upload | Fills |
+|---|---|---|
+| Enquiry, existing company: Details | Company CR | Company name (CR attached as *Corporate Documents - Company*) |
+| Enquiry, proposed company: Details | Name reservation / initial approval / application, if any (no CR exists before incorporation) | Proposed name, legal form (also updates the required attachments), country, business activity, registered office address; people named on it go to Ownership / Management; attached as *Proposed company documents (...)* |
+| Enquiry: Ownership | Corporate shareholder CR; person passport / QID | Company name, CR number, incorporation date, country; person number, expiry, date of birth, name |
+| Enquiry: Management | Passport / QID | as above |
+| Enquiry: Contact | Key contact passport / QID (new) | Number, expiry, date of birth, name, ID types; attached as *Key Contact QID / Passport attachment* |
+| Enquiry: Attachments | Files added to *Corporate Documents - Company* (existing company) or *Key Contact QID / Passport attachment* (new) | Read as on the Details / Contact steps |
+| Enquiry: Declaration | "Signed by" (new) | Name and position from a person already entered |
+| KYC Section A | CR upload, or read a CR already uploaded to the case (new) | All company fields (see below) **and the shareholders, directors and signatories into Sections B and C** (new) |
+| KYC Section F | CR in *Commercial Registration / CR Extract* | Section A and the people, as above |
+| KYC person rows (B, C, E) | Passport / QID or corporate CR, upload or **already uploaded** (new) | Number, expiry, date of birth, name; corporate: name, CR number, incorporation date, address |
+| KYC Section G | "Signed by" (new) | Name and position |
+| Client page: Legal documents / ID copies | Any register document / QID / passport | Phase 2 and 2026-11-17 behaviour (unchanged) |
+
+Not reading (evidence or signatures, not data entry): screening, CRRF, signed review documents, engagement letter, signature / stamp images, client folders, profile photo.
+
+- **People from a CR** (`utils/people-from-document.ts`): each shareholder becomes a shareholder row (a name such as "... W.L.L." / "Holdings" a corporate shareholder with its number) with share %; each director / manager / signatory / secretary one officer row with all positions (signatory ticked). An 11-digit number is a QID, otherwise a passport. A person already on the form (same number, or same name) is not added again: only empty fields are filled and new positions added. Reading the same CR twice adds nothing. The shareholder and officer rows of one person share the number, so they stay linked ("Same person as").
+- **Already-uploaded files** (KYC documents page, case page, enquiry attachments carried over on conversion): `POST /api/kyc/:id/form/read-document` also takes `legalDocumentId` instead of a file; the file is fetched through `getLegalDocumentFile` (case access) after the editable-case check, and goes through the same file-type checks. The KYC form offers them as "or read an uploaded file" (first one preselected).
+- **Connected end to end**: enquiry attachments become KYC documents on conversion; the KYC form's company fields, CR expiry and people (with roles and numbers) become the client's records on activation / re-KYC approval; the client page lists the KYC documents. The client's legal documents register keeps its own uploads (the CR expiry from the KYC feeds its Expiry tab).
+- **Images**: photos and scans are read with OCR (English) on the server, so without the AI service a photographed CR may give few fields; with the AI service images and Arabic CRs are read fully. PDFs with a text layer (such as the QFC extract) are read fully either way.
+- **Key contact nationality**: KYC person rows use country names and the key contact nationality names, so a nationality is copied between them only when it is in the target list.
+- **Checks**: `check-document-fill.cjs` adds stored-file reads (case access, locked case, file-type checks); people-from-CR rules and linking were checked with throw-away scripts. Not verified in a browser.
+
 ## Same Person on Several Rows: Enquiry and KYC Forms (2026-11-24)
 
 One person can be a shareholder, a beneficial owner, a manager and the key contact. Both forms now let staff pick that person instead of typing them again, and keep the rows connected.

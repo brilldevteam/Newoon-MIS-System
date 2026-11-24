@@ -103,11 +103,18 @@ export class KycService {
     user: RequestUser,
     id: string,
     kind: string | undefined,
-    files: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>
+    uploaded: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>,
+    legalDocumentId?: string
   ) {
+    const kycCase = await this.requireWritableCase(user, id);
+    // A file already uploaded to this case (KYC documents page, case page, enquiry attachments) can be read too.
+    let files = uploaded;
+    if (legalDocumentId?.trim() && !uploaded.length) {
+      const stored = await this.getLegalDocumentFile(user, id, legalDocumentId.trim());
+      files = [{ originalname: stored.fileName, mimetype: stored.mimeType || undefined, size: stored.content.length, buffer: stored.content }];
+    }
     if (files.length !== 1) throw new BadRequestException('Select one file to read.');
     validateUploadFiles(files, standardDocumentKinds, 'document');
-    const kycCase = await this.requireWritableCase(user, id);
     if (kind === 'COMPANY') {
       if (!this.documentReader) throw new BadRequestException('Document reading is not available.');
       return this.documentReader.read(kycCase.tenantId, 'CR_EXTRACT_EN', files[0]);

@@ -36,7 +36,8 @@ import {
 } from '../services/kyc-workflow.service';
 import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
 import { SamePersonPicker } from '../components/SamePersonPicker';
-import { PeopleAdapter, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
+import { PeopleAdapter, personChoices, personDetails, PersonSlot, syncLinkedPeople, toList } from '../utils/linked-people';
+import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
 import { CompanyTarget, companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
 import { getApiErrorMessage } from '../services/api';
 import { applyCountryDialCode, countryDialOptions } from '../utils/country-phone';
@@ -79,6 +80,17 @@ const CORPORATE_PARTY_CR_DOCUMENT = 'CR of legal entity parties';
 type FillTarget = { list: 'shareholders' | 'ubos' | 'managers' | 'contact'; index: number; row: Row; corporate?: boolean };
 type FillBarRenderer = (target: FillTarget) => ReactNode;
 
+// How people read from a CR are written into Sections B (shareholders) and C (officers).
+const kycPeopleLayout: PeopleLayout = {
+  // Getters: the option lists are declared further down this file.
+  get countries() { return countryOptions; },
+  get positions() { return positionOptions; },
+  newShareholder: createOwnershipRow,
+  newOfficer: () => ({ id: crypto.randomUUID() }),
+  setPositions: (row, positions) => ({ ...row, position: positions }),
+  positionsOf: (row) => toList(row.position)
+};
+
 const fillTargetSlot = (target: FillTarget) => (target.list === 'contact' ? 'contact' : `${target.list}:${target.index}`);
 
 // The people of the KYC form (shareholders, beneficial persons, managers, key contact) for "Same person as ..." and for
@@ -91,7 +103,15 @@ const kycPeople: PeopleAdapter<any> = {
     { slot: 'contact', role: 'Key contact', row: (form.sectionE || {}) as Row }
   ],
   write: (form, slot, change) => {
-    const rowChange = { ...change, ...('nationality' in change ? { nationality: toList(change.nationality) } : {}) };
+    // Person rows list countries ("Jordan"), the key contact nationalities ("Jordanian"): a value that is not in the
+    // target's list is left out rather than shown as an unknown choice.
+    const fitting = (options: string[]) => {
+      if (!('nationality' in change)) return change;
+      const { nationality, ...rest } = change;
+      const values = toList(nationality).filter((value) => options.includes(value));
+      return values.length ? { ...rest, nationality: values } : rest;
+    };
+    const rowChange = fitting(slot === 'contact' ? nationalityOptions : countryOptions);
     const merge = (row: Row) => withDerivedIdentity({ ...row, ...rowChange });
     if (slot === 'contact') return { ...form, sectionE: merge(form.sectionE || {}) };
     const [list, position] = slot.split(':');
@@ -1167,6 +1187,7 @@ export function KycFormEditorPage() {
     if (!id) return false;
     try {
       const updatedCase = await uploadLegalDocumentFiles(id, { documentType, files: [file] });
+      if (updatedCase) setKycCase(updatedCase);
       const uploaded = updatedCase?.legalDocuments.find((document) => document.documentType === documentType && document.fileName === file.name);
       const fileName = uploaded?.fileName || file.name;
       setForm((current) => {
@@ -1202,22 +1223,40 @@ export function KycFormEditorPage() {
 
   // Reads the company's CR into Section A: empty fields are filled, typed values that differ are listed with the
   // option to replace them. `attach` also keeps the copy in Section F (not needed when it was uploaded there).
-  async function readCompanyCr(file: File, attach: boolean): Promise<FillOutcome> {
+  // `source` is a new file, or the id of a file already uploaded to the case (read without uploading it again).
+  async function readCompanyCr(source: File | string, attachFile: boolean): Promise<FillOutcome> {
     if (!id) return { tone: 'warn', text: 'Save the KYC case first.' };
+    const attach = attachFile && source instanceof File;
     // The CR is kept first, so it is saved even when nothing can be read from it.
-    const attached = attach ? await attachToChecklist(CR_DOCUMENT, file) : false;
+    const attached = attach && source instanceof File ? await attachToChecklist(CR_DOCUMENT, source) : false;
     let reading;
     try {
-      reading = await readKycCompanyDocument(id, file);
+      reading = await readKycCompanyDocument(id, typeof source === 'string' ? { legalDocumentId: source } : source);
     } catch {
       return { tone: 'warn', text: `${attach ? (attached ? 'The CR was uploaded, but ' : 'The CR could not be uploaded, and ') : ''}the details could not be read from it. Type them in below.` };
     }
     const result = companyFill(formRef.current.sectionA || {}, reading, crTargets);
     if (Object.keys(result.filled).length) patchSectionA(result.filled);
     const outcome = companyFillOutcome(reading, result, () => patchSectionA(result.replace), attach ? '' : ' in Section A');
-    const people = reading.people.map((person) => [person.fullName, person.roles.length ? `(${person.roles.map((role) => role.toLowerCase().replace(/_/g, ' ')).join(', ')}${person.sharePercentage ? ` ${person.sharePercentage}%` : ''})` : ''].filter(Boolean).join(' '));
+    // The shareholders, directors and signatories on the CR go into Sections B and C (rows already there are kept).
+    const people = reading.people.length
+      ? addPeopleFromDocument(reading.people, formRef.current.sectionB?.shareholders || [], formRef.current.sectionC?.managers || [], kycPeopleLayout)
+      : null;
+    if (people && (people.added.length || people.updated.length)) {
+      setForm((current) => {
+        const next = {
+          ...current,
+          sectionB: { ...(current.sectionB || {}), shareholders: people.shareholders.map(withDerivedIdentity) },
+          sectionC: { ...(current.sectionC || {}), managers: people.officers.map(withDerivedIdentity) }
+        };
+        formRef.current = next;
+        return next;
+      });
+    }
     const extra = [
-      people.length ? `The CR lists: ${people.join('; ')}. Add them in Sections B and C.` : '',
+      people?.added.length ? `Added to Sections B and C: ${people.added.join('; ')}.` : '',
+      people?.updated.length ? `Completed in Sections B and C: ${people.updated.join('; ')}.` : '',
+      people && (people.added.length || people.updated.length) ? 'Check them there and add their passport / QID copies for the expiry dates.' : '',
       attach && !attached ? 'The CR could not be uploaded; try again or upload it in Section F.' : '',
       'Anything not filled can be typed in below.'
     ].filter(Boolean).join(' ');
@@ -1253,11 +1292,15 @@ export function KycFormEditorPage() {
     });
   }
 
-  async function readPersonCopy(target: FillTarget, file: File, kind: string): Promise<FillOutcome> {
+  async function readPersonCopy(target: FillTarget, source: File | string, kind: string): Promise<FillOutcome> {
     if (!id) return { tone: 'warn', text: 'Save the KYC case first.' };
+    const stored = typeof source === 'string' ? { legalDocumentId: source } : source;
+    const keptNote = (attached: boolean, documentType: string, what: string) => (typeof source === 'string'
+      ? `Read from the file already uploaded.`
+      : attached ? `The ${what} was added to Section F (${documentType}).` : `The ${what} could not be added to Section F; upload it there.`);
     if (target.corporate) {
-      const reading = await readKycCompanyDocument(id, file);
-      const attached = await attachToChecklist(CORPORATE_PARTY_CR_DOCUMENT, file);
+      const reading = await readKycCompanyDocument(id, stored);
+      const attached = source instanceof File ? await attachToChecklist(CORPORATE_PARTY_CR_DOCUMENT, source) : false;
       const result = companyFill(target.row, reading, [
         { field: 'legalName', key: 'fullName', label: 'company name' },
         { field: 'commercialRegistrationNo', key: 'identityNumber', label: 'CR number' },
@@ -1266,14 +1309,26 @@ export function KycFormEditorPage() {
       ]);
       if (Object.keys(result.filled).length) patchPerson(target, result.filled);
       const outcome = companyFillOutcome(reading, result, () => patchPerson(target, result.replace));
-      return { ...outcome, text: `${outcome.text} ${attached ? `The CR was added to Section F (${CORPORATE_PARTY_CR_DOCUMENT}).` : 'The CR could not be added to Section F; upload it there.'}` };
+      return { ...outcome, text: `${outcome.text} ${keptNote(attached, CORPORATE_PARTY_CR_DOCUMENT, 'CR')}` };
     }
     const readType = kind as IdentityType;
-    const result = await readKycIdentityDocument(id, readType, file);
-    const attached = await attachToChecklist(IDENTITY_COPIES_DOCUMENT, file);
+    const result = await readKycIdentityDocument(id, readType, stored);
+    const attached = source instanceof File ? await attachToChecklist(IDENTITY_COPIES_DOCUMENT, source) : false;
     const { change, outcome } = identityFill(target.row, result, readType);
     if (Object.keys(change).length) patchPerson(target, change);
-    return { ...outcome, text: `${outcome.text} ${attached ? `The copy was added to Section F (${IDENTITY_COPIES_DOCUMENT}).` : 'The copy could not be added to Section F; upload it there.'}` };
+    return { ...outcome, text: `${outcome.text} ${keptNote(attached, IDENTITY_COPIES_DOCUMENT, 'copy')}` };
+  }
+
+  // Files already uploaded to the case (KYC documents page, case page, enquiry attachments) that can be read here.
+  function uploadedFiles(kind: 'company' | 'party' | 'identity') {
+    const pattern = kind === 'company'
+      ? /commercial\s*registration|cr\s*extract|corporate\s*documents\s*-\s*company/i
+      : kind === 'party'
+        ? /legal\s*entity\s*parties|corporate\s*(?:shareholder\s*)?documents|corporate\s*shareholder/i
+        : /qid|passport|identity/i;
+    return (kycCase?.legalDocuments || [])
+      .filter((document) => document.storagePath && /\.(pdf|png|jpe?g|gif|webp)$/i.test(document.fileName) && pattern.test(document.documentType))
+      .map((document) => ({ value: document.id, label: `${document.fileName} (${document.documentType})` }));
   }
 
   // Expiry dates are kept with the person (and feed the client record and its reminders) but are not form fields.
@@ -1286,6 +1341,8 @@ export function KycFormEditorPage() {
           label={target.corporate ? "Fill from the company's CR:" : 'Fill from a copy:'}
           options={target.corporate ? [{ value: 'COMPANY', label: 'CR' }] : [{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]}
           onRead={(file, kind) => readPersonCopy(target, file, kind)}
+          existing={uploadedFiles(target.corporate ? 'party' : 'identity')}
+          onReadExisting={(documentId, kind) => readPersonCopy(target, documentId, kind)}
           disabled={!canEditVisibleForm}
         />
         {expiries ? <p className="mt-1 text-xs text-slate-600">On file: {expiries}</p> : null}
@@ -1778,7 +1835,7 @@ export function KycFormEditorPage() {
       <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
-              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} crFileNames={fileNameList((form.sectionF?.documents || []).find((row: Row) => row.documentType === CR_DOCUMENT)?.fileName)} /> : null}
+              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} uploadedCrs={uploadedFiles('company')} onReadUploadedCr={(documentId) => readCompanyCr(documentId, false)} crFileNames={fileNameList((form.sectionF?.documents || []).find((row: Row) => row.documentType === CR_DOCUMENT)?.fileName)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
                   data={form.sectionB}
@@ -1793,7 +1850,7 @@ export function KycFormEditorPage() {
               {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} personFlags={personFlags(form)} /> : null}
               {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} fillBar={renderFillBar} /> : null}
               {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} onCompanyDocumentUploaded={(file) => readCompanyCr(file, false)} /> : null}
-              {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} /> : null}
+              {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} people={kycPeople.read(form)} /> : null}
               {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
             </fieldset>
           </section>
@@ -1834,7 +1891,7 @@ const crTargets: CompanyTarget[] = [
   { field: 'licenseActivities', key: 'licenseActivities', label: 'license activities' }
 ];
 
-function SectionAForm({ data, onChange, onReadCr, crFileNames = [] }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome>; crFileNames?: string[] }) {
+function SectionAForm({ data, onChange, onReadCr, crFileNames = [], uploadedCrs = [], onReadUploadedCr }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome>; crFileNames?: string[]; uploadedCrs?: Array<{ value: string; label: string }>; onReadUploadedCr?: (documentId: string) => Promise<FillOutcome> }) {
   function setCountryOfIncorporation(country: string) {
     onChange({
       ...data,
@@ -1859,7 +1916,7 @@ function SectionAForm({ data, onChange, onReadCr, crFileNames = [] }: FormProps 
           <p className="mt-1 text-xs text-slate-500">Upload the company's CR and the company details below are filled in automatically. Anything that is not read can be typed in by hand. Fields you have already typed are not changed.</p>
           <p className="mt-2 text-xs text-slate-700">{crFileNames.length ? `Uploaded: ${crFileNames.join(', ')}` : 'No CR uploaded yet.'}</p>
           <div className="mt-2">
-            <DocumentFillBar label="CR (PDF or image):" buttonLabel={crFileNames.length ? 'Upload another CR' : 'Upload CR'} options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} />
+            <DocumentFillBar label="CR (PDF or image):" buttonLabel={crFileNames.length ? 'Upload another CR' : 'Upload CR'} options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} existing={uploadedCrs} onReadExisting={onReadUploadedCr ? (documentId) => onReadUploadedCr(documentId) : undefined} />
           </div>
         </div>
       ) : null}
@@ -2624,9 +2681,28 @@ function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; em
   );
 }
 
-function SectionGDeclarationForm({ data, onChange }: FormProps) {
+// The person signing the declaration is usually a director or signatory already entered: pick them to fill the name
+// and the position.
+function SectionGDeclarationForm({ data, onChange, people = [] }: FormProps & { people?: PersonSlot[] }) {
+  const choices = personChoices(people, 'declaration');
+  function pickSigner(slot: string) {
+    const person = people.find((item) => item.slot === slot);
+    if (!person) return;
+    const position = toList(person.row.position).find((item) => positionOptions.includes(item) && item !== 'Other') || '';
+    onChange({ ...data, fullName: person.row.fullName || data.fullName, ...(position ? { position, positionOther: '' } : {}) });
+  }
   return <FormGrid>
     <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">{CLIENT_DECLARATION_TEXT}</p>
+    {choices.length ? (
+      <label className="flex flex-wrap items-center gap-2 text-sm text-slate-700 md:col-span-2">
+        Signed by
+        <select aria-label="Signed by" className="min-h-9 rounded-md border border-slate-300 bg-white px-2 text-sm" value="" onChange={(event) => { if (event.target.value) pickSigner(event.target.value); }}>
+          <option value="">Select a person already entered</option>
+          {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+        </select>
+        <span className="text-xs text-slate-500">Fills the name and position; you can still change them.</span>
+      </label>
+    ) : null}
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
     <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
     <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />

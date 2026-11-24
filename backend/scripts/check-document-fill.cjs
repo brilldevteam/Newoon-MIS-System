@@ -58,7 +58,21 @@ async function checkKycRead() {
   await assert.rejects(service.readFormDocument(aml, 'case-1', 'COMPANY', [exe()]), (error) => error.status === 400, 'Executables are refused');
   await assert.rejects(service.readFormDocument(otherCompany, 'case-1', 'COMPANY', [png()]), (error) => error.status === 404, "Another company's case is not found");
 
+  // A file already uploaded to the case is read through the case's own document access.
+  const storedCase = kycService('LEGAL_DOCUMENTS_UPLOADED');
+  const fetched = [];
+  storedCase.service.getLegalDocumentFile = async (user, caseId, documentId) => { fetched.push([user.tenantId, caseId, documentId]); return { fileName: 'stored-cr.png', mimeType: 'image/png', content: png().buffer }; };
+  await storedCase.service.readFormDocument(aml, 'case-1', 'COMPANY', [], 'doc-7');
+  assert.deepEqual(fetched, [['tenant-a', 'case-1', 'doc-7']]);
+  assert.equal(storedCase.calls.company[0].name, 'stored-cr.png', 'The stored file is read');
+  const storedId = await storedCase.service.readFormDocument(aml, 'case-1', 'QID', [], 'doc-8');
+  assert.equal(storedId.found, true);
+  storedCase.service.getLegalDocumentFile = async () => ({ fileName: 'tool.exe', mimeType: 'application/octet-stream', content: Buffer.from('MZ..') });
+  await assert.rejects(storedCase.service.readFormDocument(aml, 'case-1', 'COMPANY', [], 'doc-9'), (error) => error.status === 400, 'A stored file goes through the same file-type checks');
+
   const locked = kycService('DMLRO_REVIEW_PENDING');
+  locked.service.getLegalDocumentFile = async () => { throw new Error('must not read a stored file on a locked case'); };
+  await assert.rejects(locked.service.readFormDocument(aml, 'case-1', 'COMPANY', [], 'doc-7'), /locked/);
   await assert.rejects(locked.service.readFormDocument(aml, 'case-1', 'COMPANY', [png()]), /locked/, 'Nothing is read while the case is under review');
   assert.equal(locked.calls.company.length, 0);
 

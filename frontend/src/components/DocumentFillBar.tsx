@@ -12,21 +12,27 @@ type Props = {
   disabled?: boolean;
   hint?: string;
   buttonLabel?: string;
+  // Files already uploaded elsewhere (for example on the KYC documents page) that can be read without uploading again.
+  existing?: Option[];
+  onReadExisting?: (id: string, kind: string) => Promise<FillOutcome>;
 };
 
 // "Fill from a copy": the user picks a file, the server reads it and the form fills in what was found. The note
 // below says what was filled and what to check; nothing is saved until the form is saved.
-export function DocumentFillBar({ label, options, onRead, disabled = false, hint, buttonLabel = 'Upload and read' }: Props) {
+export function DocumentFillBar({ label, options, onRead, disabled = false, hint, buttonLabel = 'Upload and read', existing = [], onReadExisting }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState(options[0]?.value || '');
   const [reading, setReading] = useState(false);
   const [outcome, setOutcome] = useState<FillOutcome | null>(null);
+  const [chosenId, setExistingId] = useState('');
+  // The first uploaded file is selected until another is chosen.
+  const existingId = existing.some((option) => option.value === chosenId) ? chosenId : existing[0]?.value || '';
 
-  async function read(file: File) {
+  async function read(source: File | string) {
     setReading(true);
     setOutcome(null);
     try {
-      setOutcome(await onRead(file, kind));
+      setOutcome(typeof source === 'string' ? await onReadExisting!(source, kind) : await onRead(source, kind));
     } catch {
       setOutcome({ tone: 'warn', text: 'The copy could not be read. Enter the details from the document.' });
     } finally {
@@ -49,6 +55,16 @@ export function DocumentFillBar({ label, options, onRead, disabled = false, hint
           {reading ? <><Loader2 className="h-4 w-4 animate-spin" />Uploading and reading...</> : buttonLabel}
         </button>
         <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void read(file); }} />
+        {existing.length && onReadExisting ? (
+          <span className="inline-flex flex-wrap items-center gap-2 text-sm text-slate-700">
+            or read an uploaded file:
+            <select aria-label="Uploaded file to read" className="min-h-9 max-w-[16rem] rounded-md border border-slate-300 bg-white px-2 text-sm" value={existingId} onChange={(event) => setExistingId(event.target.value)} disabled={reading || disabled}>
+              <option value="">Select a file</option>
+              {existing.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <button type="button" disabled={reading || disabled || !existingId} onClick={() => void read(existingId)} className="inline-flex min-h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">Read</button>
+          </span>
+        ) : null}
         {hint ? <span className="text-xs text-slate-500">{hint}</span> : null}
       </div>
       {outcome ? <FillNote outcome={outcome} onChange={setOutcome} /> : null}

@@ -234,9 +234,10 @@ export class KycController {
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body('kind') kind: string | undefined,
-    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>
+    @UploadedFiles() files: Array<{ originalname: string; mimetype?: string; size: number; buffer: Buffer }>,
+    @Body('legalDocumentId') legalDocumentId: string | undefined
   ) {
-    return this.kycService.readFormDocument(user, id, kind, files || []);
+    return this.kycService.readFormDocument(user, id, kind, files || [], legalDocumentId);
   }
 
   @Roles('AML_TEAM', 'AML_SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN')

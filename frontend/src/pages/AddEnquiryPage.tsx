@@ -11,12 +11,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
-import { DocumentFillBar } from '../components/DocumentFillBar';
+import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
 import { PeopleLink, PeopleLinkContext, SamePersonPicker } from '../components/SamePersonPicker';
-import { PeopleAdapter, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
+import { PeopleAdapter, personChoices, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
+import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
 import { withDerivedIdentity } from '../utils/person-identity';
-import { companyFill, companyFillOutcome, FillOutcome } from '../utils/document-fill';
-import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
+import { companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
+import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, readEnquiryIdentityDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 import { useAuth } from '../hooks/useAuth';
@@ -131,6 +132,20 @@ type EnquiryValidationForm = {
 };
 
 const blankPreliminaryOwner = (): PreliminaryOwner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId: '', fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
+const PROPOSED_COMPANY_DOCUMENT = 'Proposed company documents (name reservation / initial approval)';
+
+// How people read from a document are written into the enquiry's Ownership and Management steps.
+const enquiryPeopleLayout: PeopleLayout = {
+  get countries() { return countryOptions; },
+  get positions() { return positionOptions; },
+  nationalityAsText: true,
+  newShareholder: () => blankPreliminaryOwner(),
+  newOfficer: () => blankPreliminaryManagement(),
+  setPositions: (row, positions) => ({ ...row, positions, position: positions.join(', ') }),
+  positionsOf: (row) => (Array.isArray(row.positions) && row.positions.length ? row.positions : splitList(row.position))
+};
+const KEY_CONTACT_ID_DOCUMENT = 'Key Contact QID / Passport attachment';
+
 const blankPreliminaryManagement = (): PreliminaryManagementPerson => ({ id: crypto.randomUUID(), fullName: '', identityNumber: '', nationality: '', position: '', positions: [] });
 
 // The people of the enquiry (shareholders, beneficial owners, management, key contact) for "Same person as ..." and
@@ -461,6 +476,9 @@ export function AddEnquiryPage() {
     setFormState((current) => syncLinkedPeople(current, typeof value === 'function' ? value(current) : value, enquiryPeople));
   }, []);
   const people = useMemo(() => enquiryPeople.read(form), [form]);
+  // The latest form for reads that finish after the user kept typing.
+  const formRef = useRef(form);
+  formRef.current = form;
   const peopleLink = useMemo<PeopleLink>(() => ({
     people,
     slotOf: (row) => people.find((person) => person.source === row)?.slot,
@@ -809,14 +827,80 @@ export function AddEnquiryPage() {
   }
 
   // The client company's CR on the Details step: fills the company name (when empty) and is attached to the enquiry.
-  async function readCompanyCr(file: File): Promise<FillOutcome> {
+  async function readCompanyCr(file: File, attach = true): Promise<FillOutcome> {
     const reading = await readEnquiryCompanyDocument(file);
-    setAttachments((current) => withAttachmentCopy(current, 'Corporate Documents - Company', file));
-    const result = companyFill(form, reading, [{ field: 'legalName', key: 'companyName', label: 'company name' }]);
+    if (attach) setAttachments((current) => withAttachmentCopy(current, 'Corporate Documents - Company', file));
+    const result = companyFill(formRef.current, reading, [{ field: 'legalName', key: 'companyName', label: 'company name' }]);
     if (Object.keys(result.filled).length) setForm((current) => ({ ...current, ...result.filled }));
     const outcome = companyFillOutcome(reading, result, () => setForm((current) => ({ ...current, ...result.replace })));
     const number = reading.company.commercialRegistrationNo ? ` CR number on the copy: ${reading.company.commercialRegistrationNo}.` : '';
-    return { ...outcome, text: `${outcome.text}${number} The CR was added to the attachments.` };
+    return { ...outcome, text: `${outcome.text}${number}${attach ? ' The CR was added to the attachments.' : ''}` };
+  }
+
+  // A proposed company has no CR yet, but a name reservation, an initial approval or a draft application may already
+  // show the proposed name, legal form, activity and address.
+  async function readProposedCompanyDocument(file: File): Promise<FillOutcome> {
+    const reading = await readEnquiryCompanyDocument(file);
+    setAttachments((current) => withAttachmentCopy(current, PROPOSED_COMPANY_DOCUMENT, file));
+    const result = companyFill(formRef.current, reading, [
+      { field: 'legalName', key: 'proposedCompanyName', label: 'proposed company name' },
+      { field: 'legalForm', key: 'proposedLegalForm', label: 'legal form', options: legalForms, otherKey: 'proposedLegalFormOther' },
+      { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'country of incorporation', options: countryOptions },
+      { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'business activity' },
+      { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'registered office address' }
+    ]);
+    // A new legal form changes the list of required attachments, as when it is chosen by hand.
+    const applyChange = (change: Record<string, string>) => {
+      setForm((current) => ({ ...current, ...change }));
+      if (change.proposedLegalForm) setAttachments((current) => mergeAttachmentTemplates('PROPOSED_COMPANY', change.proposedLegalForm === 'Other' ? change.proposedLegalFormOther || '' : change.proposedLegalForm, current));
+    };
+    if (Object.keys(result.filled).length) applyChange(result.filled);
+    const outcome = companyFillOutcome(reading, result, () => applyChange(result.replace));
+    // People named on the document go to the Ownership and Management steps (rows already there are kept).
+    const found = reading.people.length
+      ? addPeopleFromDocument(reading.people, formRef.current.preliminaryShareholders, formRef.current.preliminaryManagement, enquiryPeopleLayout)
+      : null;
+    if (found && (found.added.length || found.updated.length)) {
+      setForm((current) => ({
+        ...current,
+        preliminaryShareholders: (found.shareholders as PreliminaryOwner[]).map((row) => withDerivedIdentity(row)),
+        preliminaryManagement: (found.officers as PreliminaryManagementPerson[]).map((row) => withDerivedIdentity(row))
+      }));
+    }
+    const peopleNote = [
+      found?.added.length ? `Added to Ownership / Management: ${found.added.join('; ')}.` : '',
+      found?.updated.length ? `Completed: ${found.updated.join('; ')}.` : ''
+    ].filter(Boolean).join(' ');
+    return { ...outcome, text: `${outcome.text} ${peopleNote ? `${peopleNote} ` : ''}The document was added to the attachments (${PROPOSED_COMPANY_DOCUMENT}). Anything not filled can be typed in.` };
+  }
+
+  // The key contact's passport / QID: number, expiry, date of birth and name (when empty). `kind` AUTO takes the type
+  // found on the document (used for files added on the Attachments step).
+  async function readKeyContactCopy(file: File, kind: string, attach = true): Promise<FillOutcome> {
+    const result = await readEnquiryIdentityDocument(kind === 'QID' ? 'QID' : 'PASSPORT', file);
+    if (attach) setAttachments((current) => withAttachmentCopy(current, KEY_CONTACT_ID_DOCUMENT, file));
+    const readType = kind === 'AUTO' ? (result.found && result.identityType) || 'PASSPORT' : (kind as IdentityType);
+    const contact = enquiryPeople.read(formRef.current).find((person) => person.slot === 'contact')?.row || {};
+    const { change, outcome } = identityFill(contact, result, readType);
+    if (Object.keys(change).length) setForm((current) => enquiryPeople.write(current, 'contact', change));
+    return { ...outcome, text: `${outcome.text}${attach ? ' The copy was added to the attachments.' : ''}` };
+  }
+
+  // Files added on the Attachments step are read too when their type says what they are.
+  async function readAttachment(documentType: string, files: File[]): Promise<FillOutcome | null> {
+    const file = files.find((item) => /\.(pdf|png|jpe?g|gif|webp)$/i.test(item.name) || /^(?:application\/pdf|image\/)/.test(item.type));
+    if (!file) return null;
+    if (documentType === 'Corporate Documents - Company' && formRef.current.enquiryType === 'EXISTING_LEGAL_ENTITY') return readCompanyCr(file, false);
+    if (documentType === KEY_CONTACT_ID_DOCUMENT) return readKeyContactCopy(file, 'AUTO', false);
+    return null;
+  }
+
+  // The declaration is usually signed by someone already entered (director, signatory).
+  function pickDeclarationSigner(slot: string) {
+    const person = people.find((item) => item.slot === slot);
+    if (!person) return;
+    const position = String(person.row.position || '').trim() || person.role;
+    setForm((current) => ({ ...current, preliminaryDeclaration: { ...current.preliminaryDeclaration, fullName: person.row.fullName || current.preliminaryDeclaration.fullName, position } }));
   }
 
   function setHeadOfficeCountry(country: string) {
@@ -917,6 +1001,7 @@ export function AddEnquiryPage() {
               proposedAddressRequired={proposedAddressRequired}
               onFormChange={setForm}
               onAttachmentsChange={setAttachments}
+              onReadDocument={readProposedCompanyDocument}
             />
           ) : null}
 
@@ -942,7 +1027,7 @@ export function AddEnquiryPage() {
               ) : null}
 
               {form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? (
-                <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={readCompanyCr} hint="The company name is filled in; the CR is added to the attachments." />
+                <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => readCompanyCr(file)} hint="The company name is filled in; the CR is added to the attachments." />
               ) : null}
 
               <SearchableMultiSelect
@@ -961,6 +1046,7 @@ export function AddEnquiryPage() {
           {currentStep.id === 'contact' ? (
             <div className="grid gap-4 md:grid-cols-2">
               <SamePersonPicker people={people} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} />
+              <DocumentFillBar label="Fill from a copy:" options={[{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]} onRead={(file, kind) => readKeyContactCopy(file, kind)} />
               <label className="text-sm font-medium text-slate-700">
                 Full name <RequiredMark />
                 <input required value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -1041,6 +1127,16 @@ export function AddEnquiryPage() {
               <h2 className="font-semibold text-slate-950">Client Declaration</h2>
               <p className="mt-2 text-sm text-slate-600">By signing this document, I confirm that the information and documents provided are true, complete, and up to date, and that I am authorised to represent the proposed entity.</p>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {personChoices(people, 'declaration').length ? (
+                  <label className="flex flex-wrap items-center gap-2 text-sm text-slate-700 md:col-span-2">
+                    Signed by
+                    <select aria-label="Signed by" className="min-h-9 rounded-md border border-slate-300 bg-white px-2 text-sm" value="" onChange={(event) => { if (event.target.value) pickDeclarationSigner(event.target.value); }}>
+                      <option value="">Select a person already entered</option>
+                      {personChoices(people, 'declaration').map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                    </select>
+                    <span className="text-xs text-slate-500">Fills the name and position; you can still change them.</span>
+                  </label>
+                ) : null}
                 <label className="text-sm font-medium text-slate-700">Full name<input value={form.preliminaryDeclaration.fullName} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, fullName: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <label className="text-sm font-medium text-slate-700">Position<input value={form.preliminaryDeclaration.position} onChange={(event) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, position: event.target.value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
                 <label className="text-sm font-medium text-slate-700">Date<TypedDateInput value={form.preliminaryDeclaration.date} onChange={(value) => setForm({ ...form, preliminaryDeclaration: { ...form.preliminaryDeclaration, date: value } })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
@@ -1101,6 +1197,7 @@ export function AddEnquiryPage() {
               proposedLegalForm={resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther)}
               attachments={attachments}
               onChange={setAttachments}
+              onFilesAdded={readAttachment}
             />
           ) : null}
 
@@ -1156,16 +1253,19 @@ function ProposedCompanyDetails({
   attachments,
   proposedAddressRequired,
   onFormChange,
-  onAttachmentsChange
+  onAttachmentsChange,
+  onReadDocument
 }: {
   form: EnquiryValidationForm;
   attachments: AttachmentDraft[];
   proposedAddressRequired: boolean;
   onFormChange: (form: EnquiryValidationForm) => void;
   onAttachmentsChange: (attachments: AttachmentDraft[]) => void;
+  onReadDocument?: (file: File) => Promise<FillOutcome>;
 }) {
   const legalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
   return <div className="grid gap-4 md:grid-cols-2">
+        {onReadDocument ? <DocumentFillBar label="Fill from a document, if you have one (name reservation, initial approval):" options={[{ value: 'COMPANY', label: 'Document' }]} onRead={(file) => onReadDocument(file)} hint="A proposed company has no CR yet; type the details if there is no document." /> : null}
         <label className="text-sm font-medium text-slate-700">
           Proposed company name <RequiredMark />
           <input required value={form.proposedCompanyName} onChange={(event) => onFormChange({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -1539,14 +1639,34 @@ function AttachmentRows({
   enquiryType,
   proposedLegalForm,
   attachments,
-  onChange
+  onChange,
+  onFilesAdded
 }: {
   enquiryType: EnquiryType;
   proposedLegalForm: string;
   attachments: AttachmentDraft[];
   onChange: (attachments: AttachmentDraft[]) => void;
+  // Reads a file added to a type that can fill the form (company CR, key contact ID); null when it does not apply.
+  onFilesAdded?: (documentType: string, files: File[]) => Promise<FillOutcome | null>;
 }) {
+  const [readNotes, setReadNotes] = useState<Record<string, FillOutcome>>({});
+  const [readingType, setReadingType] = useState('');
+
+  async function readAdded(documentType: string, files: File[]) {
+    if (!onFilesAdded) return;
+    setReadingType(documentType);
+    try {
+      const outcome = await onFilesAdded(documentType, files);
+      if (outcome) setReadNotes((current) => ({ ...current, [documentType]: outcome }));
+    } catch {
+      setReadNotes((current) => ({ ...current, [documentType]: { tone: 'warn', text: 'The file was added, but its details could not be read. Type them in.' } }));
+    } finally {
+      setReadingType('');
+    }
+  }
+
   function setFiles(index: number, files: File[]) {
+    void readAdded(attachments[index]?.documentType || '', files);
     onChange(
       attachments.map((attachment, itemIndex) =>
         itemIndex === index
@@ -1640,7 +1760,11 @@ function AttachmentRows({
             <p className="text-sm font-medium text-slate-950">
               {attachment.documentType}
             </p>
-            <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} onRemoveName={(fileIndex) => removeFile(index, fileIndex)} />
+            <div className="min-w-0">
+              <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} onRemoveName={(fileIndex) => removeFile(index, fileIndex)} />
+              {readingType === attachment.documentType ? <p className="mt-1 text-xs text-slate-500">Reading the details from the file...</p> : null}
+              {readNotes[attachment.documentType] ? <FillNote outcome={readNotes[attachment.documentType]} onChange={(outcome) => setReadNotes((current) => ({ ...current, [attachment.documentType]: outcome }))} /> : null}
+            </div>
             <button
               type="button"
               onClick={() => (additional ? removeAttachment(index) : clearFiles(index))}

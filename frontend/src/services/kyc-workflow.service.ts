@@ -1088,16 +1088,23 @@ export function readEnquiryCompanyDocument(file: File) {
 }
 
 // The same readers for the KYC form (only while the form can be edited). Nothing is stored.
-export function readKycCompanyDocument(caseId: string, file: File) {
+// `source` is a new file, or the id of a file already uploaded to the case (KYC documents, enquiry attachments).
+type KycReadSource = File | { legalDocumentId: string };
+function appendSource(data: FormData, source: KycReadSource) {
+  if (source instanceof File) data.append('files', source);
+  else data.append('legalDocumentId', source.legalDocumentId);
+}
+
+export function readKycCompanyDocument(caseId: string, source: KycReadSource) {
   const data = new FormData();
   data.append('kind', 'COMPANY');
-  data.append('files', file);
+  appendSource(data, source);
   return api.post<DocumentReading>(`/kyc/${caseId}/form/read-document`, data, { timeout: 150000 }).then((response) => response.data);
 }
 
-export function readKycIdentityDocument(caseId: string, identityType: 'PASSPORT' | 'QID', file: File) {
+export function readKycIdentityDocument(caseId: string, identityType: 'PASSPORT' | 'QID', source: KycReadSource) {
   const data = new FormData();
   data.append('kind', identityType);
-  data.append('files', file);
+  appendSource(data, source);
   return api.post<EnquiryIdentityReading>(`/kyc/${caseId}/form/read-document`, data, { timeout: 120000 }).then((response) => response.data);
 }
