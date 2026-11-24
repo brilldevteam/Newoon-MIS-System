@@ -6,6 +6,7 @@ import {
   ClipboardCheck,
   Inbox,
   LayoutDashboard,
+  LayoutGrid,
   Layers,
   ListChecks,
   LogOut,
@@ -69,6 +70,7 @@ const navItems: NavItem[] = [
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isWorkspaceHome = location.pathname === '/workspace';
   const { user } = useAuth();
   const isFocusedWorkspace = /^\/kyc\/[^/]+\/form$/.test(location.pathname);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -183,7 +185,7 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-[#eef3f8]">
-      <aside
+      {!isWorkspaceHome && <aside
         className={`fixed inset-y-0 left-0 hidden border-r border-slate-200/80 bg-white/95 shadow-sm transition-all duration-200 lg:block ${
           useCollapsedSidebar ? 'w-20' : 'w-64'
         }`}
@@ -213,9 +215,9 @@ export function AppLayout() {
         <nav className="space-y-1 px-3 py-4" aria-label="Main navigation">
           <NavItems items={visibleNavItems} collapsed={useCollapsedSidebar} openGroups={openGroups} setOpenGroups={setOpenGroups} pathname={location.pathname} />
         </nav>
-      </aside>
+      </aside>}
 
-      {mobileNavOpen ? (
+      {!isWorkspaceHome && mobileNavOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Main menu">
           <button type="button" aria-label="Close menu" onClick={() => setMobileNavOpen(false)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]" />
           <div className="mobile-drawer absolute inset-y-0 left-0 flex w-[min(20rem,86vw)] flex-col bg-white shadow-xl">
@@ -247,10 +249,10 @@ export function AppLayout() {
         </div>
       ) : null}
 
-      <div className={useCollapsedSidebar ? 'min-w-0 lg:pl-20' : 'min-w-0 lg:pl-64'}>
+      <div className={isWorkspaceHome ? 'min-w-0' : useCollapsedSidebar ? 'min-w-0 lg:pl-20' : 'min-w-0 lg:pl-64'}>
         <header className="sticky top-0 z-10 flex h-16 min-w-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
           <div className="flex min-w-0 items-center gap-2">
-            <button
+            {!isWorkspaceHome && <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
               aria-label="Open menu"
@@ -258,8 +260,8 @@ export function AppLayout() {
               className="-ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-md text-slate-700 hover:bg-slate-100 lg:hidden"
             >
               <Menu className="h-5 w-5" />
-            </button>
-            <Link to="/" aria-label="Newoon MIS home" className="shrink-0 lg:hidden">
+            </button>}
+            <Link to="/" aria-label="Newoon MIS home" className={isWorkspaceHome ? 'shrink-0' : 'shrink-0 lg:hidden'}>
               <img src="/brand/newoon-mark.png" alt="" className="h-8 w-8 rounded" width={32} height={32} />
             </Link>
             <p className="truncate text-base font-semibold text-slate-950">
@@ -268,6 +270,9 @@ export function AppLayout() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <Link to="/workspace" aria-label="All workspaces" title="All workspaces" aria-current={isWorkspaceHome ? 'page' : undefined} className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600">
+              <LayoutGrid className="h-4 w-4" />
+            </Link>
             {user ? (
               <div ref={notificationsRef} className="relative">
                 <button

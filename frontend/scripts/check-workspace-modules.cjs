@@ -38,6 +38,10 @@ async function main() {
         return request.respond({contentType:'text/html',body:html});
       });
       await page.goto('https://workspace.test'); await page.waitForSelector('main a[href="/enquiries"]');
+      assert.equal(await page.$('aside'),null,'Tile home must not render a sidebar');
+      assert.equal(await page.$('button[aria-label="Open menu"]'),null,'Tile home must not show a menu toggle');
+      assert.ok(await page.$('header a[aria-label="All workspaces"]'),'Workspace shortcut must remain in the header');
+      assert.equal(await page.$eval('header',element=>element.getBoundingClientRect().x),0,'Home header must span the viewport');
       assert.equal(await page.$$eval('main a',links=>links.length),3);
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
       assert.equal(await page.evaluate(()=>window.rules.defaultRouteForUser(window.rules.user)),'/workspace');
@@ -62,8 +66,9 @@ async function main() {
           if(destination==='/compliance/clients') { assert.ok(hrefs.includes('/compliance/clients')); assert.ok(!hrefs.includes('/crrf')); }
         }
         if(width===1440)await page.screenshot({path:path.join(output,`${destination.split('/').pop()}.png`),fullPage:true});
-        await page.evaluate(()=>document.querySelector('a[href="/workspace"]').click());
+        await page.click('header a[aria-label="All workspaces"]');
         await page.waitForSelector('main a[href="/enquiries"]');
+        assert.equal(await page.$('aside'),null,'Returning to the tile screen must remove sidebar');
       }
       assert.deepEqual(errors,[]); await page.close();
     }
