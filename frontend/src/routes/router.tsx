@@ -11,6 +11,7 @@ import { AppLayout } from '../layouts/AppLayout';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { DashboardPage } from '../pages/DashboardPage';
 import { WorkspaceHomePage } from '../pages/WorkspaceHomePage';
+import { ModuleDashboardPage } from '../pages/ModuleDashboardPage';
 import { ChangePasswordPage } from '../pages/ChangePasswordPage';
 import { MyProfilePage } from '../pages/MyProfilePage';
 import { AddEnquiryPage } from '../pages/AddEnquiryPage';
@@ -49,6 +50,9 @@ export const router = createBrowserRouter([
         children: [
           { path: '/', element: <HomeRedirect /> },
           { path: '/workspace', element: <WorkspaceHomePage /> },
+          { path: '/enquiries/dashboard', element: <ModuleDashboardPage module="enquiry" /> },
+          { path: '/kyc-workflow/dashboard', element: <ModuleDashboardPage module="kyc" /> },
+          { path: '/compliance/dashboard', element: <ModuleDashboardPage module="compliance" /> },
           { path: '/access-denied', element: <AccessDeniedPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
           { path: '/account/password', element: <ChangePasswordPage /> },

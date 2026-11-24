@@ -85,6 +85,9 @@ export function AppLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const online = useOnlineStatus();
   const visibleNavItems = navItems
+    .map((item) => !isNavGroup(item) && item.to === '/dashboard'
+      ? { ...item, to: workspaceModules.find((module) => module.id === workspaceForPath(location.pathname))?.to || item.to }
+      : item)
     .filter((item) => navigationInWorkspace(location.pathname, isNavGroup(item) ? item.pathPrefix : item.to))
     .map((item) => (isNavGroup(item) ? { ...item, children: item.children.filter((child) => canAccessNavigation(user, child.roles, child.area)) } : item))
     .filter((item) => (isNavGroup(item) ? item.children.length > 0 : canAccessNavigation(user, item.roles, item.area)));
@@ -403,9 +406,11 @@ function NavItems({ items, collapsed, openGroups, setOpenGroups, pathname }: {
 }
 
 function SidebarLink({ item, collapsed }: { item: NavLinkItem; collapsed: boolean }) {
+  const dashboardOpen = useLocation().pathname.endsWith('/dashboard');
   return (
     <NavLink
       to={item.to}
+      end={dashboardOpen}
       title={collapsed ? item.label : undefined}
       className={({ isActive }) =>
         `flex items-center rounded-xl py-2.5 text-sm font-medium transition ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${
