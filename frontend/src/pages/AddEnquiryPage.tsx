@@ -13,7 +13,7 @@ import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
 import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
 import { DocumentIntakePanel } from '../components/DocumentIntakePanel';
-import { appendReviewedPerson, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
+import { appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
 import { PeopleLink, PeopleLinkContext, SamePersonPicker } from '../components/SamePersonPicker';
 import { PeopleAdapter, personChoices, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
 import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
@@ -828,7 +828,7 @@ export function AddEnquiryPage() {
     if (previous) goToStep(previous.id);
   }
 
-  // The client company's CR on the Details step: fills the company name (when empty) and is attached to the enquiry.
+  // Existing-company CR files added on the Attachments step still reuse the company reader.
   async function applyIntake(application: IntakeApplication) {
     if (busyRef.current) throw new Error('Wait for the current save to finish.');
     const current = formRef.current;
@@ -837,7 +837,7 @@ export function AddEnquiryPage() {
       const change = reviewedPatch(current as unknown as Record<string, unknown>, application.fields);
       next = { ...current, ...change };
       if (application.people.length && current.enquiryType === 'PROPOSED_COMPANY') {
-        const found = addPeopleFromDocument(application.people, current.preliminaryShareholders, current.preliminaryManagement, enquiryPeopleLayout);
+        const found = addPeopleFromDocument(application.people, current.preliminaryShareholders, current.preliminaryManagement, { ...enquiryPeopleLayout, preservePartialRows: true });
         next = { ...next, preliminaryShareholders: found.shareholders.map(withDerivedIdentity) as PreliminaryOwner[], preliminaryManagement: found.officers.map(withDerivedIdentity) as PreliminaryManagementPerson[] };
       }
     } else {
@@ -854,16 +854,15 @@ export function AddEnquiryPage() {
         }
       } else {
       const target = enquiryPeople.read(current).find(person => person.slot === application.target);
-      if (!target || JSON.stringify(target.row) !== JSON.stringify(application.expectedPerson)) throw new Error('This person changed in the form. Reopen the review and choose the person again.');
-      const patch = reviewedPatch(target.row, application.fields);
-      next = enquiryPeople.write(current, application.target, patch);
+      if (!target || JSON.stringify(target.row) !== JSON.stringify(application.expectedPerson)) throw new Error('This person changed while the document was processing. Try this file again.');
+      next = applyAutomaticIdentity(current, enquiryPeople, application.target, application.fields);
       }
     }
     const documentType = application.kind === 'COMPANY' ? (current.enquiryType === 'PROPOSED_COMPANY' ? PROPOSED_COMPANY_DOCUMENT : 'Corporate Documents - Company') : application.target === 'contact' ? KEY_CONTACT_ID_DOCUMENT : IDENTITY_COPIES_DOCUMENT;
     formRef.current = next;
-    setForm(next);
+    setFormState(next);
     setAttachments(items => withAttachmentCopy(current.enquiryType === 'PROPOSED_COMPANY' && next.proposedLegalForm !== current.proposedLegalForm ? mergeAttachmentTemplates(current.enquiryType, resolveOtherValue(next.proposedLegalForm, next.proposedLegalFormOther), items) : items, documentType, application.file));
-    setSuccess('Reviewed details applied to the draft. Save the enquiry to keep the details and document.');
+    setSuccess('Document details filled automatically. Save the enquiry to keep the details and attachments.');
   }
 
   async function readCompanyCr(file: File, attach = true): Promise<FillOutcome> {
@@ -874,43 +873,6 @@ export function AddEnquiryPage() {
     const outcome = companyFillOutcome(reading, result, () => setForm((current) => ({ ...current, ...result.replace })));
     const number = reading.company.commercialRegistrationNo ? ` CR number on the copy: ${reading.company.commercialRegistrationNo}.` : '';
     return { ...outcome, text: `${outcome.text}${number}${attach ? ' The CR was added to the attachments.' : ''}` };
-  }
-
-  // A proposed company has no CR yet, but a name reservation, an initial approval or a draft application may already
-  // show the proposed name, legal form, activity and address.
-  async function readProposedCompanyDocument(file: File): Promise<FillOutcome> {
-    const reading = await readEnquiryCompanyDocument(file);
-    setAttachments((current) => withAttachmentCopy(current, PROPOSED_COMPANY_DOCUMENT, file));
-    const result = companyFill(formRef.current, reading, [
-      { field: 'legalName', key: 'proposedCompanyName', label: 'proposed company name' },
-      { field: 'legalForm', key: 'proposedLegalForm', label: 'legal form', options: legalForms, otherKey: 'proposedLegalFormOther' },
-      { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'country of incorporation', options: countryOptions },
-      { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'business activity' },
-      { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'registered office address' }
-    ]);
-    // A new legal form changes the list of required attachments, as when it is chosen by hand.
-    const applyChange = (change: Record<string, string>) => {
-      setForm((current) => ({ ...current, ...change }));
-      if (change.proposedLegalForm) setAttachments((current) => mergeAttachmentTemplates('PROPOSED_COMPANY', change.proposedLegalForm === 'Other' ? change.proposedLegalFormOther || '' : change.proposedLegalForm, current));
-    };
-    if (Object.keys(result.filled).length) applyChange(result.filled);
-    const outcome = companyFillOutcome(reading, result, () => applyChange(result.replace));
-    // People named on the document go to the Ownership and Management steps (rows already there are kept).
-    const found = reading.people.length
-      ? addPeopleFromDocument(reading.people, formRef.current.preliminaryShareholders, formRef.current.preliminaryManagement, enquiryPeopleLayout)
-      : null;
-    if (found && (found.added.length || found.updated.length)) {
-      setForm((current) => ({
-        ...current,
-        preliminaryShareholders: (found.shareholders as PreliminaryOwner[]).map((row) => withDerivedIdentity(row)),
-        preliminaryManagement: (found.officers as PreliminaryManagementPerson[]).map((row) => withDerivedIdentity(row))
-      }));
-    }
-    const peopleNote = [
-      found?.added.length ? `Added to Ownership / Management: ${found.added.join('; ')}.` : '',
-      found?.updated.length ? `Completed: ${found.updated.join('; ')}.` : ''
-    ].filter(Boolean).join(' ');
-    return { ...outcome, text: `${outcome.text} ${peopleNote ? `${peopleNote} ` : ''}The document was added to the attachments (${PROPOSED_COMPANY_DOCUMENT}). Anything not filled can be typed in.` };
   }
 
   // The key contact's passport / QID: number, expiry, date of birth and name (when empty). `kind` AUTO takes the type
@@ -993,7 +955,7 @@ export function AddEnquiryPage() {
         { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'Country of incorporation', options: countryOptions },
         { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'Business activity' },
         { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'Registered office address' }
-      ] : [{ field: 'legalName', key: 'companyName', label: 'Company name' }, { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }]} peopleEnabled={form.enquiryType === 'PROPOSED_COMPANY'} targets={[...enquiryPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row, omitFields: person.slot === 'contact' ? ['dateOfBirth'] : [] })), ...(form.enquiryType === 'PROPOSED_COMPANY' ? newIntakePersonTargets : [])]} disabled={saving} read={(file, kind) => readIntakeDocument(file, kind, readEnquiryCompanyDocument, readEnquiryIdentityDocument)} apply={applyIntake} />}
+      ] : [{ field: 'legalName', key: 'companyName', label: 'Company name' }, { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }]} peopleEnabled={form.enquiryType === 'PROPOSED_COMPANY'} targets={[...enquiryPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row, omitFields: person.slot === 'contact' ? ['dateOfBirth'] : [], nationalityOptions: countryOptions })), ...(form.enquiryType === 'PROPOSED_COMPANY' ? newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions })) : [])]} disabled={saving} read={(file, kind) => readIntakeDocument(file, kind, readEnquiryCompanyDocument, readEnquiryIdentityDocument)} apply={applyIntake} />}
 
       {form.enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES' && <section aria-label="Enquiry completion checklist" className="rounded-lg border border-slate-200 bg-white px-4 py-3"><h2 className="mb-2 text-sm font-semibold text-slate-900">Details to complete</h2><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{steps.filter(step => step.id !== 'type' && step.id !== 'notes').map(step => {
         const missing = validateEnquiryStep(form, step.id);
@@ -1053,7 +1015,6 @@ export function AddEnquiryPage() {
               proposedAddressRequired={proposedAddressRequired}
               onFormChange={setForm}
               onAttachmentsChange={setAttachments}
-              onReadDocument={readProposedCompanyDocument}
             />
           ) : null}
 
@@ -1076,10 +1037,6 @@ export function AddEnquiryPage() {
                   Company name <RequiredMark />
                   <input required value={form.companyName} onChange={(event) => setForm({ ...form, companyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
                 </label>
-              ) : null}
-
-              {form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? (
-                <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => readCompanyCr(file)} hint="The company name is filled in; the CR is added to the attachments." />
               ) : null}
 
               <SearchableMultiSelect
@@ -1305,19 +1262,16 @@ function ProposedCompanyDetails({
   attachments,
   proposedAddressRequired,
   onFormChange,
-  onAttachmentsChange,
-  onReadDocument
+  onAttachmentsChange
 }: {
   form: EnquiryValidationForm;
   attachments: AttachmentDraft[];
   proposedAddressRequired: boolean;
   onFormChange: (form: EnquiryValidationForm) => void;
   onAttachmentsChange: (attachments: AttachmentDraft[]) => void;
-  onReadDocument?: (file: File) => Promise<FillOutcome>;
 }) {
   const legalForm = resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther);
   return <div className="grid gap-4 md:grid-cols-2">
-        {onReadDocument ? <DocumentFillBar label="Fill from a document, if you have one (name reservation, initial approval):" options={[{ value: 'COMPANY', label: 'Document' }]} onRead={(file) => onReadDocument(file)} hint="A proposed company has no CR yet; type the details if there is no document." /> : null}
         <label className="text-sm font-medium text-slate-700">
           Proposed company name <RequiredMark />
           <input required value={form.proposedCompanyName} onChange={(event) => onFormChange({ ...form, proposedCompanyName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />

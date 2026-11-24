@@ -1,9 +1,11 @@
 # Newoon MIS Developer Handover
 
-## Reviewed Document Inbox (2026-11-24)
+## Automatic Document Inbox (2026-11-24)
 
 - See `docs/DOCUMENT_INTAKE.md` for scope, verification commands and current limitations.
-- Adds a multi-file, page-lifetime extraction queue to editable enquiry/KYC preparation screens. Data is staged for explicit review; existing values are protected and identity files require a person selection.
+- Adds a multi-file, page-lifetime extraction queue to editable enquiry/KYC preparation screens. Extracted values fill empty draft fields immediately, without a review screen. Existing values are protected; identity numbers/names match existing people, with inline person assignment only when ambiguous.
+- A residency card carrying both QID and passport details fills both numbers and their respective expiry dates, including cards read from printed labels without MRZ check digits. Supported nationality values are also filled. Normal Save/Update remains necessary; there is no automatic approval or submission.
+- Redundant company CR / proposed-company document upload bars are removed from the Enquiry Details step; use the global inbox. Individual passport/QID uploads and corporate-party row readers remain available. The shared individual reader fills both identities whenever both are returned, not only when marked as printed text.
 - Reuses existing readers and save/upload authorization. No schema, export-template, environment or dependency changes are introduced by the inbox.
 - KYC preview/diagram rendering is preserved from the preceding preview-only update. `check-intake-preview-preservation.cjs` records this boundary.
 - This is not a persistent backend queue and does not claim page-level provenance or calibrated extraction confidence. Those require a separate persistence/provider design before implementation.
@@ -14,8 +16,8 @@ Audit of every upload in the application and what it fills (read on the server, 
 
 | Where | Upload | Fills |
 |---|---|---|
-| Enquiry, existing company: Details | Company CR | Company name (CR attached as *Corporate Documents - Company*) |
-| Enquiry, proposed company: Details | Name reservation / initial approval / application, if any (no CR exists before incorporation) | Proposed name, legal form (also updates the required attachments), country, business activity, registered office address; people named on it go to Ownership / Management; attached as *Proposed company documents (...)* |
+| Enquiry, existing company: global inbox | Company CR | Company name (CR attached as *Corporate Documents - Company*) |
+| Enquiry, proposed company: global inbox | Name reservation / initial approval / application, if any (no CR exists before incorporation) | Proposed name, legal form (also updates the required attachments), country, business activity, registered office address; people named on it go to Ownership / Management; attached as *Proposed company documents (...)* |
 | Enquiry: Ownership | Corporate shareholder CR; person passport / QID | Company name, CR number, incorporation date, country; person number, expiry, date of birth, name |
 | Enquiry: Management | Passport / QID | as above |
 | Enquiry: Contact | Key contact passport / QID (new) | Number, expiry, date of birth, name, ID types; attached as *Key Contact QID / Passport attachment* |

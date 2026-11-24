@@ -32,6 +32,7 @@ export type PeopleLayout = {
   positions: string[];
   // Enquiry rows keep nationality as "A, B" text; KYC rows as a list.
   nationalityAsText?: boolean;
+  preservePartialRows?: boolean;
   newShareholder: () => Row;
   newOfficer: () => Row;
   // Writes the officer's positions onto a row in the form's own shape.
@@ -49,7 +50,7 @@ export function addPeopleFromDocument(people: ReadPerson[], shareholders: Row[],
   const added: string[] = [];
   const updated: string[] = [];
   // Empty placeholder rows are replaced rather than left above the new rows.
-  const isEmpty = (row: Row) => blank(row.fullName) && !personKeys(row).length && blank(row.identityNumber);
+  const isEmpty = (row: Row) => blank(row.fullName) && !personKeys(row).length && blank(row.identityNumber) && (!layout.preservePartialRows || Object.entries(row).every(([key, value]) => ['id', 'shareholderType', 'isUbo', 'isAuthorizedSignatory'].includes(key) || value === false || value == null || blank(value)));
   let nextShareholders = shareholders.filter((row) => !isEmpty(row));
   let nextOfficers = officers.filter((row) => !isEmpty(row));
   const nationality = (person: ReadPerson) => {

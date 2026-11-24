@@ -6,7 +6,7 @@ import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { OwnershipStructureDiagram } from '../components/OwnershipStructureDiagram';
 import { DocumentPreviewFrame } from '../components/DocumentPreviewFrame';
 import { DocumentIntakePanel } from '../components/DocumentIntakePanel';
-import { appendReviewedPerson, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
+import { appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { uboCompanyName } from '../utils/ubo-display-name';
 import { Link, useParams, useSearchParams, useNavigate } from 'react-router-dom';
@@ -1236,23 +1236,24 @@ export function KycFormEditorPage() {
       if (application.kind === 'COMPANY') {
         const change = reviewedPatch(current.sectionA || {}, application.fields);
         if (!application.people.length) return { ...current, sectionA: { ...current.sectionA, ...change } };
-        const found = addPeopleFromDocument(application.people, current.sectionB.shareholders || [], current.sectionC.managers || [], kycPeopleLayout);
+        const found = addPeopleFromDocument(application.people, current.sectionB.shareholders || [], current.sectionC.managers || [], { ...kycPeopleLayout, preservePartialRows: true });
         return { ...current, sectionA: { ...current.sectionA, ...change }, sectionB: { ...current.sectionB, shareholders: found.shareholders.map(withDerivedIdentity) }, sectionC: { ...current.sectionC, managers: found.officers.map(withDerivedIdentity) } };
       }
       if (application.target.startsWith('new:')) {
         if (!newIntakePersonTargets.some(target => target.value === application.target)) throw new Error('Choose a person on this form.');
         const patch = reviewedPatch({}, application.fields);
+        const identityPatch = { ...patch, ...('nationality' in patch ? { nationality: [patch.nationality] } : {}) };
         if (application.target === 'new:shareholder' || application.target === 'new:ubo') {
-          const row = withDerivedIdentity({ ...createOwnershipRow(), ...patch, isUbo: application.target === 'new:ubo' });
+          const row = withDerivedIdentity({ ...createOwnershipRow(), ...identityPatch, isUbo: application.target === 'new:ubo' });
           const list = application.target === 'new:ubo' ? 'ubos' : 'shareholders';
           return { ...current, sectionB: { ...current.sectionB, [list]: appendReviewedPerson(current.sectionB[list] || [], row) } };
         }
-        const row = withDerivedIdentity({ id: crypto.randomUUID(), ...patch, position: [application.target === 'new:director' ? 'Director' : 'Manager'] });
+        const row = withDerivedIdentity({ id: crypto.randomUUID(), ...identityPatch, position: [application.target === 'new:director' ? 'Director' : 'Manager'] });
         return { ...current, sectionC: { ...current.sectionC, managers: appendReviewedPerson(current.sectionC.managers || [], row) } };
       }
       const target = kycPeople.read(current).find(person => person.slot === application.target);
-      if (!target || JSON.stringify(target.row) !== JSON.stringify(application.expectedPerson)) throw new Error('This person changed in the form. Reopen the review and choose the person again.');
-      return kycPeople.write(current, application.target, reviewedPatch(target.row, application.fields)) as KycFormData;
+      if (!target || JSON.stringify(target.row) !== JSON.stringify(application.expectedPerson)) throw new Error('This person changed while the document was processing. Try this file again.');
+      return applyAutomaticIdentity(current, kycPeople, application.target, application.fields) as KycFormData;
     };
     makeNext();
     const allowedTypes = application.kind === 'COMPANY' ? ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)] : [IDENTITY_COPIES_DOCUMENT];
@@ -1268,7 +1269,7 @@ export function KycFormEditorPage() {
       formRef.current = combined;
       return combined;
     });
-    setMessage('Reviewed details applied to the draft. Save Draft to keep the form changes.');
+    setMessage('Document details filled automatically. Save Draft to keep the form changes.');
   }
 
   // Reads the company's CR into Section A: empty fields are filled, typed values that differ are listed with the
@@ -1877,7 +1878,7 @@ export function KycFormEditorPage() {
       ) : null}
 
       <div hidden={activeReviewPackage !== 'kyc'}>
-        {canEditVisibleForm && (canEditAllSections || canPrepareKyc) && <DocumentIntakePanel key={id} company={form.sectionA} companyTargets={crTargets} attachmentTypes={{ COMPANY: ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)], IDENTITY: [IDENTITY_COPIES_DOCUMENT] }} targets={[...kycPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row })), ...newIntakePersonTargets]} disabled={saving || Boolean(generatingType)} read={(file, kind) => {
+        {canEditVisibleForm && (canEditAllSections || canPrepareKyc) && <DocumentIntakePanel key={id} company={form.sectionA} companyTargets={crTargets} attachmentTypes={{ COMPANY: ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)], IDENTITY: [IDENTITY_COPIES_DOCUMENT] }} targets={[...kycPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row, nationalityOptions: person.slot === 'contact' ? nationalityOptions : countryOptions })), ...newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions }))]} disabled={saving || Boolean(generatingType)} read={(file, kind) => {
           if (!id) throw new Error('Save the KYC case first.');
           return readIntakeDocument(file, kind, value => readKycCompanyDocument(id, value), (type, value) => readKycIdentityDocument(id, type, value));
         }} apply={applyIntake} />}

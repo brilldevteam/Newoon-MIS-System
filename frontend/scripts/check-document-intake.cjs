@@ -6,7 +6,7 @@ const path = require('node:path');
 const bundle = esbuild.buildSync({ entryPoints: ['frontend/src/utils/document-intake.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text;
 const filename = path.resolve('intake-check.cjs');
 const unit = new Module(filename); unit.filename = filename; unit._compile(bundle, filename);
-const { intakeFields, reviewedPatch, validateIntakeFile, suggestedDocumentKind, readIntakeDocument, validateReviewedPeople, appendReviewedPerson } = unit.exports;
+const { intakeFields, reviewedPatch, validateIntakeFile, suggestedDocumentKind, readIntakeDocument, validateReviewedPeople, appendReviewedPerson, automaticIntakeApplication, automaticIdentityTarget, applyAutomaticIdentity } = unit.exports;
 const company = { kind: 'COMPANY', data: { company: { legalName: 'Read Company', dateOfIncorporation: '2020-03-01', countryOfIncorporation: 'Qatar' }, people: [], method: 'LOCAL', message: 'Check source' } };
 const targets = [{ field: 'legalName', key: 'legalName', label: 'Legal name' }, { field: 'dateOfIncorporation', key: 'dateOfIncorporation', label: 'Incorporation date' }, { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'Country', options: ['Qatar', 'Oman'] }];
 async function main() {
@@ -52,6 +52,28 @@ async function main() {
   assert.deepEqual(appendReviewedPerson([typed], person), [typed, person], 'Do not discard partly filled rows');
   assert.throws(() => appendReviewedPerson([{ ...person, passportNumber: 'p 123' }], person), /already be listed/);
   assert.equal(person.isUbo, false, 'No implicit UBO assignment');
-  console.log('Document intake checks passed: conflict opt-in, stale review, dates/options, file limits, classification fallback, identity fields and role/percentage validation.');
+  const printed = { ...identity, identityType: 'QID', readFromText: true, documentNumberCheck: 'FAILED', documentNumber: '29000000001', nationality: 'NEPAL', qid: { number: '29000000001', expiry: '2027-02-14' }, passport: { number: 'SYN1234', expiry: '2036-01-12' } };
+  const emptyContact = [{ value: 'contact', label: 'Contact', row: {}, nationalityOptions: ['Nepal'] }];
+  const auto = automaticIntakeApplication({ kind: 'IDENTITY', data: printed }, { file: { name: 'copy.png' }, company: {}, companyTargets: [], targets: emptyContact });
+  assert.equal(auto.application.target, 'contact');
+  const patch = reviewedPatch({}, auto.application.fields);
+  assert.equal(patch.qidNumber, '29000000001');
+  assert.equal(patch.qidExpiry, '2027-02-14');
+  assert.equal(patch.passportNumber, 'SYN1234');
+  assert.equal(patch.passportExpiry, '2036-01-12');
+  assert.equal(patch.nationality, 'Nepal');
+  assert.equal(automaticIdentityTarget(printed, [{ value: 'contact', label: 'Other', row: { fullName: 'Another Person', passportNumber: 'DIFFERENT' } }]), '', 'Do not guess an unrelated person');
+  assert.equal(automaticIdentityTarget(printed, [{ value: 'shareholders:0', label: 'Owner', row: { fullName: 'Sample Person', qidNumber: '29000000001' } }]), 'shareholders:0', 'Match either identity number');
+  const companyAuto = automaticIntakeApplication(company, { file: { name: 'cr.pdf' }, company: current, companyTargets: targets, targets: [] });
+  assert.equal(reviewedPatch(current, companyAuto.application.fields).legalName, undefined, 'Do not overwrite existing company values');
+  const ambiguous = automaticIntakeApplication({ kind: 'IDENTITY', data: printed }, { file: { name: 'copy.png' }, company: {}, companyTargets: [], targets: [{ value: 'contact', label: 'Other', row: { fullName: 'Another Person' } }] });
+  assert.equal(ambiguous.application, null, 'Ambiguity needs assignment, not a review dialog');
+  const linked = [{ id: 'a', fullName: 'Sample Person', qidNumber: '29000000001', passportNumber: '' }, { id: 'b', fullName: 'Sample Person', qidNumber: '29000000001', passportNumber: 'MANUALLY-ENTERED' }];
+  const adapter = { read: rows => rows.map((row, index) => ({ slot: String(index), row, role: 'Person' })), write: (rows, slot, patch) => rows.map((row, index) => String(index) === slot ? { ...row, ...patch } : row) };
+  const linkedApplication = automaticIntakeApplication({ kind: 'IDENTITY', data: printed }, { file: { name: 'copy.png' }, company: {}, companyTargets: [], targets: adapter.read(linked).map(target => ({ ...target, value: target.slot, label: target.role })) });
+  const linkedAfter = applyAutomaticIdentity(linked, adapter, '0', linkedApplication.application.fields);
+  assert.equal(linkedAfter[0].passportNumber, 'SYN1234');
+  assert.equal(linkedAfter[1].passportNumber, 'MANUALLY-ENTERED', 'Keep conflicting values on linked roles too');
+  console.log('Document intake checks passed: automatic dual identities/expiries and nationality, safe person matching, existing-value protection, date/file limits and no implicit UBO assignment.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

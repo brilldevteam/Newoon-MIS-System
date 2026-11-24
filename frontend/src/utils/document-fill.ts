@@ -26,16 +26,22 @@ export function identityFill(row: IdentityRow, result: EnquiryIdentityReading, r
   if (!result.found) return { change: {}, outcome: { tone: 'warn', text: result.message } };
   const type = result.identityType || readType;
   const change: Partial<IdentityRow> = type === 'QID'
-    ? { qidNumber: result.documentNumber || row.qidNumber || '', qidExpiry: result.expiryDate || row.qidExpiry || '' }
-    : { passportNumber: result.documentNumber || row.passportNumber || '', passportExpiry: result.expiryDate || row.passportExpiry || '' };
+    ? { qidNumber: result.qid?.number || result.documentNumber || row.qidNumber || '', qidExpiry: result.qid?.expiry || result.expiryDate || row.qidExpiry || '' }
+    : { passportNumber: result.passport?.number || result.documentNumber || row.passportNumber || '', passportExpiry: result.passport?.expiry || result.expiryDate || row.passportExpiry || '' };
   if (result.dateOfBirth && blank(row.dateOfBirth)) change.dateOfBirth = result.dateOfBirth;
   const nameFilled = Boolean(result.nameOnDocument && blank(row.fullName));
   if (nameFilled) change.fullName = titleCase(result.nameOnDocument);
+  // A copy can contain both documents. Fill the secondary number/date even without the printed-text marker.
+  const sameNumber = (a: string | undefined, b: string) => String(a || '').replace(/[\s-]+/g, '').toUpperCase() === b.replace(/[\s-]+/g, '').toUpperCase();
+  if (type !== 'QID' && result.qid?.number) {
+    if (blank(row.qidNumber)) change.qidNumber = result.qid.number;
+    if (result.qid.expiry && blank(row.qidExpiry) && (blank(row.qidNumber) || sameNumber(row.qidNumber, result.qid.number))) change.qidExpiry = result.qid.expiry;
+  }
+  if (type !== 'PASSPORT' && result.passport?.number) {
+    if (blank(row.passportNumber)) change.passportNumber = result.passport.number;
+    if (result.passport.expiry && blank(row.passportExpiry) && (blank(row.passportNumber) || sameNumber(row.passportNumber, result.passport.number))) change.passportExpiry = result.passport.expiry;
+  }
   if (result.readFromText) {
-    // A card read from its printed labels (no machine-readable lines) may show both the QID and the passport; the
-    // other document's number fills only an empty field.
-    if (type !== 'QID' && result.qid && blank(row.qidNumber)) Object.assign(change, { qidNumber: result.qid.number, qidExpiry: result.qid.expiry || row.qidExpiry || '' });
-    if (type !== 'PASSPORT' && result.passport && blank(row.passportNumber)) Object.assign(change, { passportNumber: result.passport.number, passportExpiry: result.passport.expiry || row.passportExpiry || '' });
     const read = [
       result.qid ? `QID ${result.qid.number}${result.qid.expiry ? ` (expiry ${result.qid.expiry})` : ''}` : '',
       result.passport ? `passport ${result.passport.number}${result.passport.expiry ? ` (expiry ${result.passport.expiry})` : ''}` : '',

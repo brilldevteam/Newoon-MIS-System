@@ -1,4 +1,4 @@
-// Synthetic, offline browser checks for document review. Uses no real client records or API credentials.
+// Synthetic, offline browser checks for immediate document autofill. No real client records or API credentials.
 const assert = require('node:assert/strict');
 const fs = require('node:fs'); const path = require('node:path'); const os = require('node:os');
 const esbuild = require('esbuild'); const puppeteer = require('puppeteer-core');
@@ -13,11 +13,11 @@ async function main() {
       const [person,setPerson]=useState({fullName:'Sample Person',passportNumber:''});
       const state=useRef({company,person}); state.current={company,person};
       window.intakeState=()=>({company,person,maxActive,attempts});
-      return <main className='mx-auto max-w-5xl p-3'><DocumentIntakePanel company={company} companyTargets={[{field:'legalName',key:'legalName',label:'Legal name'},{field:'commercialRegistrationNo',key:'commercialRegistrationNo',label:'CR number'}]} targets={[{value:'contact',label:'Sample Person (Contact)',row:person}]} read={async(file,kind)=>{
+      return <main className='mx-auto max-w-5xl p-3'><DocumentIntakePanel company={company} companyTargets={[{field:'legalName',key:'legalName',label:'Legal name'},{field:'commercialRegistrationNo',key:'commercialRegistrationNo',label:'CR number'}]} targets={[{value:'contact',label:'Sample Person (Contact)',row:person,nationalityOptions:['Nepal']}]} read={async(file,kind)=>{
         active++; maxActive=Math.max(maxActive,active); attempts[file.name]=(attempts[file.name]||0)+1;
         try { await new Promise(resolve=>setTimeout(resolve,150));
           if(file.name.includes('retry')&&attempts[file.name]===1)throw new Error('Temporary read failure. Try again.');
-          if(kind==='PASSPORT')return {kind:'IDENTITY',data:{found:true,identityType:'PASSPORT',documentNumber:'SYN1234',nameOnDocument:'SAMPLE PERSON',dateOfBirth:null,expiryDate:null,documentNumberCheck:'OK',typeMatches:true,expiryValid:true,nationality:'',issuingCountry:''}};
+          if(kind==='PASSPORT')return {kind:'IDENTITY',data:{found:true,identityType:'QID',documentNumber:'29000000001',nameOnDocument:'SAMPLE PERSON',dateOfBirth:'1990-01-01',expiryDate:'2027-02-14',documentNumberCheck:'FAILED',readFromText:true,qid:{number:'29000000001',expiry:'2027-02-14'},passport:{number:'SYN1234',expiry:'2036-01-12'},typeMatches:false,expiryValid:true,nationality:'NEPAL',issuingCountry:''}};
           return {kind:'COMPANY',data:{company:{legalName:'Extracted Company',commercialRegistrationNo:'CR123'},people:[],method:'LOCAL',message:'Synthetic extraction. Verify the source.'}};
         }finally{active--;}
       }} apply={async(application)=>{if(application.kind==='COMPANY')setCompany({...state.current.company,...reviewedPatch(state.current.company,application.fields)});else setPerson({...state.current.person,...reviewedPatch(state.current.person,application.fields)});}}/></main>;
@@ -39,29 +39,23 @@ async function main() {
       await (await page.$('input[type=file]')).uploadFile(path.join(output, 'company.png'), path.join(output, 'passport.png'), path.join(output, 'retry.png'));
       await page.waitForFunction(() => document.getElementById('root').textContent.includes('Temporary read failure'));
       assert.equal(await page.evaluate(() => window.intakeState().maxActive), 1, 'Reads must be sequential');
-      assert.equal(await page.evaluate(() => window.intakeState().company.commercialRegistrationNo), '', 'No changes before confirmation');
-      await clickText(page, 'Review'); await page.waitForSelector('[role=dialog]');
-      assert.equal(await page.$eval('input[aria-label="Suggested Legal name"]', el => el.closest('div').querySelector('input[type=checkbox]').checked), false);
-      await page.screenshot({ path: path.join(output, `review-${width}.png`) });
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Review must fit viewport');
-      await page.evaluate(() => [...document.querySelectorAll('label')].find(el => el.textContent.includes('I checked')).querySelector('input').click());
-      await clickText(page, 'Apply selected details');
-      await page.waitForFunction(() => !document.querySelector('[role=dialog]'));
+      assert.equal(await page.$('[role=dialog]'), null, 'No review dialog');
+      assert.equal(await page.evaluate(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Review')), false, 'No review button');
       assert.equal(await page.evaluate(() => window.intakeState().company.legalName), 'Existing Company');
       assert.equal(await page.evaluate(() => window.intakeState().company.commercialRegistrationNo), 'CR123');
-      await clickText(page, 'Review'); await page.waitForSelector('[role=dialog]');
-      assert.equal(await page.$eval('[role=dialog] button.bg-brand-600', el => el.disabled), true, 'Identity target is required');
-      await page.select('[role=dialog] select', 'contact');
-      await page.evaluate(() => [...document.querySelectorAll('label')].find(el => el.textContent.includes('I checked')).querySelector('input').click());
-      await clickText(page, 'Apply selected details');
-      await page.waitForFunction(() => window.intakeState().person.passportNumber === 'SYN1234');
+      const person = await page.evaluate(() => window.intakeState().person);
+      assert.equal(person.passportNumber, 'SYN1234');
+      assert.equal(person.passportExpiry, '2036-01-12');
+      assert.equal(person.qidNumber, '29000000001');
+      assert.equal(person.qidExpiry, '2027-02-14');
+      assert.equal(person.nationality, 'Nepal');
       await page.click('button[title="Retry document"]');
-      await page.waitForFunction(() => window.intakeState().attempts['retry.png'] === 2 && document.getElementById('root').textContent.includes('Needs review'));
+      await page.waitForFunction(() => window.intakeState().attempts['retry.png'] === 2 && document.getElementById('root').textContent.includes('3 / 3 processed'));
       await page.screenshot({ path: path.join(output, `inbox-${width}.png`), fullPage: true });
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Inbox must fit viewport');
       assert.deepEqual(errors, []); await page.close();
     }
-    console.log(`Document inbox browser checks passed at 1440, 768, 390 and 320px: staged values, conflict protection, explicit identity target, sequential reading and individual retry. Screenshots: ${output}`);
+    console.log(`Automatic inbox checks passed at 1440, 768, 390 and 320px: no review, protected existing values, both identity numbers/expiries, nationality, sequential reading and individual retry. Screenshots: ${output}`);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
