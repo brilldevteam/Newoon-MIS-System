@@ -30,19 +30,20 @@ async function main() {
       if(config.url==='/kyc')data=[{id:'case-1',kycNumber:'KYC-SAMPLE-1',title:'Sample KYC',status:'KYC_FINAL_APPROVED',purpose:'ONBOARDING',createdAt:date(0)},{id:'case-2',kycNumber:'KYC-SAMPLE-2',title:'Active KYC',status:'CLIENT_ACTIVE',purpose:'REKYC',createdAt:date(1)}];
       if(config.url==='/compliance/clients')data={access:{level:location.search.includes('allocated')?'ALLOCATED':'FULL'},items:[{id:'client-1',clientCode:'CL-SAMPLE-1',name:'Sample Compliance Client',status:'ACTIVE'}],stats:{total:25,active:20,inactive:3,onHold:2,highRisk:4,reviewOverdue:2,reviewDueSoon:1,expiringDocuments:3}};
       if(location.search.includes('empty')&&config.url==='/enquiries')data=[];
+      if(location.search.includes('long')&&config.url==='/enquiries')data[0].companyName='ExtendedCorporateNameWithoutBreaksForResponsiveVerification '.repeat(3);
       return {data,status:200,statusText:'OK',headers:{},config};
     };
     localStorage.setItem('newoon_token','synthetic-only');
     window.rules={availableWorkspaceModules,navigationInWorkspace,workspaceForPath,defaultRouteForUser,monthlyDashboardPoints,user};
     function Destination(){const {pathname}=useLocation();return <h1 data-destination>{pathname}</h1>}
     createRoot(document.getElementById('root')).render(<MemoryRouter initialEntries={['/workspace']}><Routes><Route element={<AppLayout/>}><Route path='/workspace' element={<WorkspaceHomePage/>}/><Route path='/enquiries/dashboard' element={<ModuleDashboardPage module='enquiry'/>}/><Route path='/kyc-workflow/dashboard' element={<ModuleDashboardPage module='kyc'/>}/><Route path='/compliance/dashboard' element={<ModuleDashboardPage module='compliance'/>}/><Route path='*' element={<Destination/>}/></Route></Routes></MemoryRouter>);
-  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', define: { 'import.meta.env.VITE_API_URL': JSON.stringify('/api') }, logLevel: 'error' });
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic', loader: { '.css': 'empty' }, define: { 'import.meta.env.VITE_API_URL': JSON.stringify('/api') }, logLevel: 'error' });
   const css = fs.readdirSync('frontend/dist/assets').find(name => name.endsWith('.css'));
   const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${fs.readFileSync(path.join('frontend/dist/assets',css),'utf8')}</style></head><body><div id="root"></div><script>${bundle.outputFiles[0].text}</script></body></html>`;
   const output = path.join(os.tmpdir(),'newoon-workspace-modules'); fs.mkdirSync(output,{recursive:true});
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless:true,args:['--no-sandbox'] });
   try {
-    for(const width of [1440,768,390,320]) {
+    for(const width of [1920,1440,1024,768,390,320]) {
       const page=await browser.newPage(); const errors=[]; page.on('pageerror',error=>errors.push(error.message));
       await page.setViewport({width,height:960}); await page.setRequestInterception(true);
       page.on('request',request=>{
@@ -72,15 +73,19 @@ async function main() {
         if(destination.startsWith('/compliance')) {assert.equal(metrics['Compliance clients'],'25','Must use authoritative stats, not current page length');assert.equal(metrics['High risk'],'4');assert.deepEqual(calls,['/compliance/clients']);}
         assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Dashboard must fit the viewport');
         assert.ok(await page.$('aside a[href="'+destination+'"]'),'Sidebar Dashboard must link to this module');
-        assert.ok(await page.$('[data-chart="bars"]'),'Show a real module bar chart');
+        assert.ok(await page.$(destination.startsWith('/compliance') ? '[data-chart="bars"]' : '[data-chart="area"]'),'Use a category bar chart for compliance and a time-series area chart for Enquiry/KYC');
         const mixTotal=await page.$$eval('[data-chart="donut"] circle[data-chart-value]',nodes=>nodes.reduce((sum,node)=>sum+Number(node.getAttribute('data-chart-value')),0));
         assert.equal(mixTotal,Number(Object.values(metrics)[0]),'Exclusive donut categories must equal the authoritative module total');
         assert.ok(await page.$$eval('[data-chart-value]',nodes=>nodes.every(node=>Number.isFinite(Number(node.getAttribute('data-chart-value'))))),'Every plotted value must be a real finite count');
         if(!destination.startsWith('/compliance')) {
           await page.evaluate(()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='12M').click());
-          await page.waitForFunction(()=>document.querySelectorAll('[data-chart="bars"] [data-chart-value]').length===12);
+          await page.waitForFunction(()=>document.querySelectorAll('[data-chart="area"] [data-chart-value]').length===12);
           await page.evaluate(()=>[...document.querySelectorAll('button')].find(button=>button.textContent==='6M').click());
-          await page.waitForFunction(()=>document.querySelectorAll('[data-chart="bars"] [data-chart-value]').length===6);
+          await page.waitForFunction(()=>document.querySelectorAll('[data-chart="area"] [data-chart-value]').length===6);
+          await page.$eval('[data-chart="area"] [data-chart-value]',element=>element.focus());
+          await page.waitForSelector('.dashboard-chart-tooltip');
+          assert.ok(await page.$eval('.dashboard-chart-tooltip',element=>element.textContent.includes('records')),'Data-point tooltip must work with keyboard focus');
+          await page.$eval('[data-chart="area"] [data-chart-value]',element=>element.blur());
         }
         const requestCount=await page.evaluate(()=>window.apiCalls.length);
         await page.click('button[aria-label="Refresh dashboard"]');
@@ -101,6 +106,9 @@ async function main() {
           if(destination==='/kyc-workflow/dashboard') { assert.ok(hrefs.includes('/screening')); assert.ok(!hrefs.includes('/enquiries')); }
           if(destination==='/compliance/dashboard') { assert.ok(hrefs.includes('/compliance/clients')); assert.ok(!hrefs.includes('/crrf')); }
         }
+        await page.evaluate(()=>window.scrollTo(0,0));
+        await page.waitForFunction(()=>scrollY===0);
+        assert.ok(await page.$eval('.dashboard-heading h1',element=>element.getBoundingClientRect().top>=64),'Heading must remain below the app bar');
         await page.screenshot({path:path.join(output,`${destination.split('/')[1]}-${width}.png`),fullPage:true});
         await page.click('header a[aria-label="All workspaces"]');
         await page.waitForSelector('main a[href="/enquiries/dashboard"]');
@@ -108,10 +116,16 @@ async function main() {
       }
       assert.deepEqual(errors,[]); await page.close();
     }
-    for(const scenario of ['restricted','none','failure','allocated','empty']) {
+    for(const scenario of ['restricted','none','failure','allocated','empty','long']) {
       const page=await browser.newPage(); await page.setRequestInterception(true); page.on('request',request=>request.respond({contentType:'text/html',body:html}));
       await page.goto('https://workspace.test?'+scenario);
-      if(scenario==='restricted') {
+      if(scenario==='long') {
+        await page.setViewport({width:320,height:960});
+        await page.waitForSelector('main a[href="/enquiries/dashboard"]');await page.click('main a[href="/enquiries/dashboard"]');await page.waitForSelector('[data-metric]');
+        assert.ok(await page.$$eval('.dashboard-record-name,.dashboard-record-reference,.dashboard-metric-heading p',nodes=>nodes.every(node=>node.scrollWidth<=node.clientWidth+1)),'Long record names and metric labels must wrap inside their own columns');
+        assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+        await page.screenshot({path:path.join(output,'long-name-320.png'),fullPage:true});
+      } else if(scenario==='restricted') {
         await page.waitForSelector('main a[href="/kyc-workflow/dashboard"]'); assert.equal(await page.$$eval('main a',links=>links.length),1);
         await page.click('main a[href="/kyc-workflow/dashboard"]'); await page.waitForSelector('main a[href="/crrf"]');
         assert.equal(await page.$('[data-metric]'),null);
@@ -131,7 +145,7 @@ async function main() {
       } else await page.waitForFunction(()=>document.body.textContent.includes('No module access has been assigned'));
       await page.close();
     }
-    console.log('Workspace dashboard checks passed: three module dashboards, isolated data sources and counts, authoritative compliance stats, contextual menus, restricted/allocated access, errors without fake zeros and 1440/768/390/320px. Screenshots: '+output);
+    console.log('Workspace dashboard checks passed: three module dashboards, isolated data sources and counts, authoritative compliance stats, area/bar/portfolio charts, period controls, keyboard tooltips, contextual menus, restricted/allocated access, errors without fake zeros and 1920/1440/1024/768/390/320px. Screenshots: '+output);
   } finally {await browser.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

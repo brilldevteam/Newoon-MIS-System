@@ -17,6 +17,12 @@ The sidebar Dashboard link follows the active module. Existing register/detail/n
 - Loading/failure states never substitute fake zero counts. Summary percentages are shares of the current total, not comparisons with previous periods.
 - This is a frontend-only release: no dependency, schema, migration, environment, API authorization, workflow or KYC export/preview changes. The separate client-search work is excluded.
 
+## Refined Dashboard Styling
+
+The subsequent styling update uses dashboard-scoped CSS: soft white surfaces, restrained shadows, tinted metric tiles, a compact record grid and status badges. It does not change the global application shell or any form/export styles. Enquiry/KYC use a responsive area chart with exact monthly points and pointer/keyboard tooltips; compliance retains categorical bars so attention counts are not presented as a fake time trend. Portfolio rings and count calculations retain their existing sources. No percentages are described as growth rates.
+
+The area chart measures its container with ResizeObserver and retains readable fixed-size axis labels. Twelve-month views scroll inside the chart on narrow screens. Mobile summary metrics remain two columns and record rows reflow vertically. There is no new chart dependency or backend request. Existing client-search behavior is unaffected by this styling change.
+
 ## Verification
 
 Run from the repository root:

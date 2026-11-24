@@ -1,7 +1,7 @@
 import { useId } from 'react';
 
 export type DashboardPoint = { label: string; value: number };
-export const dashboardColors = ['#c73543', '#159b88', '#4f85ce', '#e4ac3d', '#8b6fba', '#7a8a9e'];
+export const dashboardColors = ['#6789be', '#57a69a', '#d6b369', '#b57887', '#8d92b6', '#8c9aab'];
 
 export function monthlyDashboardPoints(dates: string[], months: number, now = new Date()): DashboardPoint[] {
   return Array.from({ length: months }, (_, index) => {
