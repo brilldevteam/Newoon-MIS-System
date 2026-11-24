@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { AiCredentials, AiSettingsService } from '../ai-settings/ai-settings.service';
 import { legalDocumentType } from './legal-document-catalogue';
-import { DocumentSuggestion, parseDate, parseDocumentText, SUGGESTED_ROLES } from './document-text-parser';
+import { DocumentSuggestion, parseDate, parseDocumentText, SUGGESTED_ROLES, TextLine } from './document-text-parser';
 import { IdDocumentReaderService } from './id-document-reader.service';
 
 // Reads the details of an uploaded company or individual document to pre-fill the legal documents register
@@ -89,9 +89,9 @@ export class DocumentReaderService implements OnApplicationShutdown {
     const empty = parseDocumentText(typeKey, '');
     if (!kind) return { ...empty, method: 'NONE', aiConfigured: false, message: 'Only PDF files and images can be read. Enter the details from the document.' };
     try {
-      const text = await this.withTimeout(this.extractText(file, kind), LOCAL_TIMEOUT_MS);
+      const { text, layout } = await this.withTimeout(this.extractText(file, kind), LOCAL_TIMEOUT_MS);
       if (!text.trim()) return { ...empty, method: 'NONE', aiConfigured: false, message: 'No text could be read from this file. Enter the details from the document.' };
-      const read = parseDocumentText(typeKey, text);
+      const read = parseDocumentText(typeKey, text, layout);
       const found = Object.values(read.document).filter(Boolean).length + Object.keys(read.company).length;
       return {
         ...read, method: found ? 'LOCAL' : 'NONE', aiConfigured: false,
@@ -105,22 +105,24 @@ export class DocumentReaderService implements OnApplicationShutdown {
     }
   }
 
-  // PDF text layer first; scanned pages and images go through OCR.
-  private async extractText(file: UploadedFile, kind: 'pdf' | 'image') {
+  // PDF text layer first (with the position of every piece, for two-column forms and tables); scanned pages and
+  // images go through OCR, which gives plain text only.
+  private async extractText(file: UploadedFile, kind: 'pdf' | 'image'): Promise<{ text: string; layout?: TextLine[] }> {
     if (kind === 'pdf') {
-      const text = await this.pdfText(file.buffer);
-      if (text.replace(/\s+/g, '').length >= 40) return text;
+      const layout = await this.pdfLayout(file.buffer);
+      const text = layout.map((line) => line.map((cell) => cell.text).join(' ')).join('\n');
+      if (text.replace(/\s+/g, '').length >= 40) return { text, layout };
       const pages = await this.idReader.pdfPages(file.buffer, MAX_TEXT_PAGES);
-      return (await Promise.all(pages.map((page) => this.ocr(page)))).join('\n');
+      return { text: (await Promise.all(pages.map((page) => this.ocr(page)))).join('\n') };
     }
-    return this.ocr(file.buffer);
+    return { text: await this.ocr(file.buffer) };
   }
 
-  private async pdfText(buffer: Buffer) {
+  private async pdfLayout(buffer: Buffer): Promise<TextLine[]> {
     const pdfjs = await importModule('pdfjs-dist/legacy/build/pdf.mjs');
     const task = pdfjs.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false, disableFontFace: true, useSystemFonts: false });
     const document = await task.promise;
-    const lines: string[] = [];
+    const lines: TextLine[] = [];
     try {
       for (let number = 1; number <= Math.min(document.numPages, MAX_TEXT_PAGES); number += 1) {
         const page = await document.getPage(number);
@@ -133,13 +135,13 @@ export class DocumentReaderService implements OnApplicationShutdown {
           const key = [...rows.keys()].find((existing) => Math.abs(existing - y) <= 2) ?? y;
           rows.set(key, [...(rows.get(key) || []), { x: item.transform[4], text: item.str }]);
         }
-        [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, items]) => lines.push(items.sort((a, b) => a.x - b.x).map((item) => item.text).join(' ')));
+        [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, items]) => lines.push(items.sort((a, b) => a.x - b.x).map((item) => ({ x: Math.round(item.x), text: item.text }))));
         page.cleanup();
       }
     } finally {
       await task.destroy();
     }
-    return lines.join('\n');
+    return lines;
   }
 
   private ocr(image: Buffer) {

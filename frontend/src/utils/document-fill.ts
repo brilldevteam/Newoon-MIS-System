@@ -60,7 +60,11 @@ const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, 
 export function matchOption(value: string, options: string[]) {
   const wanted = normalize(value);
   if (!wanted) return '';
-  const words = (text: string) => normalize(text).split(' ').filter(Boolean);
+  // "A Limited Liability Company incorporated in the QFC" also counts as "LLC".
+  const words = (text: string) => {
+    const list = normalize(text).split(' ').filter(Boolean);
+    return list.includes('limited') && list.includes('liability') && !list.includes('llc') ? [...list, 'llc'] : list;
+  };
   const contains = (outer: string[], inner: string[]) => inner.length > 0 && inner.every((word) => outer.includes(word));
   const candidates = options.filter((option) => option && option !== 'Other');
   const exact = candidates.find((option) => normalize(option) === wanted);

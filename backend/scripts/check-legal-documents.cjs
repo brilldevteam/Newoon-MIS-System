@@ -62,6 +62,81 @@ function checkParser() {
   assert.equal(empty.document.documentNumber, null);
 }
 
+// A QFC Commercial Registration Extract as the PDF text layer gives it (synthetic names and numbers): two label /
+// value columns side by side, values wrapped onto the next lines, people in tables, page footers in between.
+function checkQfcLayout() {
+  const row = (...cells) => cells.map(([x, text]) => ({ x, text }));
+  const layout = [
+    row([42, 'Companies']), row([425, 'مكتب']), row([42, 'Registration Office']), row([210, 'Commercial Registration Extract']),
+    row([42, 'QFCA/15/0000/202'], [294, 'Print Date'], [351, ':'], [433, '1 February 2026']),
+    row([294, 'Reference Number:'], [433, 'ABCD-EFGH-IJKL']),
+    row([42, 'QFC Number:'], [168, '09999'], [294, 'Tax Registration'], [433, 'T09999']),
+    row([294, 'Number:']),
+    row([42, 'Name of Entity:'], [168, 'Synthetic Software and'], [294, 'Stamp of Entity:'], [433, '-']),
+    row([168, 'Information']), row([168, 'Technology Co LLC']),
+    row([373, '1']),
+    row([42, 'Date of'], [168, '1 May 2025'], [294, 'Date of Expiry'], [378, ':'], [433, '31 December 2026']),
+    row([42, 'Registration:']),
+    row([42, 'Legal Structure:'], [168, 'A Limited Liability'], [294, 'Capital'], [337, ':'], [433, 'QR 1']),
+    row([168, 'Company incorporated']), row([168, 'in the QFC']),
+    row([42, 'Registration Status:'], [168, 'Active'], [294, 'Number of Branches:'], [433, '-']),
+    row([42, 'Corporate'], [168, '-'], [294, 'Corporate Nationality:'], [433, 'Qatar']),
+    row([42, 'Ownership:']),
+    row([243, 'Contact Information']),
+    row([42, 'Registered Office Address'], [323, 'Contact Number']),
+    row([42, 'Office No. 1, QFC Tower 1, Doha'], [272, '–'], [282, 'Qatar'], [323, '-']),
+    row([36, 'Page 1 of 5'], [403, 'رقم']),
+    row([36, 'QFC Number: 09999'], [345, 'This extract is a digitally-signed official document']),
+    row([259, 'Shareholder(s)']),
+    row([85, 'Name'], [190, 'Document'], [292, 'Registration'], [393, 'Nationality'], [489, 'Percentage']),
+    row([196, 'Number'], [304, 'Number']),
+    row([42, 'Ali Hassan'], [196, 'X1234567'], [324, '-'], [407, 'Jordan'], [506, '100%']),
+    row([42, 'Saleh']),
+    row([272, 'Director(s)']),
+    row([100, 'Name'], [211, 'Document'], [295, 'Registration'], [382, 'Nationality'], [486, 'Authority']),
+    row([217, 'Number'], [307, 'Number']),
+    row([42, 'Omar Khalid'], [204, '28000000001'], [327, '-'], [395, 'Egypt'], [475, 'Full Power and']),
+    row([42, 'Nasser'], [489, 'Authority']),
+    row([42, 'Ali Hassan Saleh'], [216, 'X1234567'], [327, '-'], [395, 'Jordan'], [475, 'Full Power and']),
+    row([489, 'Authority']),
+    row([167, 'Authorised Signatories (Establishment Card)']),
+    row([151, 'Name'], [384, 'Document Number']),
+    row([42, 'Omar Khalid Nasser'], [402, '28000000001']),
+    row([275, 'Activities']), row([41, 'Number'], [135, 'Activity']),
+    row([136, 'Computer Programming Activities']),
+    row([36, 'Page 2 of 5']),
+    row([56, '6201-001'], [136, 'Designing the structure and content of software']),
+    row([136, 'and portals.']),
+    row([136, 'IT Consultancy']),
+    row([56, '6202-002'], [136, 'IT consultancy in relation to machine learning.']),
+    row([154, 'Conditions and Restrictions']),
+    row([136, '(A) manpower supply and outsourcing']),
+  ];
+  const raw = layout.map((line) => line.map((cell) => cell.text).join(' ')).join('\n');
+  const before = parser.parseDocumentText('CR_EXTRACT_EN', raw);
+  assert.equal(before.company.legalName, 'Synthetic Software and Stamp of Entity: -', 'Without positions the name runs into the next column (the reported issue)');
+
+  const read = parser.parseDocumentText('CR_EXTRACT_EN', raw, layout);
+  assert.equal(read.company.legalName, 'Synthetic Software and Information Technology Co LLC', 'Name from its own column, wrapped lines joined');
+  assert.equal(read.document.holderName, read.company.legalName);
+  assert.equal(read.company.commercialRegistrationNo, '09999', 'The QFC number, not the tax registration number');
+  assert.equal(read.document.documentNumber, '09999');
+  assert.equal(read.company.taxIdentificationNo, 'T09999', 'Tax number from its wrapped label');
+  assert.equal(read.company.dateOfIncorporation, '2025-05-01', 'Date of Registration with its label on two lines');
+  assert.equal(read.company.crExpiryDate, '2026-12-31');
+  assert.equal(read.company.legalForm, 'A Limited Liability Company incorporated in the QFC');
+  assert.equal(read.company.shareCapital, 'QR 1');
+  assert.equal(read.company.registeredOfficeAddress, 'Office No. 1, QFC Tower 1, Doha – Qatar', 'Address under its column header');
+  assert.equal(read.company.countryOfIncorporation, 'Qatar');
+  assert.equal(read.company.licenseActivities, 'Computer Programming Activities (6201-001); IT Consultancy (6202-002)', 'Activity names with their codes, across the page break');
+  assert.deepEqual(read.people, [
+    { fullName: 'Ali Hassan Saleh', nationality: 'Jordan', roles: ['SHAREHOLDER', 'DIRECTOR'], sharePercentage: '100', idNumber: 'X1234567' },
+    { fullName: 'Omar Khalid Nasser', nationality: 'Egypt', roles: ['DIRECTOR', 'AUTHORISED_SIGNATORY'], sharePercentage: null, idNumber: '28000000001' }
+  ], 'People from the tables, one entry per person with all roles');
+  assert.deepEqual(parser.parseDocumentText('TAX_CARD', raw, layout).people, [], 'People are read from company documents only');
+  assert.equal(parser.parseDocumentText('CR_EXTRACT_EN', 'Tax Registration Number: T1\nRegistration Number: 55').company.commercialRegistrationNo, '55', 'A tax registration number is never the CR number');
+}
+
 function checkAiResult() {
   const result = normalizeAiResult({
     document: { documentNumber: ' 04669 ', holderName: 'Arabic Game Partners LLC', location: 'Qatar', issueDate: 'not a date', expiryDate: '2026-12-31' },
@@ -161,7 +236,7 @@ async function checkReader() {
     let sent = false;
     global.fetch = async () => { sent = true; throw new Error('should not be called'); };
     const local = new DocumentReaderService({ credentialsFor: async () => null }, {});
-    local.extractText = async () => 'Commercial Registration No: 04669\nExpiry Date: 31/12/2026';
+    local.extractText = async () => ({ text: 'Commercial Registration No: 04669\nExpiry Date: 31/12/2026' });
     const localRead = await local.read('tenant-a', 'CR_EXTRACT_EN', pdf);
     assert.equal(sent, false, 'No document leaves the server without an AI key');
     assert.equal(localRead.method, 'LOCAL');
@@ -336,6 +411,7 @@ async function checkExpiryExport() {
 
 async function main() {
   checkParser();
+  checkQfcLayout();
   checkAiResult();
   await checkSecretsAndSettings();
   await checkReader();
