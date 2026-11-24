@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { dirname, join, sep } from 'path';
 import { MrzResult, parseMrz } from '../common/mrz';
+import { IdCardText, parseIdCardText } from '../common/id-card-text';
 
 // Reads the machine-readable zone of a passport or ID card (for example the back of the Qatar ID) from an uploaded
 // image or PDF, locally: OCR with tesseract.js and the bundled English data (@tesseract.js-data/eng), PDF pages
@@ -20,10 +21,51 @@ const importModule = new Function('specifier', 'return import(specifier)') as (s
 export class IdDocumentReaderService implements OnApplicationShutdown {
   private readonly logger = new Logger(IdDocumentReaderService.name);
   private worker: Promise<Worker> | null = null;
+  // A second worker reads all printed text (no character limit), for cards without the machine-readable lines.
+  private textWorker: Promise<Worker> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
   async onApplicationShutdown() {
     if (this.worker) await (await this.worker).terminate().catch(() => undefined);
+    if (this.textWorker) await (await this.textWorker).terminate().catch(() => undefined);
+  }
+
+  // Reads the printed labels of an ID card (older Qatar residency permit: "ID.No", "D.O.B", "Expiry", "Name",
+  // "Passport Number", "Passport Expiry"). Used when no machine-readable lines were found. Queued like `read`.
+  readPrintedCard(file: { buffer: Buffer; mimetype?: string; originalname?: string }): Promise<IdCardText | null> {
+    const job = this.queue.then(() => this.withTimeout(this.readPrintedNow(file)));
+    this.queue = job.catch(() => undefined);
+    return job;
+  }
+
+  private async readPrintedNow(file: { buffer: Buffer; mimetype?: string; originalname?: string }) {
+    const isPdf = file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname || '') || file.buffer.subarray(0, 5).toString() === '%PDF-';
+    const pages = isPdf ? await this.pdfPages(file.buffer) : [file.buffer];
+    const worker = await this.getTextWorker();
+    let best: IdCardText | null = null;
+    for (const page of pages) {
+      const images = await this.variants(page);
+      const { data } = await worker.recognize(images[images.length - 1]);
+      const card = parseIdCardText(data.text);
+      // Two pages (front and back of a card) can each hold part of the details.
+      if (card) best = best ? mergeCards(best, card) : card;
+    }
+    return best;
+  }
+
+  private getTextWorker() {
+    if (!this.textWorker) {
+      this.textWorker = (async () => {
+        const { createWorker, OEM } = await import('tesseract.js');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const language = require('@tesseract.js-data/eng') as { langPath: string; gzip: boolean };
+        return (await createWorker('eng', OEM.LSTM_ONLY, { langPath: language.langPath, gzip: language.gzip, cacheMethod: 'none' })) as unknown as Worker;
+      })().catch((error) => {
+        this.textWorker = null;
+        throw error;
+      });
+    }
+    return this.textWorker;
   }
 
   // Returns the best MRZ found in the file, or null. Reads are queued so only one OCR job runs at a time.
@@ -135,6 +177,12 @@ export class IdDocumentReaderService implements OnApplicationShutdown {
       promise.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
     });
   }
+}
+
+function mergeCards(a: IdCardText, b: IdCardText): IdCardText {
+  const out = { ...a };
+  for (const key of Object.keys(b) as Array<keyof IdCardText>) if (!out[key] && b[key]) out[key] = b[key];
+  return out;
 }
 
 function rank(result: MrzResult) {

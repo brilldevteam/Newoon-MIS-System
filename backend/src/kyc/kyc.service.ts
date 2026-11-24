@@ -127,7 +127,10 @@ export class KycService {
       // Reading is a convenience: a file that cannot be read falls back to manual entry.
       read = null;
     }
-    return identityReading(read, kind);
+    // A card without machine-readable lines (older residency permit) is read from its printed labels.
+    let card = null;
+    if (this.idReader && (!read || (!read.documentNumber && !read.expiryDate))) card = await this.idReader.readPrintedCard(files[0]).catch(() => null);
+    return identityReading(read, kind, card);
   }
 
   async findAll(user: RequestUser) {

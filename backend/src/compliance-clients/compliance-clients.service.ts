@@ -712,6 +712,25 @@ export class ComplianceClientsService {
     validateUploadFiles(files, standardDocumentKinds, 'document');
     const read = await this.readSafely(files[0]);
     if (!read || (!read.documentNumber && !read.expiryDate)) {
+      // A card without machine-readable lines (older residency permit) is read from its printed labels; without
+      // check digits the values are always shown as values to check.
+      const card = this.reader ? await this.reader.readPrintedCard(files[0]).catch(() => null) : null;
+      const number = identityType === 'PASSPORT' ? card?.passportNumber : card?.qidNumber;
+      if (card && number) {
+        return {
+          found: true,
+          format: 'TEXT',
+          documentType: identityType === 'PASSPORT' ? 'P' : 'ID',
+          issuingCountry: '',
+          documentNumber: number,
+          documentNumberCheck: 'FAILED',
+          expiryDate: identityType === 'PASSPORT' ? card.passportExpiry : card.qidExpiry,
+          expiryValid: false,
+          nameOnDocument: card.fullName || '',
+          nationality: card.nationality || '',
+          typeMatches: true
+        };
+      }
       return { found: false, message: 'The number and expiry date could not be read from this file. Enter them from the document.' };
     }
     return {

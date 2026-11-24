@@ -1070,6 +1070,11 @@ export type EnquiryIdentityReading =
       nameOnDocument: string;
       nationality: string;
       issuingCountry: string;
+      // Read from the printed labels of a card without machine-readable lines: no check digits, compare everything.
+      readFromText?: boolean;
+      // Both, when the card shows both (older Qatar residency permit).
+      qid?: { number: string; expiry: string | null };
+      passport?: { number: string; expiry: string | null };
     };
 
 export function readEnquiryIdentityDocument(identityType: 'PASSPORT' | 'QID', file: File) {

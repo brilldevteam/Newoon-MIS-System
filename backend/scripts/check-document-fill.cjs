@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { identityReading } = require('../dist/common/identity-reading');
+const { parseIdCardText } = require('../dist/common/id-card-text');
 const { KycService } = require('../dist/kyc/kyc.service');
 const { EnquiriesService } = require('../dist/enquiries/enquiries.service');
 
@@ -16,6 +17,22 @@ const otherCompany = { ...aml, id: 'aml-2', tenantId: 'tenant-b' };
 
 const passport = { format: 'TD3', documentType: 'P', issuingCountry: 'QAT', documentNumber: 'P1234567', documentNumberCheck: 'OK', expiryDate: '2031-05-20', expiryValid: true, dateOfBirth: '1985-02-01', surname: 'SALEH', givenNames: 'SAMER', nationality: 'JOR' };
 const qid = { ...passport, format: 'TD1', documentType: 'ID', documentNumber: '28240002378', expiryDate: '2028-07-26' };
+
+// OCR text of an older Qatar residency permit (synthetic values), with the noise OCR adds from the Arabic labels.
+function checkPrintedCard() {
+  const text = [
+    'State Of Qatar had al ga', 'Residency Permit : dad) dal',
+    'ID-No: 28400000001 gad pl', 'D.0.B: 21/10/1990 Sal) jo', 'Expiry: 14/02/2027 Aaiall » “= :',
+    'Nationality: NEPAL ff', 'Occupation: a La ayy', 'Name: SAMPLE PERSON',
+    'Passport Number: PX1234567 ja', 'Passport Expiry: 12/01/2036 :', 'Serial No: 30628400000001'
+  ].join('\n');
+  assert.deepEqual(parseIdCardText(text), {
+    qidNumber: '28400000001', qidExpiry: '2027-02-14', passportNumber: 'PX1234567', passportExpiry: '2036-01-12',
+    dateOfBirth: '1990-10-21', fullName: 'SAMPLE PERSON', nationality: 'NEPAL'
+  }, 'Labels read; the passport expiry is not the card expiry; the longer serial number is not the QID');
+  assert.equal(parseIdCardText('ID No: 2840O0OOO01').qidNumber, '28400000001', 'Look-alike letters in the number');
+  assert.equal(parseIdCardText('Some text without an ID'), null);
+}
 
 function checkIdentityReading() {
   assert.deepEqual(identityReading(null, 'PASSPORT'), { found: false, message: 'The details could not be read from this file. Enter them from the document.' });
@@ -39,7 +56,10 @@ function kycService(status, readers) {
     kycForm: { findFirst: async () => null }
   };
   const documentReader = { read: async (tenantId, typeKey, file) => { calls.company.push({ tenantId, typeKey, name: file.originalname }); return { method: 'LOCAL', message: 'read', aiConfigured: false, document: {}, company: { legalName: 'Synthetic LLC' }, people: [] }; } };
-  const idReader = { read: async () => { calls.identity += 1; if (readers?.idFails) throw new Error('OCR failed'); return passport; } };
+  const idReader = {
+    read: async () => { calls.identity += 1; if (readers?.idFails) throw new Error('OCR failed'); return readers?.noMrz ? null : passport; },
+    readPrintedCard: async () => { calls.printed = (calls.printed || 0) + 1; return readers?.card || null; }
+  };
   return { service: new KycService(prisma, {}, documentReader, idReader), calls };
 }
 
@@ -80,6 +100,25 @@ async function checkKycRead() {
   const unread = await failing.service.readFormDocument(aml, 'case-1', 'QID', [png()]);
   assert.equal(unread.found, false, 'A reader failure falls back to manual entry');
 
+  // An older residency permit has no machine-readable lines: its printed labels are read instead, both documents.
+  const card = { qidNumber: '28400000001', qidExpiry: '2027-02-14', passportNumber: 'PX1234567', passportExpiry: '2036-01-12', dateOfBirth: '1990-10-21', fullName: 'SAMPLE PERSON', nationality: 'NEPAL' };
+  const printed = kycService('LEGAL_DOCUMENTS_PENDING', { noMrz: true, card });
+  const fromCard = await printed.service.readFormDocument(aml, 'case-1', 'QID', [png()]);
+  assert.equal(fromCard.found, true);
+  assert.equal(fromCard.readFromText, true, 'Flagged as read from printed text (no check digits)');
+  assert.equal(fromCard.documentNumber, '28400000001');
+  assert.equal(fromCard.expiryDate, '2027-02-14');
+  assert.equal(fromCard.documentNumberCheck, 'FAILED', 'Never presented as confirmed');
+  assert.deepEqual(fromCard.passport, { number: 'PX1234567', expiry: '2036-01-12' }, 'The passport on the same card comes too');
+  const asPassport = await printed.service.readFormDocument(aml, 'case-1', 'PASSPORT', [png()]);
+  assert.equal(asPassport.documentNumber, 'PX1234567');
+  assert.equal(asPassport.typeMatches, true);
+  const nothing = await kycService('LEGAL_DOCUMENTS_PENDING', { noMrz: true }).service.readFormDocument(aml, 'case-1', 'QID', [png()]);
+  assert.equal(nothing.found, false);
+  const mrzFirst = kycService('LEGAL_DOCUMENTS_PENDING', { card });
+  await mrzFirst.service.readFormDocument(aml, 'case-1', 'PASSPORT', [png()]);
+  assert.equal(mrzFirst.calls.printed, undefined, 'The printed text is read only when there are no machine-readable lines');
+
   const noReader = new KycService(kycService('LEGAL_DOCUMENTS_PENDING').service.prisma, {});
   await assert.rejects(noReader.readFormDocument(aml, 'case-1', 'COMPANY', [png()]), /not available/);
 }
@@ -98,6 +137,7 @@ async function checkEnquiryRead() {
 }
 
 async function main() {
+  checkPrintedCard();
   checkIdentityReading();
   await checkKycRead();
   await checkEnquiryRead();

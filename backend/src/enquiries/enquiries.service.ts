@@ -64,7 +64,10 @@ export class EnquiriesService {
     } catch {
       read = null;
     }
-    return identityReading(read, identityType);
+    // A card without machine-readable lines (older residency permit) is read from its printed labels.
+    let card = null;
+    if (this.idReader && (!read || (!read.documentNumber && !read.expiryDate))) card = await this.idReader.readPrintedCard(files[0]).catch(() => null);
+    return identityReading(read, identityType, card);
   }
 
   // Reads a company's Commercial Registration to pre-fill the company and its corporate shareholders on the enquiry

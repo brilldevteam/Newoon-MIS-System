@@ -31,6 +31,22 @@ export function identityFill(row: IdentityRow, result: EnquiryIdentityReading, r
   if (result.dateOfBirth && blank(row.dateOfBirth)) change.dateOfBirth = result.dateOfBirth;
   const nameFilled = Boolean(result.nameOnDocument && blank(row.fullName));
   if (nameFilled) change.fullName = titleCase(result.nameOnDocument);
+  if (result.readFromText) {
+    // A card read from its printed labels (no machine-readable lines) may show both the QID and the passport; the
+    // other document's number fills only an empty field.
+    if (type !== 'QID' && result.qid && blank(row.qidNumber)) Object.assign(change, { qidNumber: result.qid.number, qidExpiry: result.qid.expiry || row.qidExpiry || '' });
+    if (type !== 'PASSPORT' && result.passport && blank(row.passportNumber)) Object.assign(change, { passportNumber: result.passport.number, passportExpiry: result.passport.expiry || row.passportExpiry || '' });
+    const read = [
+      result.qid ? `QID ${result.qid.number}${result.qid.expiry ? ` (expiry ${result.qid.expiry})` : ''}` : '',
+      result.passport ? `passport ${result.passport.number}${result.passport.expiry ? ` (expiry ${result.passport.expiry})` : ''}` : '',
+      result.dateOfBirth ? `date of birth ${result.dateOfBirth}` : '',
+      nameFilled ? 'the name' : ''
+    ].filter(Boolean);
+    return {
+      change,
+      outcome: { tone: 'warn', text: `Read from the printed text of the card (it has no machine-readable lines): ${read.join(', ')}. There are no check digits on this card, so compare every value with the document.` }
+    };
+  }
   const checks = [
     result.documentNumberCheck !== 'OK' ? 'the number' : '',
     result.expiryDate && !result.expiryValid ? 'the expiry date' : '',
