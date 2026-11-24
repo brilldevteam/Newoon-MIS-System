@@ -1178,15 +1178,22 @@ export function KycFormEditorPage() {
   // option to replace them. `attach` also keeps the copy in Section F (not needed when it was uploaded there).
   async function readCompanyCr(file: File, attach: boolean): Promise<FillOutcome> {
     if (!id) return { tone: 'warn', text: 'Save the KYC case first.' };
-    const reading = await readKycCompanyDocument(id, file);
+    // The CR is kept first, so it is saved even when nothing can be read from it.
     const attached = attach ? await attachToChecklist(CR_DOCUMENT, file) : false;
+    let reading;
+    try {
+      reading = await readKycCompanyDocument(id, file);
+    } catch {
+      return { tone: 'warn', text: `${attach ? (attached ? 'The CR was uploaded, but ' : 'The CR could not be uploaded, and ') : ''}the details could not be read from it. Type them in below.` };
+    }
     const result = companyFill(formRef.current.sectionA || {}, reading, crTargets);
     if (Object.keys(result.filled).length) patchSectionA(result.filled);
     const outcome = companyFillOutcome(reading, result, () => patchSectionA(result.replace), attach ? '' : ' in Section A');
     const people = reading.people.map((person) => [person.fullName, person.roles.length ? `(${person.roles.map((role) => role.toLowerCase().replace(/_/g, ' ')).join(', ')}${person.sharePercentage ? ` ${person.sharePercentage}%` : ''})` : ''].filter(Boolean).join(' '));
     const extra = [
       people.length ? `The CR lists: ${people.join('; ')}. Add them in Sections B and C.` : '',
-      attach ? (attached ? `The CR was added to Section F (${CR_DOCUMENT}).` : 'The CR could not be added to Section F; upload it there.') : ''
+      attach && !attached ? 'The CR could not be uploaded; try again or upload it in Section F.' : '',
+      'Anything not filled can be typed in below.'
     ].filter(Boolean).join(' ');
     return { ...outcome, text: [outcome.text, extra].filter(Boolean).join(' ') };
   }
@@ -1732,7 +1739,7 @@ export function KycFormEditorPage() {
       <p className="text-xs text-slate-500">{isPreliminaryProposedCompanyForm ? 'This KYC was created from a proposed-company enquiry. Capture preliminary control, directors, and incorporation details before final review.' : 'Changes update the preview immediately. Save each section when ready. Fields marked * are required before the file can be submitted to DMLRO.'}</p>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="max-h-[calc(100vh-230px)] min-w-0 overflow-x-auto overflow-y-auto p-5 disabled:opacity-75">
-              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} /> : null}
+              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} crFileNames={fileNameList((form.sectionF?.documents || []).find((row: Row) => row.documentType === CR_DOCUMENT)?.fileName)} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
                   data={form.sectionB}
@@ -1788,7 +1795,7 @@ const crTargets: CompanyTarget[] = [
   { field: 'licenseActivities', key: 'licenseActivities', label: 'license activities' }
 ];
 
-function SectionAForm({ data, onChange, onReadCr }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome> }) {
+function SectionAForm({ data, onChange, onReadCr, crFileNames = [] }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome>; crFileNames?: string[] }) {
   function setCountryOfIncorporation(country: string) {
     onChange({
       ...data,
@@ -1807,7 +1814,16 @@ function SectionAForm({ data, onChange, onReadCr }: FormProps & { onReadCr?: (fi
 
   return (
     <FormGrid>
-      {onReadCr ? <DocumentFillBar label="Fill from the Commercial Registration (CR):" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} hint="Empty fields are filled; the CR is also added to Section F." /> : null}
+      {onReadCr ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" style={{ gridColumn: '1 / -1' }}>
+          <p className="text-sm font-semibold text-slate-950">Commercial Registration (CR) copy</p>
+          <p className="mt-1 text-xs text-slate-500">Upload the company's CR and the company details below are filled in automatically. Anything that is not read can be typed in by hand. Fields you have already typed are not changed.</p>
+          <p className="mt-2 text-xs text-slate-700">{crFileNames.length ? `Uploaded: ${crFileNames.join(', ')}` : 'No CR uploaded yet.'}</p>
+          <div className="mt-2">
+            <DocumentFillBar label="CR (PDF or image):" buttonLabel={crFileNames.length ? 'Upload another CR' : 'Upload CR'} options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} />
+          </div>
+        </div>
+      ) : null}
       <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
       <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
       <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />

@@ -11,11 +11,12 @@ type Props = {
   onRead: (file: File, kind: string) => Promise<FillOutcome>;
   disabled?: boolean;
   hint?: string;
+  buttonLabel?: string;
 };
 
 // "Fill from a copy": the user picks a file, the server reads it and the form fills in what was found. The note
 // below says what was filled and what to check; nothing is saved until the form is saved.
-export function DocumentFillBar({ label, options, onRead, disabled = false, hint }: Props) {
+export function DocumentFillBar({ label, options, onRead, disabled = false, hint, buttonLabel = 'Upload and read' }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState(options[0]?.value || '');
   const [reading, setReading] = useState(false);
@@ -45,7 +46,7 @@ export function DocumentFillBar({ label, options, onRead, disabled = false, hint
           </select>
         ) : null}
         <button type="button" disabled={reading || disabled} onClick={() => fileRef.current?.click()} className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">
-          {reading ? <><Loader2 className="h-4 w-4 animate-spin" />Reading...</> : 'Upload and read'}
+          {reading ? <><Loader2 className="h-4 w-4 animate-spin" />Uploading and reading...</> : buttonLabel}
         </button>
         <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void read(file); }} />
         {hint ? <span className="text-xs text-slate-500">{hint}</span> : null}
