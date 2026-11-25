@@ -10,6 +10,10 @@ async function main(){
   const enquiry={id:'synthetic',enquiryCode:'ENQ-SYNTHETIC',enquiryType:'PROPOSED_COMPANY',status:'DRAFT',proposedCompanyName:'Synthetic Company',requestedServices:['N009 - Company Formation - QFC'],keyContactName:'Existing Contact',keyContactPhone:'+97455550000',keyContactPosition:'Director',attachments:[{documentType:'QID / Passport copies',fileName:'copy.pdf'}],details:{proposedLegalForm:'QFC LLC',jurisdictionOfRegistration:'QFC',countryOfIncorporation:'Qatar',proposedBusinessActivity:'Consulting',sourceOfInitialCapital:'Capital',proposedRegisteredOfficeAddress:'Doha',documentPeople:[{id:'read-person',files:['copy.pdf'],row:person}],preliminaryKyc:{shareholders:[{id:'owner',shareholderType:'Individual',fullName:'Existing Owner',ownershipPercentage:'100',nationality:'Qatar',identityNumber:'',address:'Qatar',isUbo:false}],ubos:[{id:'ubo',shareholderType:'Individual',fullName:'Existing UBO',ownershipPercentage:'25',nationality:'Qatar',identityNumber:'',address:'Qatar',isUbo:true}],management:[{id:'manager',fullName:'Existing Director',position:'Director',positions:['Director'],nationality:'Qatar',identityNumber:''}]}}};
   enquiry.attachments.push({id:'cr-copy',documentType:'Commercial Registration / CR Extract',fileName:'saved-cr.pdf',mimeType:'application/pdf'});
   enquiry.attachments.push({id:'signature',documentType:'Preliminary KYC - Authorised Signature',fileName:'signature.png',mimeType:'image/png'});
+  enquiry.details.preliminaryKyc.management.push(
+    {id:'director-b',fullName:'Second Sample Director',position:'Director',positions:['Director'],nationality:'Qatar',identityNumber:'',passportNumber:'SYNB23456'},
+    {id:'director-c',fullName:'Third Sample Director',position:'Director',positions:['Director'],nationality:'France',identityNumber:''}
+  );
   const browser=await puppeteer.launch({executablePath:process.env.CHROMIUM_PATH||'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',headless:true,args:['--no-sandbox']});
   try{for(const width of [1920,1440,390]){
     const page=await browser.newPage();await page.setViewport({width,height:1000});const errors=[];page.on('pageerror',error=>errors.push(error.message));let payload;let copyViews=0;let companyReads=0;
@@ -38,6 +42,16 @@ async function main(){
     const step=async name=>{await page.evaluate(name=>[...document.querySelectorAll('button')].find(button=>new RegExp('^\\d+\\s*'+name+'$').test(button.textContent.trim()))?.click(),name);};
     const pick=async selector=>{await page.waitForSelector(selector);await page.select(selector,'document:read-person');};
     await step('Ownership');await pick('select[aria-label="Select person"]');
+    await page.select('article select[aria-label="Select person"]','management:1');
+    assert.ok(await page.$eval('article',article=>article.querySelector('header').textContent.includes('Second Sample Director')));
+    assert.ok(await page.$eval('article',article=>[...article.querySelectorAll('input')].some(input=>input.value==='SYNB23456')));
+    assert.ok(await page.$eval('article',article=>![...article.querySelectorAll('input')].some(input=>input.value==='20000000001')),'Choosing an existing director clears previous uploaded-person QID');
+    const options=await page.$eval('article select[aria-label="Select person"]',select=>[...select.options].map(option=>option.textContent));
+    assert.ok(options.some(text=>text.includes('Uploaded Sample Person'))&&options.some(text=>text.includes('Second Sample Director'))&&options.some(text=>text.includes('Third Sample Director')),'All distinct people remain selectable');
+    await page.select('article select[aria-label="Select person"]','management:2');
+    assert.ok(await page.$eval('article',article=>article.querySelector('header').textContent.includes('Third Sample Director')));
+    assert.ok(await page.$eval('article',article=>![...article.querySelectorAll('input')].some(input=>['SYNB23456','20000000002'].includes(input.value))),'A person without IDs must not inherit the previous person IDs');
+    await pick('article select[aria-label="Select person"]');
     assert.ok(await page.$eval('article select[aria-label="Select person"]',select=>Boolean(select.compareDocumentPosition(select.closest('article').querySelector('input'))&Node.DOCUMENT_POSITION_FOLLOWING)),'Select person comes before name/identity fields');
     assert.ok(await page.$$eval('select[aria-label="Select person"]',nodes=>nodes.every(select=>select.getBoundingClientRect().width>200)),'Selectors remain full width, not compressed beside linked-role notes');
     assert.ok(await page.$$eval('input',nodes=>nodes.some(node=>node.value==='100')),'Shareholding is not copied from identity');
@@ -67,6 +81,9 @@ async function main(){
     assert.equal(payload.details.preliminaryKyc.ubos[0].fullName,person.fullName);
     assert.equal(payload.details.preliminaryKyc.management[0].fullName,person.fullName);
     assert.equal(payload.details.preliminaryKyc.management[0].position,'Director');
+    assert.equal(payload.details.preliminaryKyc.management[1].fullName,'Second Sample Director','Picking a director does not modify the source director');
+    assert.equal(payload.details.preliminaryKyc.management[1].passportNumber,'SYNB23456');
+    assert.equal(payload.details.preliminaryKyc.management[2].fullName,'Third Sample Director');
     assert.equal(payload.keyContactName,person.fullName);
     assert.equal(payload.keyContactEmail,'sample.person+contact@example.test');
     assert.deepEqual(payload.keyContactPosition.split(', '),['Director','CEO'],'Save all selected contact positions');

@@ -482,10 +482,11 @@ export function AddEnquiryPage() {
     // Picking copies the chosen person's details onto the row; it is not a change to sync to other rows.
     pick: (slot, sourceSlot) => setFormState((current) => {
       const source = [...enquiryPeople.read(current), ...selectablePeople.filter(person => person.slot.startsWith('document:'))].find((person) => person.slot === sourceSlot);
-      if (!source) return current;
-      const change = sourceSlot.startsWith('document:') ? { ...Object.fromEntries(PERSON_FIELDS.map(field => [field, ''])), ...personDetails(source.row) } : personDetails(source.row);
+      if (!source || sourceSlot === slot) return current;
+      // Every person switch replaces identity fields, regardless of whether the source was uploaded or entered.
+      const change = { ...Object.fromEntries(PERSON_FIELDS.map(field => [field, ''])), identityNumber: String(('identityNumber' in source.row ? source.row.identityNumber : '') || ''), ...personDetails(source.row) };
       const next = enquiryPeople.write(current, slot, change);
-      if (slot === 'contact' && sourceSlot.startsWith('document:')) next.keyContactIdentityTypes = identityTypeOptions.filter(type => type === 'QID' ? Boolean(next.keyContactQidNumber) : Boolean(next.keyContactPassportNumber));
+      if (slot === 'contact') next.keyContactIdentityTypes = identityTypeOptions.filter(type => type === 'QID' ? Boolean(next.keyContactQidNumber) : Boolean(next.keyContactPassportNumber));
       return next;
     })
   }), [people, selectablePeople]);
