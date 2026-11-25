@@ -2,6 +2,8 @@
 
 ## Enquiry Attachments Step (2026-11-25)
 
+- `Select person` includes `Enter a new person manually`, including when no document people exist. Choosing it clears personal/identity fields on that row (and contact email/mobile), without changing other people, attachments, ownership percentages or positions. The KYC editor's separate `Same person as` picker retains its previous empty-option behavior.
+
 - Switching a person replaces all identity fields for both uploaded and already-entered sources, including clearing stale QID/passport/expiry/DOB and combined identity values absent on the new source. Percentages and positions stay on the target role, and the source person's row is not mutated. The browser regression covers three distinct people and confirms none disappear into an incorrect shared-ID group. Existing saved mistakes are not mass-repaired; select the correct person again on affected rows.
 
 - Changing enquiry type reapplies retained supporting documents to the new type's empty fields. Page-lifetime extraction results are cached to avoid repeated provider calls. Saved copies are fetched through the existing authorized attachment-view endpoint, never storage paths, then cached for later switches. Initial draft loading does not trigger a reread. Signatures, stamps, Screening and CRRF attachments are excluded. Existing manually entered values and attached files remain unchanged.

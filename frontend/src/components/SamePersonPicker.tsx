@@ -16,11 +16,11 @@ export function SamePersonPicker({ people, slot, onPick, disabled = false, label
   const choices = personChoices(people, label === 'Select person' ? '' : slot);
   const selected = label === 'Select person' ? choices.find(choice => choice.slots.includes(slot))?.value || '' : '';
   const also = linkedRoles(people.filter(person => !person.slot.startsWith('document:')), slot);
-  if (!choices.length && !also.length) return null;
+  if (!choices.length && !also.length && label !== 'Select person') return null;
   return (
     <div className="min-w-0" style={{ gridColumn: '1 / -1' }}>
       <div className="min-w-0 space-y-2 rounded-md border border-slate-200 bg-slate-50/60 p-3">
-        {choices.length ? (
+        {choices.length || label === 'Select person' ? (
           <label className="block min-w-0 text-sm font-medium text-slate-700">
             <span className="mb-1.5 flex items-center gap-2"><Link2 aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-500" />{label}</span>
             <select
@@ -28,9 +28,9 @@ export function SamePersonPicker({ people, slot, onPick, disabled = false, label
               className="block min-h-10 w-full min-w-0 max-w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500"
               value={selected}
               disabled={disabled}
-              onChange={(event) => { if (event.target.value) onPick(event.target.value); }}
+              onChange={(event) => { if (event.target.value || label === 'Select person') onPick(event.target.value); }}
             >
-              <option value="">{label === 'Select person' ? 'Select an uploaded or existing person' : 'Select a person already entered'}</option>
+              <option value="">{label === 'Select person' ? 'Enter a new person manually' : 'Select a person already entered'}</option>
               {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
             </select>
           </label>

@@ -42,6 +42,11 @@ async function main(){
     const step=async name=>{await page.evaluate(name=>[...document.querySelectorAll('button')].find(button=>new RegExp('^\\d+\\s*'+name+'$').test(button.textContent.trim()))?.click(),name);};
     const pick=async selector=>{await page.waitForSelector(selector);await page.select(selector,'document:read-person');};
     await step('Ownership');await pick('select[aria-label="Select person"]');
+    await page.select('article select[aria-label="Select person"]','');
+    assert.ok(await page.$eval('article',article=>![...article.querySelectorAll('input')].some(input=>['Uploaded Sample Person','20000000001','SYNPA12345'].includes(input.value))),'Manual entry clears selected person identity');
+    assert.ok(await page.$eval('article',article=>[...article.querySelectorAll('input')].some(input=>input.value==='100')),'Manual entry preserves ownership percentage');
+    assert.equal(await page.$eval('article select[aria-label="Select person"]',select=>select.value),'');
+    await pick('article select[aria-label="Select person"]');
     await page.select('article select[aria-label="Select person"]','management:1');
     assert.ok(await page.$eval('article',article=>article.querySelector('header').textContent.includes('Second Sample Director')));
     assert.ok(await page.$eval('article',article=>[...article.querySelectorAll('input')].some(input=>input.value==='SYNB23456')));
@@ -62,6 +67,10 @@ async function main(){
     await step('Management');await pick('select[aria-label="Select person"]');
     assert.ok(await page.evaluate(()=>document.body.textContent.includes('Director')),'Keep management position');
     await step('Contact');await pick('select[aria-label="Select person"]');
+    await page.select('select[aria-label="Select person"]','');
+    assert.ok(await page.$$eval('input',inputs=>!inputs.some(input=>['SYNPA12345','20000000001','+97455550000'].includes(input.value))),'Manual contact does not inherit identity/mobile from selected person');
+    assert.equal(await page.$$eval('input[type=file]',inputs=>inputs.length),0,'Manual entry does not require an attachment');
+    await pick('select[aria-label="Select person"]');
     assert.ok(await page.$$eval('input',nodes=>nodes.some(node=>node.value==='SYNPA12345')),'Contact gets the chosen passport');
     await page.click('[role="button"]');await page.waitForSelector('[data-searchable-select-menu]');
     await page.evaluate(()=>[...document.querySelectorAll('[data-searchable-select-menu] button')].find(button=>button.textContent.trim()==='CEO').click());
