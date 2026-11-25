@@ -2,6 +2,7 @@ import { ChevronDown, Plus, Trash2, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { SearchableMultiSelect, splitList } from './SearchableSelect';
 import { PreliminaryPersonFields } from './PreliminaryPersonFields';
+import { LinkedPersonPicker } from './SamePersonPicker';
 
 type Person = { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[]; positionOther?: string; passportNumber?: string; passportExpiry?: string; qidNumber?: string; qidExpiry?: string; dateOfBirth?: string; isPep?: string };
 type Props = { people: Person[]; nationalities: string[]; positions: string[]; onChange: (people: Person[]) => void; onIdentityFile?: (file: File, type: 'PASSPORT' | 'QID', personName: string) => void };
@@ -51,8 +52,9 @@ export function PreliminaryManagementEditor({ people, nationalities, positions, 
           <button type="button" title="Remove person" aria-label={`Remove ${row.fullName || `person ${index + 1}`}`} disabled={people.length === 1} onClick={() => onChange(people.filter((_, rowIndex) => rowIndex !== index))} className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
         </header>
         <div id={panelId} hidden={!expanded} className="p-4">
+          <div className="mb-4"><LinkedPersonPicker row={row} /></div>
           <div className="grid min-w-0 gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>
-            <label className="min-w-0 text-sm font-medium text-slate-700">Full name<input className={inputClass} value={row.fullName} onChange={(event) => update(index, { fullName: event.target.value })} /></label>
+            <label className="min-w-0 text-sm font-medium text-slate-700" style={{ gridColumn: '1 / -1' }}>Full name<input className={inputClass} value={row.fullName} onChange={(event) => update(index, { fullName: event.target.value })} /></label>
             <div className="min-w-0"><SearchableMultiSelect label="Nationality" value={splitList(row.nationality)} options={nationalities.filter(Boolean)} onChange={(value) => update(index, { nationality: value.join(', ') })} placeholder="Select nationalities" /></div>
             <div className="min-w-0"><SearchableMultiSelect label="Positions" value={selectedPositions} options={positions.filter((item) => item && item !== 'Other')} allowOther otherValue={row.positionOther || ''} onOtherChange={(value) => update(index, { positionOther: value, position: resolvedPosition(selectedPositions, value) })} onChange={(value) => update(index, { positions: value, ...(value.includes('Other') ? {} : { positionOther: '' }), position: resolvedPosition(value, value.includes('Other') ? row.positionOther : '') })} placeholder="Select positions" /></div>
             <PreliminaryPersonFields row={row} onChange={(change) => update(index, change)} onIdentityFile={onIdentityFile ? (file, type) => onIdentityFile(file, type, row.fullName) : undefined} />

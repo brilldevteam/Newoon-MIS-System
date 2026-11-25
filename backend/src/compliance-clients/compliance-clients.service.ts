@@ -24,7 +24,7 @@ import { expiryState } from './compliance-monitoring.service';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateComplianceClientDto } from './dto/update-compliance-client.dto';
-import { clientSearchWhere } from './client-search';
+import { clientPersonSearchWhere, clientSearchWhere } from './client-search';
 
 export type ComplianceClientQuery = {
   search?: string;
@@ -818,9 +818,30 @@ export class ComplianceClientsService {
       this.stats(user)
     ]);
 
+    const search = this.optionalText(query.search)?.slice(0, 120);
+    const level = clientAccessLevel(user);
+    const scope = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: user.tenantId || '' };
+    const matchedPeople = search && clients.length ? await this.prisma.clientPerson.findMany({
+      where: { AND: [{ clientId: { in: clients.map(client => client.id) } }, clientPersonSearchWhere(user, search)] },
+      select: {
+        id: true, clientId: true, fullName: true, title: true, qidNumber: true, email: true,
+        legacyIdentity: level !== 'ALLOCATED',
+        roles: { where: { ...scope, ...(level === 'FULL' ? {} : { role: { not: 'UBO' as const } }) }, select: { role: true, title: true } },
+        passports: level !== 'ALLOCATED' ? { where: scope, select: { passportNumber: true } } : false
+      },
+      orderBy: [{ fullName: 'asc' }, { id: 'asc' }]
+    }) : [];
     return {
       access: clientAccess(user),
-      items: clients.map((client) => this.forAccess(user, this.toListItem(client))),
+      items: clients.map((client) => ({
+        ...this.forAccess(user, this.toListItem(client)),
+        matchedPeople: matchedPeople.filter(person => person.clientId === client.id).map(person => ({
+          id: person.id, name: person.fullName, title: person.title, qidNumber: person.qidNumber, email: person.email,
+          identity: level !== 'ALLOCATED' ? person.legacyIdentity : null,
+          passports: level !== 'ALLOCATED' ? person.passports.map(passport => passport.passportNumber) : [],
+          roles: [...new Set(person.roles.map(role => role.role === 'OTHER' ? role.title || ROLE_LABELS.OTHER : ROLE_LABELS[role.role]))]
+        }))
+      })),
       pagination: { page, pageSize, total, totalPages },
       stats
     };

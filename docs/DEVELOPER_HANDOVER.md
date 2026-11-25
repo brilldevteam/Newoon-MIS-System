@@ -1,5 +1,30 @@
 # Newoon MIS Developer Handover
 
+## Enquiry Attachments Step (2026-11-25)
+
+- Changing enquiry type reapplies retained supporting documents to the new type's empty fields. Page-lifetime extraction results are cached to avoid repeated provider calls. Saved copies are fetched through the existing authorized attachment-view endpoint, never storage paths, then cached for later switches. Initial draft loading does not trigger a reread. Signatures, stamps, Screening and CRRF attachments are excluded. Existing manually entered values and attached files remain unchanged.
+
+- Enquiry create/edit pages start with an 80px collapsed desktop sidebar, with the existing expand/collapse toggle available. Other module/register routes retain their previous sidebar behavior. Person selectors appear before person fields in ownership/management editors, using a full-width input and separate linked-role note. Selected identities remain visible in the selector.
+
+- Contact has no separate Upload and Read bar. The selected person's linked passport/QID copies appear beside the identity fields with View and an Attachments navigation action. Pending files use temporary object URLs; saved copies use the existing authenticated enquiry attachment view endpoint. Other editor upload controls are unchanged.
+
+- Contact Position is multi-select. Values remain a comma-separated string for existing enquiry/KYC contracts and preserve known/custom positions on draft reopen. Contact email stays optional but a supplied invalid address blocks Next, Save Draft and submission; create/update API DTO email validation remains in force.
+
+- Uploaded passport/QID readings are retained as a role-neutral identity pool, not automatically assigned to the key contact. Contact, individual Shareholder, UBO and Management rows offer `Select person`. Choosing an identity copies only personal fields; ownership percentages and positions remain on the target role. Switching identities clears old identity fields first.
+- The pool is saved in `details.documentPeople` with identity fields and source filenames only; it is restored on draft reopen and filtered against the remaining attachments. Separate copies combine only on matching ID or exact name/DOB with no conflicting IDs; ambiguous people stay separate. KYC previews/exports do not render the unassigned pool.
+- Additional checks: `node frontend/scripts/check-document-people.cjs` and `node frontend/scripts/check-document-person-roles-ui.cjs` cover merging, saved-draft restore and all four role pickers with synthetic data.
+
+- Enquiries use a single Attachments step immediately after Type. The separate enquiry document inbox is removed. The KYC editor's inbox is unchanged.
+- Standard attachment categories and their order are shared with the KYC checklist through `frontend/src/utils/kyc-document-types.ts`. Existing saved legacy categories/files are retained after the standard list; current-client new-service enquiries keep their additional-document-only behavior.
+- Supported files uploaded on the step are read sequentially, including every file in a batch, and fill empty company/person fields through the existing extraction helpers. Combined identity copies fill both QID and passport. Unknown/ambiguous values remain manual; failed reads do not remove attachments. Saving/submission waits for pending reads. No auto-save or approval is added.
+- Run `node frontend/scripts/check-enquiry-attachments-ui.cjs`, `node frontend/scripts/check-document-intake.cjs` and `node frontend/scripts/check-enquiry-contact.cjs` after the frontend build. Browser checks use synthetic responses, not real extraction providers or database writes.
+
+## Matching People In Compliance Search (2026-11-25)
+
+- Filtered client responses now include only matching, authorized people on the returned page. The register displays their names, roles, permitted QID/passport/email details and matching-field badges above the linked company.
+- Tenant/allocation restrictions and hidden UBO/passport rules remain enforced. Unfiltered responses do not fetch person snippets. Pagination still counts clients, not people; Excel columns are unchanged.
+- Build, then run `node backend/scripts/check-client-search.cjs` and `node frontend/scripts/check-client-search-ui.cjs` with synthetic records. Restart a non-watch local backend to load the new response shape. No schema migration or database seed is required.
+
 ## Module Workspaces And SaaS Assessment (2026-11-24)
 
 - Authenticated home/login redirects now land on `/workspace`: permission-aware Enquiry, KYC and Compliance Clients tiles. Each module retains its existing route guards and gets a contextual sidebar. All Workspaces switches modules; Dashboard and authorized administration remain accessible.

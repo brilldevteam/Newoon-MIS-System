@@ -1,4 +1,4 @@
-import { ArrowLeft, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Eye, Paperclip, Save, Trash2 } from 'lucide-react';
 import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
 import { withSplitIdentity } from '../components/PreliminaryPersonFields';
@@ -11,15 +11,16 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
-import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
-import { DocumentIntakePanel } from '../components/DocumentIntakePanel';
-import { appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
+import { FillNote } from '../components/DocumentFillBar';
+import { kycDocumentTypes } from '../utils/kyc-document-types';
+import { mergeDocumentPerson, restoreDocumentPeople, type DocumentPerson } from '../utils/document-people';
+import { automaticIntakeApplication, appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, validateIntakeFile, type IntakeApplication, type IntakeReading } from '../utils/document-intake';
 import { PeopleLink, PeopleLinkContext, SamePersonPicker } from '../components/SamePersonPicker';
-import { PeopleAdapter, personChoices, personDetails, syncLinkedPeople, toList } from '../utils/linked-people';
+import { PeopleAdapter, PERSON_FIELDS, personChoices, personDetails, personKeys, syncLinkedPeople, toList } from '../utils/linked-people';
 import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
 import { withDerivedIdentity } from '../utils/person-identity';
-import { companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
-import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, readEnquiryIdentityDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, Client } from '../services/kyc-workflow.service';
+import { FillOutcome } from '../utils/document-fill';
+import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, readEnquiryIdentityDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, getEnquiryAttachmentFile, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, viewEnquiryAttachment, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
 import { useAuth } from '../hooks/useAuth';
@@ -134,7 +135,6 @@ type EnquiryValidationForm = {
 };
 
 const blankPreliminaryOwner = (): PreliminaryOwner => ({ id: crypto.randomUUID(), shareholderType: 'Individual', parentRowId: '', fullName: '', nationality: '', identityNumber: '', address: '', ownershipPercentage: '', isUbo: false });
-const PROPOSED_COMPANY_DOCUMENT = 'Proposed company documents (name reservation / initial approval)';
 
 // How people read from a document are written into the enquiry's Ownership and Management steps.
 const enquiryPeopleLayout: PeopleLayout = {
@@ -193,46 +193,12 @@ const enquiryPeople: PeopleAdapter<EnquiryValidationForm> = {
   }
 };
 
-const existingLegalEntityAttachments = [
-  'Key Contact QID / Passport attachment',
-  'Corporate Documents - Company',
-  'Identity Proof - UBO',
-  'Identity Proof - Director',
-  'Identity Proof - SEF',
-  'Corporate documents of corporate shareholders in case of multiple layers of UBO',
-  'UBO Part 1 and Part 2 submitted to QFC',
-  'Identity Proof - Authorized Secretary'
-];
-
-const proposedCompanyAttachments = [
-  'Key Contact QID / Passport attachment',
-  'Identity Proof - Proposed UBO',
-  'Identity Proof - Proposed Director',
-  'Identity Proof - Proposed SEF',
-  'Corporate documents of corporate shareholders in case of multiple layers of UBO',
-  'UBO Part 1 and Part 2 submitted to QFC',
-  'Identity Proof - Authorized Secretary'
-];
-
-const qfzMociProposedCompanyAttachments = [
-  'Key Contact QID / Passport attachment',
-  'Identity Proof - Manager',
-  'Identity Proof - Authorized Signatory',
-  'Identity Proof - Partners',
-  'Identity Proof - UBO',
-  'Corporate shareholder documents'
-];
 
 function attachmentTemplates(enquiryType: EnquiryType, proposedLegalForm = ''): AttachmentDraft[] {
   if (enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') {
     return [{ documentType: 'Additional document upload 1', fileName: '' }];
   }
-  const documentTypes =
-    enquiryType === 'PROPOSED_COMPANY'
-      ? isQfzOrMociLegalForm(proposedLegalForm)
-        ? qfzMociProposedCompanyAttachments
-        : proposedCompanyAttachments
-      : existingLegalEntityAttachments;
+  const documentTypes = kycDocumentTypes;
   return documentTypes.map((documentType) => ({ documentType, fileName: '' }));
 }
 
@@ -263,6 +229,15 @@ function splitNationalities(value: unknown, options: string[]) {
 // Saved as one comma-separated string so existing records, KYC conversion and screening keep working.
 function nationalityText(values: string[], otherValue: string) {
   return values.map((item) => (item === 'Other' ? otherValue.trim() : item)).filter(Boolean).join(', ');
+}
+
+function contactPositions(form: Pick<EnquiryValidationForm, 'keyContactPosition' | 'keyContactPositionOther'>) {
+  return nationalityText(splitList(form.keyContactPosition), form.keyContactPositionOther);
+}
+
+function contactEmailError(value: string) {
+  const email = value.trim();
+  return email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) ? 'Enter a valid email address, for example name@example.com.' : null;
 }
 
 function splitRequestedServices(services: string[]) {
@@ -363,9 +338,12 @@ function validateEnquiryStep(form: EnquiryValidationForm, step: EnquiryStep): st
     if (!/\d/.test(dialCode && mobileNumber.startsWith(dialCode) ? mobileNumber.slice(dialCode.length) : mobileNumber)) {
       return 'Key contact mobile number is required.';
     }
-    if (!resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther)) {
+    if (!contactPositions(form)) {
       return 'Key contact position is required.';
     }
+    if (splitList(form.keyContactPosition).includes('Other') && !form.keyContactPositionOther.trim()) return 'Specify the other contact position.';
+    const emailError = contactEmailError(form.keyContactEmail);
+    if (emailError) return emailError;
   }
 
   if (step === 'ownership' && form.enquiryType === 'PROPOSED_COMPANY') {
@@ -428,6 +406,12 @@ export function AddEnquiryPage() {
   // Guards against a double click and remembers an enquiry already created by this page, so a retry after a
   // failed upload updates that enquiry instead of creating a second one.
   const busyRef = useRef(false);
+  const extractionQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const extractionPending = useRef(0);
+  const documentReadings = useRef(new WeakMap<File, IntakeReading>());
+  const savedExtractionFiles = useRef(new Map<string, File>());
+  const previousEnquiryType = useRef<EnquiryType | null>(null);
+  const [documentPeople, setDocumentPeople] = useState<DocumentPerson[]>([]);
   const createdIdRef = useRef<string | null>(null);
   const [duplicate, setDuplicate] = useState<EnquiryDuplicate | null>(null);
   const [error, setError] = useState('');
@@ -478,18 +462,33 @@ export function AddEnquiryPage() {
     setFormState((current) => syncLinkedPeople(current, typeof value === 'function' ? value(current) : value, enquiryPeople));
   }, []);
   const people = useMemo(() => enquiryPeople.read(form), [form]);
+  const availableDocumentPeople = useMemo(() => {
+    const names = new Set(attachments.flatMap(attachmentDisplayNames));
+    return documentPeople.filter(person => person.files.some(file => names.has(file)));
+  }, [documentPeople, attachments]);
+  const selectablePeople = useMemo(() => [...availableDocumentPeople.map(person => ({ slot: `document:${person.id}`, role: `Uploaded document: ${person.row.qidNumber || person.row.passportNumber || person.files[0] || ''}`, row: person.row })), ...people], [people, availableDocumentPeople]);
+  const contactCopies = useMemo(() => {
+    const keys = personKeys({ qidNumber: form.keyContactQidNumber, passportNumber: form.keyContactPassportNumber });
+    const attached = new Set(attachments.flatMap(attachmentDisplayNames));
+    return [...new Set(availableDocumentPeople.filter(person => personKeys(person.row).some(key => keys.includes(key))).flatMap(person => person.files))].filter(name => attached.has(name));
+  }, [availableDocumentPeople, attachments, form.keyContactQidNumber, form.keyContactPassportNumber]);
   // The latest form for reads that finish after the user kept typing.
   const formRef = useRef(form);
   formRef.current = form;
   const peopleLink = useMemo<PeopleLink>(() => ({
-    people,
+    people: selectablePeople,
+    pickerLabel: 'Select person',
     slotOf: (row) => people.find((person) => person.source === row)?.slot,
     // Picking copies the chosen person's details onto the row; it is not a change to sync to other rows.
     pick: (slot, sourceSlot) => setFormState((current) => {
-      const source = enquiryPeople.read(current).find((person) => person.slot === sourceSlot);
-      return source ? enquiryPeople.write(current, slot, personDetails(source.row)) : current;
+      const source = [...enquiryPeople.read(current), ...selectablePeople.filter(person => person.slot.startsWith('document:'))].find((person) => person.slot === sourceSlot);
+      if (!source) return current;
+      const change = sourceSlot.startsWith('document:') ? { ...Object.fromEntries(PERSON_FIELDS.map(field => [field, ''])), ...personDetails(source.row) } : personDetails(source.row);
+      const next = enquiryPeople.write(current, slot, change);
+      if (slot === 'contact' && sourceSlot.startsWith('document:')) next.keyContactIdentityTypes = identityTypeOptions.filter(type => type === 'QID' ? Boolean(next.keyContactQidNumber) : Boolean(next.keyContactPassportNumber));
+      return next;
     })
-  }), [people]);
+  }), [people, selectablePeople]);
 
   const [declarationFiles, setDeclarationFiles] = useState<{ authorizedSignature?: File; companyStamp?: File }>({});
 
@@ -507,7 +506,8 @@ export function AddEnquiryPage() {
           return;
         }
         const details = enquiry.details || {};
-        const keyContactPosition = splitOtherValue(enquiry.keyContactPosition, positionOptions);
+        setDocumentPeople(restoreDocumentPeople(details.documentPeople));
+        const keyContactPosition = splitNationalities(enquiry.keyContactPosition, positionOptions);
         const keyContactNationality = splitNationalities(details.keyContactNationality, nationalityOptions);
         const proposedLegalForm = splitOtherValue(String(details.proposedLegalForm || ''), legalForms);
         const requestedServices = splitRequestedServices(enquiry.requestedServices || []);
@@ -523,7 +523,7 @@ export function AddEnquiryPage() {
           keyContactEmail: enquiry.keyContactEmail || '',
           keyContactPhone: enquiry.keyContactPhone || '',
           keyContactPhoneCountry: inferPhoneCountry(enquiry.keyContactPhone || ''),
-          keyContactPosition: keyContactPosition.value,
+          keyContactPosition: keyContactPosition.value.join(', '),
           keyContactPositionOther: keyContactPosition.otherValue,
           keyContactNationality: keyContactNationality.value,
           keyContactNationalityOther: keyContactNationality.otherValue,
@@ -593,6 +593,7 @@ export function AddEnquiryPage() {
       form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
         ? {}
         : {
+            documentPeople: availableDocumentPeople,
             keyContactNationality: nationalityText(form.keyContactNationality, form.keyContactNationalityOther),
             keyContactIdentityNumber: keyContactIdentityNumber(form),
             keyContactIdentityTypes: form.keyContactIdentityTypes,
@@ -625,7 +626,7 @@ export function AddEnquiryPage() {
               management: form.preliminaryManagement.map((row) => ({ ...row, position: row.positions?.length ? row.positions.map((item) => (item === 'Other' ? row.positionOther?.trim() || '' : item)).filter(Boolean).join(', ') : row.position })),
               contact: {
                 fullName: form.keyContactName,
-                position: resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther),
+                position: contactPositions(form),
                 nationality: nationalityText(form.keyContactNationality, form.keyContactNationalityOther),
                 passportNumber: form.keyContactPassportNumber,
                 passportExpiryDate: form.keyContactPassportExpiryDate,
@@ -647,9 +648,9 @@ export function AddEnquiryPage() {
       proposedCompanyName: form.enquiryType === 'PROPOSED_COMPANY' ? form.proposedCompanyName : undefined,
       requestedServices: resolvedRequestedServices(form),
       keyContactName: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactName || undefined,
-      keyContactEmail: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactEmail || undefined,
+      keyContactEmail: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactEmail.trim() || undefined,
       keyContactPhone: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : form.keyContactPhone || undefined,
-      keyContactPosition: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : resolveOtherValue(form.keyContactPosition, form.keyContactPositionOther) || undefined,
+      keyContactPosition: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : contactPositions(form) || undefined,
       headOfficeCountry: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.headOfficeCountry || undefined : undefined,
       branchCountry: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.branchCountry || undefined : undefined,
       areaOfOperation: form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? form.areaOfOperation || undefined : undefined,
@@ -701,6 +702,9 @@ export function AddEnquiryPage() {
   }
 
   async function saveDraft() {
+    const emailError = form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? null : contactEmailError(form.keyContactEmail);
+    if (emailError) { setError(emailError); setActiveStep('contact'); return; }
+    if (extractionPending.current) { setError('Wait for the attachments to finish processing before saving.'); return; }
     if (busyRef.current) return;
     busyRef.current = true;
     setSaving(true);
@@ -733,6 +737,7 @@ export function AddEnquiryPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (extractionPending.current) { setError('Wait for the attachments to finish processing before submitting.'); return; }
     if (busyRef.current) return;
     busyRef.current = true;
     setSaving(true);
@@ -778,6 +783,47 @@ export function AddEnquiryPage() {
     if (!code || id) return message;
     return `Enquiry ${code} was saved, but this step failed: ${message} Press the button again to retry - it updates ${code} and does not create a new enquiry.`;
   }
+
+  useEffect(() => {
+    if (loading) return;
+    const previous = previousEnquiryType.current;
+    previousEnquiryType.current = form.enquiryType;
+    if (!previous || previous === form.enquiryType || form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') return;
+    let cancelled = false;
+    extractionPending.current += 1;
+    setSuccess('Applying attached documents to the selected enquiry type...');
+    const replay = async () => {
+      const warnings: string[] = [];
+      for (const attachment of attachments) {
+        if (cancelled) break;
+        if (/signature|stamp|screening|crrf/i.test(attachment.documentType)) continue;
+        const files = [...(attachment.files || [])];
+        for (const stored of attachment.storedFiles || fallbackStoredFiles(attachment)) {
+          if (!stored.id || !id || files.some(file => file.name === stored.fileName)) continue;
+          if (!/\.(pdf|png|jpe?g|webp)$/i.test(stored.fileName)) continue;
+          if (stored.size && stored.size > 10 * 1024 * 1024) { warnings.push(`${stored.fileName}: too large to extract; enter details manually.`); continue; }
+          try {
+            let file = savedExtractionFiles.current.get(stored.id);
+            if (!file) {
+              file = await getEnquiryAttachmentFile(id, { id: stored.id, fileName: stored.fileName, mimeType: stored.mimeType });
+              savedExtractionFiles.current.set(stored.id, file);
+            }
+            files.push(file);
+          } catch { warnings.push(`${stored.fileName}: unable to read the saved copy.`); }
+        }
+        if (cancelled || !files.length) continue;
+        const result = await readAttachment(attachment.documentType, files);
+        if (result?.tone === 'warn') warnings.push(result.text);
+      }
+      if (!cancelled) {
+        setSuccess('Attached document details applied to the selected enquiry type. Existing entries were kept.');
+        if (warnings.length) setError(warnings.join(' '));
+      }
+    };
+    void replay().catch(() => { if (!cancelled) setError('Some attached documents could not be applied. Enter the missing details manually.'); })
+      .finally(() => { extractionPending.current -= 1; });
+    return () => { cancelled = true; };
+  }, [form.enquiryType, loading]);
 
   if (loading) return <p className="text-sm text-slate-500">Loading enquiry details...</p>;
 
@@ -858,42 +904,72 @@ export function AddEnquiryPage() {
       next = applyAutomaticIdentity(current, enquiryPeople, application.target, application.fields);
       }
     }
-    const documentType = application.kind === 'COMPANY' ? (current.enquiryType === 'PROPOSED_COMPANY' ? PROPOSED_COMPANY_DOCUMENT : 'Corporate Documents - Company') : application.target === 'contact' ? KEY_CONTACT_ID_DOCUMENT : IDENTITY_COPIES_DOCUMENT;
     formRef.current = next;
     setFormState(next);
-    setAttachments(items => withAttachmentCopy(current.enquiryType === 'PROPOSED_COMPANY' && next.proposedLegalForm !== current.proposedLegalForm ? mergeAttachmentTemplates(current.enquiryType, resolveOtherValue(next.proposedLegalForm, next.proposedLegalFormOther), items) : items, documentType, application.file));
     setSuccess('Document details filled automatically. Save the enquiry to keep the details and attachments.');
   }
 
-  async function readCompanyCr(file: File, attach = true): Promise<FillOutcome> {
-    const reading = await readEnquiryCompanyDocument(file);
-    if (attach) setAttachments((current) => withAttachmentCopy(current, 'Corporate Documents - Company', file));
-    const result = companyFill(formRef.current, reading, [{ field: 'legalName', key: 'companyName', label: 'company name' }]);
-    if (Object.keys(result.filled).length) setForm((current) => ({ ...current, ...result.filled }));
-    const outcome = companyFillOutcome(reading, result, () => setForm((current) => ({ ...current, ...result.replace })));
-    const number = reading.company.commercialRegistrationNo ? ` CR number on the copy: ${reading.company.commercialRegistrationNo}.` : '';
-    return { ...outcome, text: `${outcome.text}${number}${attach ? ' The CR was added to the attachments.' : ''}` };
+  async function viewContactCopy(name: string) {
+    const pending = attachments.flatMap(attachment => attachment.files || []).find(file => file.name === name);
+    if (pending) {
+      const url = URL.createObjectURL(pending);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return;
+    }
+    const saved = attachments.flatMap(attachment => attachment.storedFiles || fallbackStoredFiles(attachment)).find(file => file.fileName === name && file.id);
+    if (!saved?.id || !id) { setError('This copy is not available. Check the Attachments step.'); return; }
+    try { await viewEnquiryAttachment(id, { id: saved.id, fileName: saved.fileName, mimeType: saved.mimeType }); }
+    catch (error) { setError(getRequestErrorMessage(error, 'Unable to open this identity copy.')); }
   }
 
-  // The key contact's passport / QID: number, expiry, date of birth and name (when empty). `kind` AUTO takes the type
-  // found on the document (used for files added on the Attachments step).
-  async function readKeyContactCopy(file: File, kind: string, attach = true): Promise<FillOutcome> {
-    const result = await readEnquiryIdentityDocument(kind === 'QID' ? 'QID' : 'PASSPORT', file);
-    if (attach) setAttachments((current) => withAttachmentCopy(current, KEY_CONTACT_ID_DOCUMENT, file));
-    const readType = kind === 'AUTO' ? (result.found && result.identityType) || 'PASSPORT' : (kind as IdentityType);
-    const contact = enquiryPeople.read(formRef.current).find((person) => person.slot === 'contact')?.row || {};
-    const { change, outcome } = identityFill(contact, result, readType);
-    if (Object.keys(change).length) setForm((current) => enquiryPeople.write(current, 'contact', change));
-    return { ...outcome, text: `${outcome.text}${attach ? ' The copy was added to the attachments.' : ''}` };
-  }
-
-  // Files added on the Attachments step are read too when their type says what they are.
+  // Serialize batches so later files use the latest form and cannot overwrite earlier extraction.
   async function readAttachment(documentType: string, files: File[]): Promise<FillOutcome | null> {
-    const file = files.find((item) => /\.(pdf|png|jpe?g|gif|webp)$/i.test(item.name) || /^(?:application\/pdf|image\/)/.test(item.type));
-    if (!file) return null;
-    if (documentType === 'Corporate Documents - Company' && formRef.current.enquiryType === 'EXISTING_LEGAL_ENTITY') return readCompanyCr(file, false);
-    if (documentType === KEY_CONTACT_ID_DOCUMENT) return readKeyContactCopy(file, 'AUTO', false);
-    return null;
+    if (formRef.current.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES') return null;
+    if (/signature|stamp|screening|crrf/i.test(documentType)) return null;
+    extractionPending.current += 1;
+    const task = extractionQueue.current.then(async (): Promise<FillOutcome> => {
+      const notes: string[] = [];
+      let warning = false;
+      for (const file of files) {
+        if (validateIntakeFile(file)) { warning = true; notes.push(`${file.name}: added; enter its details manually.`); continue; }
+        try {
+          const companyDocument = /Commercial Registration|Corporate Documents - Company|Entity Card|Certificate of Incorporation|Articles of Association|Tax Card|CR of legal entity parties/i.test(documentType);
+          let reading = documentReadings.current.get(file);
+          if (!reading) {
+            reading = await readIntakeDocument(file, companyDocument ? 'COMPANY' : 'AUTO', readEnquiryCompanyDocument, readEnquiryIdentityDocument);
+            documentReadings.current.set(file, reading);
+          }
+          if (reading.kind === 'IDENTITY') {
+            setDocumentPeople(current => mergeDocumentPerson(current, reading.data, file.name));
+            notes.push(`${file.name}: person available to select in the form.`);
+            continue;
+          }
+          const current = formRef.current;
+          const outcome = automaticIntakeApplication(reading, {
+            file, company: current as unknown as Record<string, unknown>,
+            companyTargets: current.enquiryType === 'PROPOSED_COMPANY' ? [
+              { field: 'legalName', key: 'proposedCompanyName', label: 'Proposed company name' },
+              { field: 'legalForm', key: 'proposedLegalForm', label: 'Legal form', options: legalForms, otherKey: 'proposedLegalFormOther' },
+              { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'Country of incorporation', options: countryOptions },
+              { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'Business activity' },
+              { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'Registered office address' }
+            ] : [{ field: 'legalName', key: 'companyName', label: 'Company name' }, { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }],
+            peopleEnabled: current.enquiryType === 'PROPOSED_COMPANY',
+            targets: [...enquiryPeople.read(current).filter(person => !person.hidden).map(person => ({ value: person.slot, label: person.row.fullName || person.role, row: person.row, omitFields: person.slot === 'contact' ? ['dateOfBirth'] : [], nationalityOptions: countryOptions })), ...(current.enquiryType === 'PROPOSED_COMPANY' ? newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions })) : [])]
+          });
+          if (outcome.application) {
+            // Corporate shareholder copies must not populate the applicant company's own details.
+            if (documentType === 'CR of legal entity parties' && outcome.application.kind === 'COMPANY') outcome.application.fields = [];
+            await applyIntake(outcome.application);
+          } else warning = true;
+          notes.push(`${file.name}: ${outcome.note}`);
+        } catch { warning = true; notes.push(`${file.name}: added, but details could not be read. Enter them manually.`); }
+      }
+      return { tone: warning ? 'warn' : 'ok', text: notes.join(' ') };
+    });
+    extractionQueue.current = task.catch(() => undefined);
+    try { return await task; } finally { extractionPending.current -= 1; }
   }
 
   // The declaration is usually signed by someone already entered (director, signatory).
@@ -949,13 +1025,6 @@ export function AddEnquiryPage() {
       ) : null}
       {success ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800" role="status">{success}</p> : null}
 
-      {form.enquiryType !== 'CURRENT_CLIENT_NEW_SERVICES' && <DocumentIntakePanel key={`${id || 'new'}:${form.enquiryType}`} company={form as unknown as Record<string, unknown>} companyTargets={form.enquiryType === 'PROPOSED_COMPANY' ? [
-        { field: 'legalName', key: 'proposedCompanyName', label: 'Proposed company name' },
-        { field: 'legalForm', key: 'proposedLegalForm', label: 'Legal form', options: legalForms, otherKey: 'proposedLegalFormOther' },
-        { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'Country of incorporation', options: countryOptions },
-        { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'Business activity' },
-        { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'Registered office address' }
-      ] : [{ field: 'legalName', key: 'companyName', label: 'Company name' }, { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }]} peopleEnabled={form.enquiryType === 'PROPOSED_COMPANY'} targets={[...enquiryPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row, omitFields: person.slot === 'contact' ? ['dateOfBirth'] : [], nationalityOptions: countryOptions })), ...(form.enquiryType === 'PROPOSED_COMPANY' ? newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions })) : [])]} disabled={saving} read={(file, kind) => readIntakeDocument(file, kind, readEnquiryCompanyDocument, readEnquiryIdentityDocument)} apply={applyIntake} />}
 
       <section className={`rounded-lg border border-slate-200 bg-white ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
         <div className={`border-b border-slate-200 px-5 py-4 ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:col-span-2' : ''}`}>
@@ -993,10 +1062,11 @@ export function AddEnquiryPage() {
                 options={enquiryTypes}
                 optionLabels={enquiryTypeLabels}
                 onChange={(value) => {
+                  if (extractionPending.current) { setError('Wait for the attachments to finish processing before changing enquiry type.'); return; }
                   const enquiryType = value as EnquiryType;
                   setForm({ ...form, enquiryType });
                   setAttachments(mergeAttachmentTemplates(enquiryType, resolveOtherValue(form.proposedLegalForm, form.proposedLegalFormOther), attachments));
-                  setActiveStep('details');
+                  setActiveStep('attachments');
                 }}
                 wide
               />
@@ -1049,24 +1119,24 @@ export function AddEnquiryPage() {
 
           {currentStep.id === 'contact' ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <SamePersonPicker people={people} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} />
-              <DocumentFillBar label="Fill from a copy:" options={[{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]} onRead={(file, kind) => readKeyContactCopy(file, kind)} />
+              <SamePersonPicker people={selectablePeople} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} label="Select person" />
               <label className="text-sm font-medium text-slate-700">
                 Full name <RequiredMark />
                 <input required value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
               </label>
-              <SearchableSelect
+              <SearchableMultiSelect
                 label="Position *"
-                value={form.keyContactPosition}
+                value={splitList(form.keyContactPosition)}
                 otherValue={form.keyContactPositionOther}
                 options={positionOptions}
-                onChange={(value) => setForm({ ...form, keyContactPosition: value, ...(value === 'Other' ? {} : { keyContactPositionOther: '' }) })}
+                onChange={(value) => setForm({ ...form, keyContactPosition: value.join(', '), ...(value.includes('Other') ? {} : { keyContactPositionOther: '' }) })}
                 onOtherChange={(value) => setForm({ ...form, keyContactPositionOther: value })}
                 allowOther
               />
               <label className="text-sm font-medium text-slate-700">
                 Email
-                <input type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                <input type="email" value={form.keyContactEmail} onChange={(event) => setForm({ ...form, keyContactEmail: event.target.value })} aria-invalid={Boolean(contactEmailError(form.keyContactEmail))} aria-describedby={contactEmailError(form.keyContactEmail) ? 'contact-email-error' : undefined} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                {contactEmailError(form.keyContactEmail) ? <span id="contact-email-error" role="alert" className="mt-1 block text-xs text-red-700">{contactEmailError(form.keyContactEmail)}</span> : null}
               </label>
               <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
                 <SearchableSelect
@@ -1099,6 +1169,16 @@ export function AddEnquiryPage() {
                 placeholder="Select Passport and/or QID"
                 wide
               />
+              <div data-contact-copies className="min-w-0 rounded-md border border-slate-200 p-3 md:col-span-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="flex items-center gap-2 text-sm font-medium text-slate-800"><Paperclip aria-hidden="true" className="h-4 w-4 text-slate-500" />Passport / QID copies</p>
+                  <button type="button" onClick={() => goToStep('attachments')} className="text-xs font-semibold text-brand-700 hover:underline">Attachments</button>
+                </div>
+                {contactCopies.length ? <ul className="mt-2 divide-y divide-slate-100">{contactCopies.map(name => <li key={name} className="flex min-w-0 items-center justify-between gap-3 py-2">
+                  <span className="min-w-0 break-all text-sm text-slate-600">{name}</span>
+                  <button type="button" onClick={() => void viewContactCopy(name)} aria-label={`View ${name}`} className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50"><Eye aria-hidden="true" className="h-4 w-4" />View</button>
+                </li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No linked identity copies.</p>}
+              </div>
               {(form.keyContactIdentityTypes.includes('Passport') || !form.keyContactIdentityTypes.length) ? (
                 <>
                   <label className="text-sm font-medium text-slate-700">
@@ -1347,9 +1427,9 @@ function ProposedCompanyPreview({ form, attachments }: { form: EnquiryValidation
       </PdfSection>
       <PdfSection title="Section D: Required Documents">
         <PdfTable headers={['No.', 'Documents', 'Description', 'Yes/No']} rows={[
-          ['1', 'Qatar ID / Passport copies', 'For all natural persons: Shareholder, UBO, Director, SEF, Secretary, and authorized signatory.', attachmentDisplayNames(attachments[0] || { documentType: '', fileName: '' }).length ? 'Yes' : 'No'],
-          ['2', 'National address certificates', 'Natural persons resident in Qatar.', attachments.some((attachment) => attachment.documentType.toLowerCase().includes('address')) ? 'Yes' : 'No'],
-          ['3', 'CR of legal entities', 'If shareholders are corporate entities, provide CR of each entity until natural persons are identified.', attachments.some((attachment) => attachment.documentType.toLowerCase().includes('corporate')) ? 'Yes' : 'No']
+          ['1', 'Qatar ID / Passport copies', 'For all natural persons: Shareholder, UBO, Director, SEF, Secretary, and authorized signatory.', attachments.some(attachment => /QID|Passport|Identity Proof/i.test(attachment.documentType) && attachmentDisplayNames(attachment).length) ? 'Yes' : 'No'],
+          ['2', 'National address certificates', 'Natural persons resident in Qatar.', attachments.some((attachment) => attachment.documentType.toLowerCase().includes('address') && attachmentDisplayNames(attachment).length) ? 'Yes' : 'No'],
+          ['3', 'CR of legal entities', 'If shareholders are corporate entities, provide CR of each entity until natural persons are identified.', attachments.some((attachment) => /corporate|CR of legal entity parties/i.test(attachment.documentType) && attachmentDisplayNames(attachment).length) ? 'Yes' : 'No']
         ]} />
       </PdfSection>
       <div className="mt-16 border-t-4 border-black pt-10">
@@ -1437,6 +1517,7 @@ function withAttachmentCopy(attachments: AttachmentDraft[], documentType: string
 function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label: string; description: string }> {
   const steps: Array<{ id: EnquiryStep; label: string; description: string }> = [
     { id: 'type', label: 'Type', description: 'Select the enquiry category so the correct fields are shown.' },
+    { id: 'attachments', label: 'Attachments', description: 'Upload supporting documents.' },
     { id: 'details', label: 'Details', description: 'Capture the company/client details and requested Newoon services.' }
   ];
 
@@ -1454,15 +1535,6 @@ function enquirySteps(enquiryType: EnquiryType): Array<{ id: EnquiryStep; label:
   if (enquiryType === 'EXISTING_LEGAL_ENTITY') {
     steps.push({ id: 'exposure', label: 'Exposure', description: 'Record the countries and operating areas connected to this entity.' });
   }
-
-  steps.push({
-    id: 'attachments',
-    label: 'Attachments',
-    description:
-      enquiryType === 'CURRENT_CLIENT_NEW_SERVICES'
-        ? 'Upload additional documents for the requested new services.'
-        : 'Capture the relevant document names for AML review.'
-  });
 
   steps.push({ id: 'notes', label: 'Notes', description: 'Add any supporting context before saving the enquiry.' });
   return steps;

@@ -1,4 +1,5 @@
 import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X, LoaderCircle } from 'lucide-react';
+import { kycDocumentTypes } from '../utils/kyc-document-types';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
@@ -63,17 +64,7 @@ const sections = [
   { id: 'section-h', key: 'sectionH', label: 'H. Internal Use Only' }
 ] as const;
 
-const requiredDocuments = [
-  'Commercial Registration / CR Extract',
-  'Entity Card / Computer Card',
-  'Certificate of Incorporation',
-  'Articles of Association',
-  'QID / Passport copies',
-  'CR of legal entity parties',
-  'National address certificates',
-  'Latest Audited Financial Statements',
-  'Tax Card'
-];
+const requiredDocuments = kycDocumentTypes;
 
 // Copies read with "Fill from a copy" are also kept in the Section F checklist under these document types.
 const CR_DOCUMENT = 'Commercial Registration / CR Extract';

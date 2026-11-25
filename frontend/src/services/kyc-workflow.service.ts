@@ -575,7 +575,7 @@ export function uploadEnquiryAttachmentFiles(id: string, payload: { documentType
   }).then((response) => response.data);
 }
 
-export async function viewEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {
+export async function viewEnquiryAttachment(enquiryId: string, attachment: Pick<EnquiryAttachment, 'id' | 'fileName' | 'mimeType'>) {
   const response = await api.get(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, {
     responseType: 'blob'
   });
@@ -592,6 +592,11 @@ export async function viewEnquiryAttachment(enquiryId: string, attachment: Enqui
 
   downloadBlob(url, attachment.fileName);
   window.URL.revokeObjectURL(url);
+}
+
+export async function getEnquiryAttachmentFile(enquiryId: string, attachment: Pick<EnquiryAttachment, 'id' | 'fileName' | 'mimeType'>) {
+  const response = await api.get<Blob>(`/enquiries/${enquiryId}/attachments/${attachment.id}/view`, { responseType: 'blob' });
+  return new File([response.data], attachment.fileName, { type: attachment.mimeType || response.data.type || 'application/octet-stream' });
 }
 
 export async function downloadEnquiryAttachment(enquiryId: string, attachment: EnquiryAttachment) {

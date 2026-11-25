@@ -14,13 +14,13 @@ function calendarDate(value: string) {
 
 // Search only client-page data the actor can see. This predicate is always ANDed with the register's
 // existing tenant/allocation/status filters. Never search raw KYC JSON, review comments or file paths.
-export function clientSearchWhere(user: RequestUser, search: string): Prisma.ClientWhereInput {
+export function clientPersonSearchWhere(user: RequestUser, search: string): Prisma.ClientPersonWhereInput {
   const level = clientAccessLevel(user);
   const scope = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: user.tenantId || '' };
   const visibleRoles: Prisma.ClientPersonRoleWhereInput = level === 'FULL' ? scope : { ...scope, role: { not: 'UBO' } };
   const visiblePerson: Prisma.ClientPersonWhereInput = { ...scope, archivedAt: null, roles: { some: visibleRoles } };
   const terms = [...new Set(search.trim().slice(0, 120).split(/\s+/).filter(Boolean))];
-  const predicates = terms.map((term): Prisma.ClientWhereInput => {
+  const predicates = terms.map((term): Prisma.ClientPersonWhereInput => {
     const text = { contains: term, mode: 'insensitive' as const };
     const date = calendarDate(term);
     const roleTerm = term.toLowerCase().replace(/authorized/g, 'authorised');
@@ -43,6 +43,20 @@ export function clientSearchWhere(user: RequestUser, search: string): Prisma.Cli
       personFields.push({ dateOfBirth: date }, { qidExpiry: date }, { nationalAddressExpiry: date });
       if (level !== 'ALLOCATED') personFields.push({ passports: { some: { ...scope, expiryDate: date } } });
     }
+    return { OR: personFields };
+  });
+  return { AND: [visiblePerson, ...predicates] };
+}
+
+export function clientSearchWhere(user: RequestUser, search: string): Prisma.ClientWhereInput {
+  const level = clientAccessLevel(user);
+  const scope = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: user.tenantId || '' };
+  const visibleRoles: Prisma.ClientPersonRoleWhereInput = level === 'FULL' ? scope : { ...scope, role: { not: 'UBO' } };
+  const visiblePerson: Prisma.ClientPersonWhereInput = { ...scope, archivedAt: null, roles: { some: visibleRoles } };
+  const terms = [...new Set(search.trim().slice(0, 120).split(/\s+/).filter(Boolean))];
+  const predicates = terms.map((term): Prisma.ClientWhereInput => {
+    const text = { contains: term, mode: 'insensitive' as const };
+    const date = calendarDate(term);
     const or: Prisma.ClientWhereInput[] = [
       { name: text }, { clientCode: text }, { registrationNumber: text }, { email: text },
       { phone: text }, { address: text }, { country: text }, { industry: text }, { statusReason: text }, { status: text },
@@ -56,7 +70,7 @@ export function clientSearchWhere(user: RequestUser, search: string): Prisma.Cli
       ] } } },
       { contacts: { some: { ...scope, OR: [{ name: text }, { email: text }, { phone: text }, { position: text }] } } },
       { engagements: { some: { ...scope, OR: [{ engagementNumber: text }, { serviceName: text }, { description: text }] } } },
-      { people: { some: { AND: [visiblePerson, { OR: personFields }] } } }
+      { people: { some: clientPersonSearchWhere(user, term) } }
     ];
     const jurisdictions = Object.values(ClientJurisdiction).filter(value => value.toLowerCase().includes(term.toLowerCase()));
     if (jurisdictions.length) or.push({ jurisdiction: { in: jurisdictions } });

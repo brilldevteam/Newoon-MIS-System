@@ -24,6 +24,17 @@ import { hasAreaAccess, workflowRoles } from '../utils/access-control';
 
 const PAGE_SIZE = 25;
 
+function personMatchLabels(person: NonNullable<ComplianceClient['matchedPeople']>[number], search: string) {
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const fields: Array<[string, string | null | undefined]> = [
+    ['Name', person.name], ['Title', person.title], ['QID', person.qidNumber],
+    ['Passport', person.passports.join(' ')], ['Email', person.email],
+    ['Identity', person.identity], ['Position', person.roles.join(' ')]
+  ];
+  return fields.filter(([, value]) => value && terms.some(term => value.toLowerCase().includes(term)))
+    .map(([label, value]) => `${label}: ${value}`);
+}
+
 const riskTone: Record<string, string> = {
   HIGH: 'bg-rose-50 text-rose-700 ring-rose-200',
   MEDIUM: 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -309,12 +320,18 @@ export function ComplianceClientListPage() {
           </div>
         </div>
 
+        {filters.search && data && !loading ? (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            <span>Found <strong>{data.pagination.total}</strong> matching clients for <strong>{filters.search}</strong></span>
+            <button type="button" onClick={() => setSearchInput('')} className="font-medium underline underline-offset-2">Clear search</button>
+          </div>
+        ) : null}
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Client</th>
+                <th className="px-4 py-3">{filters.search ? 'Matched person / client' : 'Client'}</th>
                 <th className="px-4 py-3">CR / QFC No.</th>
                 {showRisk ? <th className="px-4 py-3">CDD Type</th> : null}
                 {showRisk ? <th className="px-4 py-3">Risk</th> : null}
@@ -337,7 +354,20 @@ export function ComplianceClientListPage() {
                     <tr key={client.id} className={`hover:bg-slate-50 ${loading ? 'opacity-60' : ''}`}>
                       <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">{client.clientCode ?? '—'}</td>
                       <td className="max-w-xs px-4 py-3">
-                        <Link to={`/compliance/clients/${client.id}`} className="font-medium text-brand-700 hover:text-brand-800">{client.name}</Link>
+                        {client.matchedPeople?.length ? <div className="mb-3 space-y-3">{client.matchedPeople.map(person => <div key={person.id} data-matched-person className="border-l-2 border-brand-200 pl-3">
+                          <Link to={`/compliance/clients/${client.id}`} className="break-words font-semibold text-slate-900 hover:text-brand-700">{person.title ? `${person.title} ` : ''}{person.name}</Link>
+                          {!!person.roles.length && <p className="mt-1 break-words text-xs text-slate-500">{person.roles.join(' / ')}</p>}
+                          <div className="mt-2 flex flex-wrap gap-1">{personMatchLabels(person, filters.search || '').map(label => (
+                            <span key={label} data-search-match className="max-w-full break-words rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">{label}</span>
+                          ))}</div>
+                          <dl className="mt-1 space-y-1 break-all text-xs text-slate-600">
+                            {person.qidNumber && <div><dt className="inline font-medium">QID: </dt><dd className="inline">{person.qidNumber}</dd></div>}
+                            {!!person.passports.length && <div><dt className="inline font-medium">Passport: </dt><dd className="inline">{person.passports.join(', ')}</dd></div>}
+                            {person.identity && <div><dt className="inline font-medium">Identity: </dt><dd className="inline">{person.identity}</dd></div>}
+                            {person.email && <div><dt className="inline font-medium">Email: </dt><dd className="inline">{person.email}</dd></div>}
+                          </dl>
+                        </div>)}</div> : null}
+                        {client.matchedPeople?.length ? <span className="text-xs text-slate-500">Client: </span> : null}<Link to={`/compliance/clients/${client.id}`} className={client.matchedPeople?.length ? 'break-words text-xs font-medium text-brand-700 hover:text-brand-800' : 'font-medium text-brand-700 hover:text-brand-800'}>{client.name}</Link>
                         <RowFlags client={client} />
                         <p className="truncate text-xs text-slate-500" title={client.latestEngagement?.serviceName || ''}>
                           {client.latestEngagement
@@ -445,7 +475,7 @@ export function ComplianceClientListPage() {
         {pagination && pagination.total > 0 ? (
           <div className="flex flex-col gap-2 border-t border-slate-200 px-4 py-3 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
             <span>
-              Showing {(pagination.page - 1) * pagination.pageSize + 1}–{Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}
+              Showing {(pagination.page - 1) * pagination.pageSize + 1}–{Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}{filters.search ? ' matching clients' : ''}
             </span>
             <div className="flex items-center gap-2">
               <button

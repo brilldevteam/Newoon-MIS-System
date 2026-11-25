@@ -72,8 +72,8 @@ export function AppLayout() {
   const location = useLocation();
   const isWorkspaceHome = location.pathname === '/workspace';
   const { user } = useAuth();
-  const isFocusedWorkspace = /^\/kyc\/[^/]+\/form$/.test(location.pathname);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const isFocusedWorkspace = /^\/kyc\/[^/]+\/form$/.test(location.pathname) || /^\/enquiries\/(?:new|[^/]+\/edit)$/.test(location.pathname);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(isFocusedWorkspace);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -209,6 +209,7 @@ export function AppLayout() {
               onClick={() => setIsSidebarCollapsed((current) => !current)}
               className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
               aria-label={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-expanded={!useCollapsedSidebar}
               title={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
             >
               {useCollapsedSidebar ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}

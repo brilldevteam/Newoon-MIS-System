@@ -7,6 +7,7 @@ export type ClientJurisdiction = 'QFC' | 'MOCI' | 'QFZ' | 'OTHER';
 export type ReviewState = 'OVERDUE' | 'DUE_SOON' | 'SCHEDULED' | 'NOT_SCHEDULED';
 
 export type ComplianceClient = {
+  matchedPeople?: Array<{ id: string; name: string; title: string | null; roles: string[]; qidNumber: string | null; passports: string[]; email: string | null; identity?: string | null }>;
   id: string;
   clientCode: string | null;
   name: string;

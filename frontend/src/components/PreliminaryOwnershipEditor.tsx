@@ -2,6 +2,7 @@ import { Building2, Plus, Trash2, UserRound, Check, ChevronDown } from 'lucide-r
 import { useEffect, useRef, useState } from 'react';
 import { SearchableMultiSelect, splitList } from './SearchableSelect';
 import { PreliminaryPersonFields } from './PreliminaryPersonFields';
+import { LinkedPersonPicker } from './SamePersonPicker';
 import { DocumentFillBar } from './DocumentFillBar';
 import { readEnquiryCompanyDocument } from '../services/kyc-workflow.service';
 import { companyFill, companyFillOutcome, FillOutcome } from '../utils/document-fill';
@@ -104,9 +105,10 @@ export function PreliminaryOwnershipEditor({ shareholders, ubos, countries, nati
         <button type="button" title="Remove" aria-label={`Remove ${row.fullName || 'owner'}`} onClick={() => remove(row, isShareholder)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
       </header>
       <div id={cardId} hidden={!expanded} className="space-y-4 p-4">
+        {!isCompany && <LinkedPersonPicker row={row} />}
         {isShareholder && !isParentCompany && <div role="group" aria-label="Shareholder type" className="inline-flex gap-1 rounded-md bg-slate-100 p-1">{[['Individual', 'Person', UserRound], [CORPORATE_ENTITY, 'Company', Building2]].map(([value, label, ButtonIcon]) => { const TypeIcon = ButtonIcon as typeof UserRound; return <button key={String(value)} type="button" aria-pressed={(row.shareholderType || 'Individual') === value} onClick={() => patch(row, true, { shareholderType: String(value) })} className={`inline-flex min-h-9 items-center gap-2 rounded px-3 text-sm font-medium ${(row.shareholderType || 'Individual') === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600'}`}><TypeIcon className="h-4 w-4" />{String(label)}</button>; })}</div>}
         <div className="grid min-w-0 gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>
-          <label className="min-w-0 text-sm font-medium text-slate-700">{isCompany ? 'Company name' : 'Full name'}<input className={inputClass} value={row.fullName} onChange={(event) => patch(row, isShareholder, { fullName: event.target.value })} /></label>
+          <label className="min-w-0 text-sm font-medium text-slate-700" style={isCompany ? undefined : { gridColumn: '1 / -1' }}>{isCompany ? 'Company name' : 'Full name'}<input className={inputClass} value={row.fullName} onChange={(event) => patch(row, isShareholder, { fullName: event.target.value })} /></label>
           {isCompany && <label className="min-w-0 text-sm font-medium text-slate-700">Registration number (CR)<input type="text" className={inputClass} value={row.identityNumber} onChange={(event) => patch(row, isShareholder, { identityNumber: event.target.value })} /></label>}
           {isCompany && <DocumentFillBar label="Fill from the company's CR:" options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => readCompanyCopy(row, file)} />}
           <PreliminaryPersonFields row={row} isCompany={isCompany} onChange={(change) => patch(row, isShareholder, change)} onIdentityFile={onIdentityFile ? (file, type) => onIdentityFile(file, type, row.fullName) : undefined} />
