@@ -964,6 +964,8 @@ export function AddEnquiryPage() {
   const steps = enquirySteps(form.enquiryType);
   const activeStepIndex = Math.max(0, steps.findIndex((step) => step.id === activeStep));
   const currentStep = steps[activeStepIndex] || steps[0];
+  // The Preliminary KYC preview of a proposed company starts at the Details step, after the Type and Attachments steps.
+  const showPreview = form.enquiryType === 'PROPOSED_COMPANY' && !['type', 'attachments'].includes(currentStep.id);
   const currentStepError = validateEnquiryStep(form, currentStep.id);
   const proposedAddressRequired = form.enquiryType === 'PROPOSED_COMPANY' && !isProposedAddressOptional(form);
 
@@ -1320,8 +1322,8 @@ export function AddEnquiryPage() {
       {success ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800" role="status">{success}</p> : null}
 
 
-      <section className={`rounded-lg border border-slate-200 bg-white ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
-        <div className={`border-b border-slate-200 px-5 py-4 ${form.enquiryType === 'PROPOSED_COMPANY' ? 'min-[1500px]:col-span-2' : ''}`}>
+      <section className={`rounded-lg border border-slate-200 bg-white ${showPreview ? 'min-[1500px]:grid min-[1500px]:grid-cols-[minmax(0,0.9fr)_minmax(520px,1.1fr)]' : ''}`}>
+        <div className={`border-b border-slate-200 px-5 py-4 ${showPreview ? 'min-[1500px]:col-span-2' : ''}`}>
           <div className="flex flex-wrap gap-2">
             {steps.map((step, index) => {
               const accessError = getStepAccessError(step.id);
@@ -1677,7 +1679,7 @@ export function AddEnquiryPage() {
             </div>
           </div>
         </div>
-        {form.enquiryType === 'PROPOSED_COMPANY' ? <ProposedCompanyPreview form={form} attachments={attachments} /> : null}
+        {showPreview ? <ProposedCompanyPreview form={form} attachments={attachments} /> : null}
       </section>
     </form>
     </PeopleLinkContext.Provider>
