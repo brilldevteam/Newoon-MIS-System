@@ -995,3 +995,25 @@ Rollback requires the prior revision, a clean deployment checkout, reinstall/bui
 - Historical change reports/registers are discovery aids, not proof of deployment state.
 
 No real credentials, client records, or secrets are included here.
+
+## Enquiry attachments: people with positions (2026-11-28)
+
+- The enquiry Attachments step shows company documents as cards (new type **Company Profile**) and a **People: QID / Passport copies** section. Each uploaded QID / passport is read into a person (`details.documentPeople`, now with `positions`); files are stored under the required type `QID / Passport copies`.
+- Positions chosen there are written to the enquiry people by `frontend/src/utils/attachment-people.ts`: Shareholder/UBO to Ownership, other positions to Management, Contact Person to the key contact (only when it is empty). For a proposed company the KYC is created from those rows as before.
+- Other enquiry types have no Ownership/Management steps, so `backend/src/enquiries/document-people.ts` builds the KYC shareholder, UBO and manager rows from `details.documentPeople` when the enquiry is converted. No schema change or migration.
+- `UBO` and `Secretary` were added to the position dropdowns of the enquiry and client pages (the KYC form already had both).
+- Checks: `node frontend/scripts/check-attachment-people.cjs`, `node backend/scripts/check-enquiry-document-people.cjs` (after build).
+
+## Ministry CR reading and existing-company details (2026-11-28)
+
+- `readMociSummary` in `backend/src/compliance-clients/document-text-parser.ts` reads the Ministry of Commerce "Summary of commercial registry info" CR (bilingual layout with each English label under its value): name, CR number, legal form, capital, CR expiry, incorporation date, nationality, tax number, activities, owners (with %) and managers. Check: `node backend/scripts/check-moci-cr.cjs` (synthetic fixture).
+- The Details step of an existing legal entity now has the company fields (CR no, dates, country, place, legal form, address, capital, TIN, PO box, telephone, email, website, nature of business, industry, activities, financial year end, auditor). They are saved in `details.companyProfile` and copied into KYC Section A when the enquiry is converted.
+- Owners and managers read from a CR for an existing company become people cards (no copies yet) on the Attachments step; QID / passport copies are then added to each card. Check: `node frontend/scripts/check-existing-company-cr-fill.cjs`.
+- Not in KYC Section A (kept in `details.companyProfile` only): share capital, PO box, financial year end, approved auditor, place of incorporation.
+
+## KYC case workspace and people on documents (2026-11-28)
+
+- `frontend/src/layouts/KycCaseWorkspace.tsx` wraps every `/kyc/:id/*` page (not `new` / `edit`) with a sticky case bar and tabs (Overview, KYC Form, Screening, CRRF, Form history, Internal review). Tab visibility reuses `utils/kyc-case-access.ts` and `hasAreaAccess`; routes and guards are unchanged apart from being nested under the layout.
+- Return to BD on the case page is a header button with a confirmation dialog; the "Service & Proposal" panel was removed from the case page.
+- QID / passport copies show the person's name (and QID / Passport tag) on the enquiry details page, the KYC case documents list and KYC form Section F, from `details.documentPeople` of the source enquiry (`utils/person-copies.ts`). Files uploaded before this change have no type tag.
+- No schema change or migration. Manual tests only (no automated test suite): see the `check-*.cjs` scripts under `frontend/scripts` and `backend/scripts`.

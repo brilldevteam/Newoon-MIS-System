@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X, LoaderCircle } from 'lucide-react';
 import { kycDocumentTypes } from '../utils/kyc-document-types';
+import { personOfFile } from '../utils/person-copies';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
@@ -1746,10 +1747,7 @@ export function KycFormEditorPage() {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
         <div>
-          <Link to={`/kyc/${kycCase.id}`} className="text-sm font-medium text-brand-700 hover:text-brand-900">
-            Back to case
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-950">KYC Form Builder</h1>
+          <h1 className="text-2xl font-semibold text-slate-950">KYC Form Builder</h1>
           <p className="text-sm text-slate-500">
             {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'} | Version {form.version}
           </p>
@@ -1898,7 +1896,7 @@ export function KycFormEditorPage() {
               {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} fillBar={renderFillBar} /> : null}
               {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} personFlags={personFlags(form)} /> : null}
               {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} fillBar={renderFillBar} /> : null}
-              {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} onCompanyDocumentUploaded={(file) => readCompanyCr(file, false)} /> : null}
+              {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} onCompanyDocumentUploaded={(file) => readCompanyCr(file, false)} enquiryDetails={kycCase?.sourceEnquiry?.details} /> : null}
               {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} people={kycPeople.read(form)} /> : null}
               {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
             </fieldset>
@@ -1912,7 +1910,7 @@ export function KycFormEditorPage() {
 
 function KycFormSectionSidebar({ sections, active, onChange }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void }) {
   return (
-    <aside aria-label="KYC form sections" className="min-w-0 rounded-lg border border-slate-200 bg-white p-2 xl:col-span-2 2xl:sticky 2xl:top-20 2xl:col-span-1 2xl:h-fit"><div className="flex gap-1 overflow-x-auto 2xl:flex-col">
+    <aside aria-label="KYC form sections" className="min-w-0 rounded-lg border border-slate-200 bg-white p-2 xl:col-span-2 2xl:sticky 2xl:top-36 2xl:col-span-1 2xl:h-fit"><div className="flex gap-1 overflow-x-auto 2xl:flex-col">
       {sections.map((section, index) => (
         <button
           key={section.key}
@@ -2421,7 +2419,7 @@ function SectionEContactForm({ data, onChange, fillBar }: FormProps & { fillBar?
   </FormGrid>;
 }
 
-function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyDocumentUploaded }: FormProps & { caseId: string; onCompanyDocumentUploaded?: (file: File) => Promise<FillOutcome> }) {
+function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyDocumentUploaded, enquiryDetails }: FormProps & { caseId: string; onCompanyDocumentUploaded?: (file: File) => Promise<FillOutcome>; enquiryDetails?: unknown }) {
   const documents = data.documents || [];
   const additionalDocuments = data.additionalDocuments || [];
   const [uploadingKey, setUploadingKey] = useState('');
@@ -2525,6 +2523,11 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyD
                 emptyText="Upload supporting files for this document type."
                 onRemove={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
               />
+              {names.some((name) => personOfFile(enquiryDetails, name)) ? (
+                <ul aria-label="Whose copies these are" className="mt-2 space-y-1 text-xs text-slate-600">
+                  {names.map((name) => { const owner = personOfFile(enquiryDetails, name); return owner ? <li key={name}><span className="font-medium text-slate-800">{owner.name}</span>{owner.kind ? ` · ${owner.kind}` : ''} <span className="text-slate-400">({name})</span></li> : null; })}
+                </ul>
+              ) : null}
               {document.documentType === CR_DOCUMENT && onCompanyDocumentUploaded && crNote?.index !== index ? <p className="mt-2 text-xs text-slate-500">Uploading the CR here also fills the company details in Section A.</p> : null}
               {crNote?.index === index ? <FillNote outcome={crNote.outcome} onChange={(outcome) => setCrNote({ index, outcome })} /> : null}
             </div>

@@ -1,6 +1,6 @@
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { useToast } from '../components/ToastProvider';
 import { useAuth } from '../hooks/useAuth';
@@ -562,11 +562,7 @@ export function KycScreeningPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Link to={`/kyc/${id}`} className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
-          <ArrowLeft className="h-4 w-4" />
-          Back to case
-        </Link>
-        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Screening Workspace</h1>
+        <h1 className="text-2xl font-semibold text-slate-950">Screening Workspace</h1>
         <p className="mt-1 text-sm text-slate-500">Screen clients, shareholders, UBOs, managers, and manually added names before approval.</p>
       </div>
 

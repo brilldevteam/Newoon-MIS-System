@@ -37,6 +37,7 @@ const positionOptions = [
   'Primary Contact',
   'Secretary',
   'Shareholder',
+  'UBO',
   'Authorized Signatory',
   'SEF'
 ];

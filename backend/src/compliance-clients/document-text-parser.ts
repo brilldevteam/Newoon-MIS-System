@@ -134,17 +134,24 @@ export function parseDocumentText(typeKey: string, raw: string, layout?: TextLin
     documentNumber = idAfter(text, [/(?:document|certificate|reference|licen[cs]e)\s*(?:no\.?|number)/]);
   }
 
+  // The Ministry's printed summary has its own layout: when it is recognised its values replace the generic reading.
+  const moci = COMPANY_DOCUMENTS.includes(typeKey) && layout?.length ? readMociSummary(layout) : null;
+  if (moci) {
+    for (const key of Object.keys(company) as Array<keyof typeof company>) delete company[key];
+    Object.assign(company, moci.company);
+    documentNumber = moci.company.commercialRegistrationNo || documentNumber;
+  }
   for (const key of Object.keys(company) as Array<keyof typeof company>) if (!company[key]) delete company[key];
   return {
     document: {
       documentNumber,
-      holderName: typeKey === 'NATIONAL_ADDRESS' || typeKey === 'POWER_OF_ATTORNEY' ? after(text, [/(?:full\s*)?name/, /holder/], 200) : legalName,
+      holderName: typeKey === 'NATIONAL_ADDRESS' || typeKey === 'POWER_OF_ATTORNEY' ? after(text, [/(?:full\s*)?name/, /holder/], 200) : moci?.company.legalName || legalName,
       location: /Qatar/i.test(text) ? 'Qatar' : null,
       issueDate: issue,
-      expiryDate: expiry
+      expiryDate: moci?.company.crExpiryDate || expiry
     },
     company,
-    people: COMPANY_DOCUMENTS.includes(typeKey) ? fromLayout?.people || [] : []
+    people: COMPANY_DOCUMENTS.includes(typeKey) ? moci?.people || fromLayout?.people || [] : []
   };
 }
 
@@ -305,4 +312,152 @@ function readPeopleTables(lines: TextLine[]): SuggestedPerson[] {
     same.idNumber = same.idNumber || person.idNumber;
   }
   return merged.slice(0, 50);
+}
+
+// ---- Ministry of Commerce and Industry "Summary of commercial registry info" ----
+// The Qatar CR printed by the Ministry (Arabic and English side by side). Every English label is printed under its
+// value, long values wrap above and below their label, and the owner / director tables list one person per row. The
+// Arabic text has no Latin letters, so only the English cells are used; each value is the cell nearest above its label.
+
+const MOCI_TITLE = /summary\s*of\s*commercial\s*registry\s*info/i;
+const POSITION_ROLES: Array<[RegExp, SuggestedPerson['roles'][number]]> = [
+  [/chairman/i, 'CHAIRMAN'], [/managing\s*director/i, 'MANAGING_DIRECTOR'], [/general\s*manager/i, 'GENERAL_MANAGER'], [/director/i, 'DIRECTOR'],
+  [/manager/i, 'MANAGER'], [/secretary/i, 'SECRETARY'], [/signator/i, 'AUTHORISED_SIGNATORY'], [/\bceo\b|chief\s*executive/i, 'CEO']
+];
+
+function mociLegalForm(value: string) {
+  const compact = value.replace(/[\s.]/g, '').toUpperCase();
+  if (compact === 'WLL' || compact === 'LLC') return 'LLC';
+  return value.trim();
+}
+
+const titleCase = (value: string) => value.toLowerCase().replace(/\b([a-z])/g, (letter) => letter.toUpperCase());
+
+export function readMociSummary(input: TextLine[]): { company: Partial<Record<CompanyField, string>>; people: SuggestedPerson[] } | null {
+  const lines = input.map((line) => line.filter((cell) => /[A-Za-z0-9]/.test(cell.text) && bare(cell.text)).sort((a, b) => a.x - b.x)).filter((line) => line.length);
+  if (!lines.some((line) => MOCI_TITLE.test(line.map((cell) => cell.text).join(' ')))) return null;
+  const textOf = (cell: TextCell) => bare(cell.text);
+  const joined = (line: TextLine) => line.map(textOf).join(' ');
+  const find = (label: RegExp) => {
+    for (let index = 0; index < lines.length; index += 1) {
+      const cell = lines[index].find((item) => label.test(textOf(item)));
+      if (cell) return { index, cell };
+    }
+    return null;
+  };
+  // The value printed next to a label: the nearest matching cell of the lines just before or after the label line
+  // (values are centred in their row, so a two-line label can sit above or below its value).
+  const above = (label: RegExp, accept: RegExp = /./) => {
+    const found = find(label);
+    if (!found) return '';
+    const candidates: Array<{ cell: TextCell; distance: number }> = [];
+    for (const offset of [-1, 1, 2, 3]) {
+      for (const cell of lines[found.index + offset] || []) {
+        if (accept.test(textOf(cell)) && Math.abs(cell.x - found.cell.x) <= 130) candidates.push({ cell, distance: Math.abs(cell.x - found.cell.x) });
+      }
+    }
+    candidates.sort((x, y) => x.distance - y.distance);
+    return candidates[0] ? textOf(candidates[0].cell) : '';
+  };
+  const company: Partial<Record<CompanyField, string>> = {};
+
+  const crNumber = above(/^C\.?R\.?\s*Number$/i, /^\d{3,}$/);
+  if (crNumber) company.commercialRegistrationNo = crNumber;
+
+  // Legal form sits left of its label on the label line; the commercial name wraps above and below the line.
+  const nameLabel = find(/^Commercial\s*Name$/i);
+  const formLabel = find(/^Legal\s*form$/i);
+  if (formLabel) {
+    const form = lines[formLabel.index].filter((cell) => cell.x < formLabel.cell.x && !/^legal\s*form$/i.test(textOf(cell))).map(textOf).join(' ');
+    if (form) company.legalForm = mociLegalForm(form);
+  }
+  if (nameLabel) {
+    const side = (line: TextLine | undefined) => (line || []).filter((cell) => cell.x >= 200 && !/information|number|date|status|nationality|capital/i.test(textOf(cell))).map(textOf);
+    const sameLine = lines[nameLabel.index].filter((cell) => cell.x > nameLabel.cell.x + 20).map(textOf);
+    const name = [...side(lines[nameLabel.index - 1]), ...sameLine, ...(lines[nameLabel.index + 1] && lines[nameLabel.index + 1].length === 1 ? side(lines[nameLabel.index + 1]) : [])].join(' ').replace(/\s+/g, ' ').trim();
+    if (name) company.legalName = name;
+  }
+
+  const capital = above(/^Capital$/i, /^[\d,.]+$/);
+  if (capital) company.shareCapital = capital.replace(/,/g, '');
+  const expiry = parseDate(above(/^Expiry\s*Date$/i, /^\d{1,2}\/\d{1,2}\/\d{4}$/));
+  if (expiry) company.crExpiryDate = expiry;
+  const established = parseDate(above(/^Est\.?\s*Date$/i, /^\d{1,2}\/\d{1,2}\/\d{4}$/));
+  if (established) company.dateOfIncorporation = established;
+  const nationality = above(/^Nationality$/i, /^[A-Z][A-Z\s]+$/);
+  if (nationality) company.countryOfIncorporation = titleCase(nationality);
+  const tax = above(/^Tax\s*Registration\s*Number/i, /^\d{6,}$/);
+  if (tax) company.taxIdentificationNo = tax;
+
+  // Activities: rows of two columns; a row starts on the line holding the activity codes.
+  const start = find(/^Commercial\s*Activities$/i);
+  const end = find(/^Tax\s*Registration\s*Number/i);
+  if (start && end && end.index > start.index) {
+    type Row = { codes: Array<[number, string]>; left: string[]; right: string[] };
+    const rows: Row[] = [];
+    for (const line of lines.slice(start.index + 1, end.index)) {
+      const text = joined(line);
+      if (/activity\s*(?:name|code)/i.test(text)) continue;
+      const codes = line.filter((cell) => /^\d{4,6}$/.test(textOf(cell))).map((cell) => [cell.x, textOf(cell)] as [number, string]);
+      if (codes.length) rows.push({ codes, left: [], right: [] });
+      const row = rows[rows.length - 1];
+      if (!row) continue;
+      for (const cell of line) {
+        const value = textOf(cell);
+        if (/^\d{4,6}$/.test(value) || /^[•\-]$/.test(value)) continue;
+        (cell.x < 260 ? row.left : row.right).push(value.replace(/^[•\-]\s*/, ''));
+      }
+    }
+    const activities = rows.flatMap((row) => {
+      const code = (right: boolean) => row.codes.find(([x]) => (x >= 260) === right)?.[1];
+      return [[row.left.join(' ').trim(), code(false)], [row.right.join(' ').trim(), code(true)]].filter(([name]) => name).map(([name, number]) => (number ? `${name} (${number})` : name));
+    });
+    if (activities.length) company.licenseActivities = activities.join('; ').slice(0, 1000);
+  }
+
+  // Owners (percentage, id, name) then directors (position, id, name); nationality is on the following line.
+  const ownersAt = find(/^Owner\s*Name\s*or\s*Partners$/i)?.index ?? -1;
+  const directorsAt = find(/^Directors\s*Names$/i)?.index ?? -1;
+  const people: SuggestedPerson[] = [];
+  const byId = new Map<string, SuggestedPerson>();
+  const addPerson = (person: SuggestedPerson) => {
+    const existing = person.idNumber ? byId.get(person.idNumber) : undefined;
+    if (existing) {
+      existing.roles = [...new Set([...existing.roles, ...person.roles])];
+      existing.sharePercentage = existing.sharePercentage || person.sharePercentage;
+      existing.nationality = existing.nationality || person.nationality;
+      return;
+    }
+    people.push(person);
+    if (person.idNumber) byId.set(person.idNumber, person);
+  };
+  const isId = (cell: TextCell) => /^\d{8,}$/.test(textOf(cell));
+  const readRows = (from: number, to: number, owners: boolean) => {
+    for (let index = from + 1; index < to; index += 1) {
+      const id = lines[index].find(isId);
+      if (!id) continue;
+      const name: string[] = lines[index].filter((cell) => cell.x > id.x && !isId(cell)).map(textOf);
+      let country = '';
+      let position = '';
+      for (let follow = index + 1; follow < to && !lines[follow].some(isId) && follow < index + 5; follow += 1) {
+        for (const cell of lines[follow]) {
+          const value = textOf(cell);
+          if (/^(?:active|inactive|cancelled|suspended)$/i.test(value) || /^page\b|^\d+$/i.test(value) || MOCI_TITLE.test(value)) continue;
+          if (cell.x > 300) name.push(value);
+          else if (/^[A-Za-z][A-Za-z\s]+$/.test(value) && !country && !/authority|manager|director|chairman|secretary|signator/i.test(value)) country = value;
+          else if (/manager|director|chairman|secretary|signator/i.test(value)) position = value.replace(/\s*-\s*$/, '');
+        }
+      }
+      // Directors print their position and authority to the left of the id on the id line.
+      if (!owners) position = position || lines[index].filter((cell) => cell.x < id.x).map(textOf).find((value) => /manager|director|chairman|secretary|signator/i.test(value)) || '';
+      const fullName = name.join(' ').replace(/\s+/g, ' ').trim();
+      if (!fullName) continue;
+      const percentage = owners ? lines[index].filter((cell) => cell.x < id.x).map(textOf).find((value) => /^\d{1,3}(?:\.\d+)?$/.test(value)) || null : null;
+      const role = owners ? 'SHAREHOLDER' : POSITION_ROLES.find(([pattern]) => pattern.test(position))?.[1] || 'MANAGER';
+      addPerson({ fullName, nationality: country ? titleCase(country) : null, roles: [role], sharePercentage: percentage, idNumber: textOf(id) });
+    }
+  };
+  if (ownersAt >= 0) readRows(ownersAt, directorsAt > ownersAt ? directorsAt : lines.length, true);
+  if (directorsAt >= 0) readRows(directorsAt, start && start.index > directorsAt ? start.index : lines.length, false);
+  return { company, people };
 }

@@ -1,4 +1,6 @@
-import { ArrowLeft, Eye, Paperclip, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Eye, Paperclip, Plus, Save } from 'lucide-react';
+import { DocumentCard, PeopleDocuments } from '../components/AttachmentsPanel';
+import { attachmentPositionOptions, CONTACT_PERSON, placePerson, type PlacementLayout } from '../utils/attachment-people';
 import { PreliminaryOwnershipEditor } from '../components/PreliminaryOwnershipEditor';
 import { PreliminaryManagementEditor } from '../components/PreliminaryManagementEditor';
 import { withSplitIdentity } from '../components/PreliminaryPersonFields';
@@ -6,20 +8,21 @@ import { identitySummary } from '../utils/person-identity';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { directOwnershipTotal, overOwnedCompanies, ownershipChainOrder, shareholderOfLabel } from '../utils/preliminary-ownership-chain';
 import { filledContactRows } from '../utils/contact-preview';
-import { FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ComponentProps, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { resolveOtherValue, SearchableMultiSelect, SearchableSelect, splitList } from '../components/SearchableSelect';
 import { MultiFileUploadControl } from '../components/MultiFileUploadControl';
 import { TypedDateInput } from '../components/TypedDateInput';
 import { FillNote } from '../components/DocumentFillBar';
 import { kycDocumentTypes } from '../utils/kyc-document-types';
-import { mergeDocumentPerson, restoreDocumentPeople, type DocumentPerson } from '../utils/document-people';
+import { STANDARD_DOCUMENT_HINT } from '../utils/upload-security';
+import { blankDocumentPerson, mergeDocumentPerson, mergeDocumentPersonInto, restoreDocumentPeople, type DocumentPerson } from '../utils/document-people';
 import { automaticIntakeApplication, appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, validateIntakeFile, type IntakeApplication, type IntakeReading } from '../utils/document-intake';
 import { PeopleLink, PeopleLinkContext, SamePersonPicker } from '../components/SamePersonPicker';
 import { PeopleAdapter, PERSON_FIELDS, personChoices, personDetails, personKeys, syncLinkedPeople, toList } from '../utils/linked-people';
 import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
 import { withDerivedIdentity } from '../utils/person-identity';
-import { FillOutcome } from '../utils/document-fill';
+import { FillOutcome, matchOption } from '../utils/document-fill';
 import { checkEnquiryDuplicate, createEnquiry, readEnquiryCompanyDocument, readEnquiryIdentityDocument, EnquiryDuplicate, EnquiryPayload, EnquiryType, getEnquiry, getEnquiryAttachmentFile, listClients, updateEnquiry, uploadEnquiryAttachmentFiles, viewEnquiryAttachment, Client } from '../services/kyc-workflow.service';
 import { applyCountryDialCode, countryDialOptions, getDialCode } from '../utils/country-phone';
 import { newoonServiceOptions } from '../utils/newoon-services';
@@ -51,8 +54,10 @@ const positionOptions = [
   'Manager',
   'Partner',
   'Shareholder',
+  'UBO',
   'Authorized Signatory',
   'SEF',
+  'Secretary',
   'Company Secretary',
   'Compliance Officer',
   'Finance Manager',
@@ -85,6 +90,8 @@ type PersonDetails = { passportNumber?: string; passportExpiry?: string; qidNumb
 type PreliminaryOwner = PersonDetails & { id?: string; shareholderType?: string; parentRowId?: string; sourceShareholderId?: string; uboPercentage?: string; fullName: string; nationality: string; identityNumber: string; address: string; ownershipPercentage: string; isUbo: boolean };
 type PreliminaryManagementPerson = PersonDetails & { id?: string; fullName: string; identityNumber: string; nationality: string; position: string; positions?: string[]; positionOther?: string };
 const IDENTITY_COPIES_DOCUMENT = 'Passport / QID copies';
+// The required document type each person's QID / passport is saved under (KYC required-document matching uses it).
+const PEOPLE_DOCUMENT = 'QID / Passport copies';
 type PreliminaryDeclaration = {
   fullName: string;
   position: string;
@@ -95,7 +102,45 @@ type PreliminaryDeclaration = {
   companyStampDataUrl?: string;
 };
 
-type EnquiryValidationForm = {
+// Company details of an existing legal entity (Details step). Form key, name in the saved details / KYC Section A, label.
+const companyProfileFields = [
+  ['companyCrNumber', 'commercialRegistrationNo', 'Commercial Registration No', 'text'],
+  ['companyIncorporationDate', 'dateOfIncorporation', 'Date of Incorporation', 'date'],
+  ['companyCrExpiry', 'crExpiryDate', 'Commercial Registration Expiry Date', 'date'],
+  ['companyCountry', 'countryOfIncorporation', 'Country of Incorporation', 'country'],
+  ['companyPlace', 'placeOfIncorporation', 'Place of Incorporation', 'text'],
+  ['companyLegalForm', 'legalForm', 'Legal Form', 'legalForm'],
+  ['companyAddress', 'registeredOfficeAddress', 'Registered Office Address', 'textarea'],
+  ['companyShareCapital', 'shareCapital', 'Share Capital', 'text'],
+  ['companyTaxNo', 'taxIdentificationNo', 'Tax Card No (TIN)', 'text'],
+  ['companyPoBox', 'poBox', 'PO Box Number', 'text'],
+  ['companyTelephone', 'telephone', 'Telephone', 'text'],
+  ['companyEmail', 'email', 'Email', 'text'],
+  ['companyWebsite', 'website', 'Website', 'text'],
+  ['companyNature', 'businessNature', 'Main Purpose / Nature of Business', 'textarea'],
+  ['companyIndustry', 'relatedIndustry', 'Related Industry', 'text'],
+  ['companyActivities', 'licenseActivities', 'License Activities', 'textarea'],
+  ['companyFinancialYearEnd', 'financialYearEnd', 'Financial Year End', 'text'],
+  ['companyAuditor', 'approvedAuditor', 'Approved Auditor Name', 'text']
+] as const;
+type CompanyProfileKey = (typeof companyProfileFields)[number][0];
+// How the company details are grouped on the Details step.
+const companyProfileGroups: Array<[string, CompanyProfileKey[]]> = [
+  ['Registration', ['companyCrNumber', 'companyIncorporationDate', 'companyCrExpiry', 'companyCountry', 'companyPlace', 'companyLegalForm']],
+  ['Contact', ['companyAddress', 'companyPoBox', 'companyTelephone', 'companyEmail', 'companyWebsite']],
+  ['Business', ['companyNature', 'companyIndustry', 'companyActivities']],
+  ['Financial', ['companyShareCapital', 'companyTaxNo', 'companyFinancialYearEnd', 'companyAuditor']]
+];
+type CompanyProfileForm = Record<CompanyProfileKey, string>;
+const blankCompanyProfile = (): CompanyProfileForm => Object.fromEntries(companyProfileFields.map(([key]) => [key, ''])) as CompanyProfileForm;
+const companyLegalForms = ['LLC', 'Branch', 'Partnership', 'Government entity', 'Registered in stock exchange', 'Trust/Funds', 'Sole establishment'];
+// Positions of the people read from a CR, as chosen in the people list of the Attachments step.
+const CR_ROLE_POSITIONS: Record<string, string> = {
+  SHAREHOLDER: 'Shareholder', DIRECTOR: 'Director', MANAGER: 'Manager', SECRETARY: 'Secretary', AUTHORISED_SIGNATORY: 'Authorized Signatory',
+  CHAIRMAN: 'Chairman', MANAGING_DIRECTOR: 'Managing Director', GENERAL_MANAGER: 'General Manager', CEO: 'CEO'
+};
+
+type EnquiryValidationForm = CompanyProfileForm & {
   enquiryType: EnquiryType;
   clientId: string;
   companyName: string;
@@ -229,6 +274,15 @@ function splitNationalities(value: unknown, options: string[]) {
 // Saved as one comma-separated string so existing records, KYC conversion and screening keep working.
 function nationalityText(values: string[], otherValue: string) {
   return values.map((item) => (item === 'Other' ? otherValue.trim() : item)).filter(Boolean).join(', ');
+}
+
+// The key contact's position field from a person's positions: listed positions are selected, others go under "Other".
+// "Contact Person" is the role itself, not a position.
+function contactPositionPatch(positions: string[]) {
+  const wanted = positions.filter((item) => item && item !== CONTACT_PERSON);
+  const known = wanted.filter((item) => positionOptions.includes(item) && item !== 'Other');
+  const other = wanted.filter((item) => !known.includes(item));
+  return { keyContactPosition: [...known, ...(other.length ? ['Other'] : [])].join(', '), keyContactPositionOther: other.join(', ') };
 }
 
 function contactPositions(form: Pick<EnquiryValidationForm, 'keyContactPosition' | 'keyContactPositionOther'>) {
@@ -419,6 +473,7 @@ export function AddEnquiryPage() {
   const [activeStep, setActiveStep] = useState<EnquiryStep>('type');
   const [attachments, setAttachments] = useState<AttachmentDraft[]>(attachmentTemplates('EXISTING_LEGAL_ENTITY'));
   const [form, setFormState] = useState<EnquiryValidationForm>({
+    ...blankCompanyProfile(),
     enquiryType: 'EXISTING_LEGAL_ENTITY' as EnquiryType,
     clientId: '',
     companyName: '',
@@ -464,13 +519,62 @@ export function AddEnquiryPage() {
   const people = useMemo(() => enquiryPeople.read(form), [form]);
   const availableDocumentPeople = useMemo(() => {
     const names = new Set(attachments.flatMap(attachmentDisplayNames));
-    return documentPeople.filter(person => person.files.some(file => names.has(file)));
+    return documentPeople.filter(person => !person.files.length || person.files.some(file => names.has(file)));
   }, [documentPeople, attachments]);
-  const selectablePeople = useMemo(() => [...availableDocumentPeople.map(person => ({ slot: `document:${person.id}`, role: `Uploaded document: ${person.row.qidNumber || person.row.passportNumber || person.files[0] || ''}`, row: person.row })), ...people], [people, availableDocumentPeople]);
+  // Every person added on the Attachments step can be picked, whether or not a QID / passport copy is uploaded yet.
+  const documentSlot = (person: DocumentPerson) => ({
+    slot: `document:${person.id}`,
+    role: person.files.length ? `Uploaded document: ${person.row.qidNumber || person.row.passportNumber || person.files[0] || ''}` : (person.positions || []).join(', ') || 'Added on Attachments',
+    row: person.row
+  });
+  const selectablePeople = useMemo(() => [...availableDocumentPeople.filter(person => (person.row.fullName || '').trim()).map(documentSlot), ...people], [people, availableDocumentPeople]);
+  // The Contact step offers the people marked "Contact Person" on the Attachments step (everyone when nobody is marked yet),
+  // plus the key contact already on the form so the current choice stays shown.
+  const contactChoices = useMemo(() => {
+    const named = availableDocumentPeople.filter(person => (person.row.fullName || '').trim());
+    const marked = named.filter(person => person.positions?.includes(CONTACT_PERSON));
+    return [...(marked.length ? marked : named).map(documentSlot), ...people.filter(person => person.slot === 'contact')];
+  }, [people, availableDocumentPeople]);
+  // The people shown on the Attachments step: the people added there, with their QID and passport copies.
+  const attachmentPeople = useMemo(() => {
+    const names = new Set(attachments.filter((attachment) => attachment.documentType === PEOPLE_DOCUMENT).flatMap(attachmentDisplayNames));
+    return documentPeople.filter((person) => !person.files.length || person.files.some((file) => names.has(file))).map((person) => {
+      const files = person.files.filter((file) => names.has(file));
+      return {
+        id: person.id,
+        fullName: person.row.fullName || '',
+        qidNumber: person.row.qidNumber || '',
+        passportNumber: person.row.passportNumber || '',
+        dateOfBirth: person.row.dateOfBirth || '',
+        nationality: person.row.nationality || '',
+        ownershipPercentage: person.row.ownershipPercentage || '',
+        positions: person.positions || [],
+        qidFiles: files.filter((file) => person.kinds?.[file] === 'QID'),
+        passportFiles: files.filter((file) => person.kinds?.[file] === 'PASSPORT'),
+        otherFiles: files.filter((file) => !person.kinds?.[file])
+      };
+    });
+  }, [documentPeople, attachments]);
+  // A Contact Person is copied to the Contact step only while it is empty; say when another contact is already there.
+  const contactPersonNote = useMemo(() => {
+    const chosen = documentPeople.filter((person) => person.positions?.includes(CONTACT_PERSON) && attachmentPeople.some((item) => item.id === person.id));
+    const contactKeys = personKeys({ qidNumber: form.keyContactQidNumber, passportNumber: form.keyContactPassportNumber });
+    const clash = chosen.find((person) => form.keyContactName.trim() && form.keyContactName.trim().toLowerCase() !== (person.row.fullName || '').trim().toLowerCase() && !personKeys(person.row).some((key) => contactKeys.includes(key)));
+    return clash ? `The key contact on the Contact step is ${form.keyContactName.trim()}. ${clash.row.fullName || 'This person'} was not copied there.` : '';
+  }, [documentPeople, attachmentPeople, form.keyContactName, form.keyContactQidNumber, form.keyContactPassportNumber]);
+  // The key contact's identity copies, grouped by what they are (QID, passport, or unknown for older uploads).
   const contactCopies = useMemo(() => {
     const keys = personKeys({ qidNumber: form.keyContactQidNumber, passportNumber: form.keyContactPassportNumber });
     const attached = new Set(attachments.flatMap(attachmentDisplayNames));
-    return [...new Set(availableDocumentPeople.filter(person => personKeys(person.row).some(key => keys.includes(key))).flatMap(person => person.files))].filter(name => attached.has(name));
+    const matched = availableDocumentPeople.filter(person => personKeys(person.row).some(key => keys.includes(key)));
+    const kindOf = (name: string) => matched.map(person => person.kinds?.[name]).find(Boolean);
+    const names = [...new Set(matched.flatMap(person => person.files))].filter(name => attached.has(name));
+    return {
+      all: names,
+      qid: names.filter(name => kindOf(name) === 'QID'),
+      passport: names.filter(name => kindOf(name) === 'PASSPORT'),
+      other: names.filter(name => !kindOf(name))
+    };
   }, [availableDocumentPeople, attachments, form.keyContactQidNumber, form.keyContactPassportNumber]);
   // The latest form for reads that finish after the user kept typing.
   const formRef = useRef(form);
@@ -483,14 +587,21 @@ export function AddEnquiryPage() {
     pick: (slot, sourceSlot) => setFormState((current) => {
       if (!sourceSlot) {
         const next = enquiryPeople.write(current, slot, { ...Object.fromEntries(PERSON_FIELDS.map(field => [field, ''])), identityNumber: '', address: '' });
-        return slot === 'contact' ? { ...next, keyContactEmail: '', keyContactPhone: '', keyContactIdentityNumber: '', keyContactIdentityTypes: [] } : next;
+        return slot === 'contact' ? { ...next, keyContactEmail: '', keyContactPhone: '', keyContactIdentityNumber: '', keyContactIdentityTypes: [], ...contactPositionPatch([]) } : next;
       }
       const source = [...enquiryPeople.read(current), ...selectablePeople.filter(person => person.slot.startsWith('document:'))].find((person) => person.slot === sourceSlot);
       if (!source || sourceSlot === slot) return current;
       // Every person switch replaces identity fields, regardless of whether the source was uploaded or entered.
       const change = { ...Object.fromEntries(PERSON_FIELDS.map(field => [field, ''])), identityNumber: String(('identityNumber' in source.row ? source.row.identityNumber : '') || ''), ...personDetails(source.row) };
       const next = enquiryPeople.write(current, slot, change);
-      if (slot === 'contact') next.keyContactIdentityTypes = identityTypeOptions.filter(type => type === 'QID' ? Boolean(next.keyContactQidNumber) : Boolean(next.keyContactPassportNumber));
+      if (slot === 'contact') {
+        next.keyContactIdentityTypes = identityTypeOptions.filter(type => type === 'QID' ? Boolean(next.keyContactQidNumber) : Boolean(next.keyContactPassportNumber));
+        // The person's positions (chosen on the Attachments step, or on their ownership / management row) fill the position.
+        const chosen = sourceSlot.startsWith('document:')
+          ? documentPeopleRef.current.find(person => `document:${person.id}` === sourceSlot)?.positions || []
+          : splitList((source.row as Record<string, unknown>).positions ?? (source.row as Record<string, unknown>).position ?? (source.row as Record<string, unknown>).role ?? '');
+        Object.assign(next, contactPositionPatch(chosen.map(item => item === 'Beneficial owner' ? 'UBO' : item)));
+      }
       return next;
     })
   }), [people, selectablePeople]);
@@ -517,7 +628,10 @@ export function AddEnquiryPage() {
         const proposedLegalForm = splitOtherValue(String(details.proposedLegalForm || ''), legalForms);
         const requestedServices = splitRequestedServices(enquiry.requestedServices || []);
         const preliminary = details.preliminaryKyc && typeof details.preliminaryKyc === 'object' ? details.preliminaryKyc as Record<string, any> : {};
+        const savedProfile = details.companyProfile && typeof details.companyProfile === 'object' ? details.companyProfile as Record<string, unknown> : {};
         setForm({
+          ...blankCompanyProfile(),
+          ...Object.fromEntries(companyProfileFields.map(([key, detail]) => [key, String(savedProfile[detail] ?? '')])) as CompanyProfileForm,
           enquiryType: enquiry.enquiryType,
           clientId: enquiry.clientId || enquiry.client?.id || '',
           companyName: enquiry.companyName || '',
@@ -645,7 +759,9 @@ export function AddEnquiryPage() {
               ...(completed ? { completedAt: new Date().toISOString() } : {})
             }
           }
-        : keyContactDetails;
+        : form.enquiryType === 'EXISTING_LEGAL_ENTITY'
+          ? { ...keyContactDetails, companyProfile: Object.fromEntries(companyProfileFields.map(([key, detail]) => [detail, form[key].trim()]).filter(([, value]) => value)) }
+          : keyContactDetails;
     return {
       enquiryType: form.enquiryType,
       clientId: form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? form.clientId || undefined : undefined,
@@ -830,6 +946,19 @@ export function AddEnquiryPage() {
     return () => { cancelled = true; };
   }, [form.enquiryType, loading]);
 
+  const placementLayout: PlacementLayout = useMemo(() => ({
+    newShareholder: () => blankPreliminaryOwner(),
+    newOfficer: () => blankPreliminaryManagement(),
+    setPositions: enquiryPeopleLayout.setPositions,
+    positionsOf: enquiryPeopleLayout.positionsOf,
+    nationality: (value) => matchOption(value, countryOptions) || value
+  }), []);
+
+  const documentPeopleRef = useRef<DocumentPerson[]>([]);
+  useEffect(() => { documentPeopleRef.current = documentPeople; }, [documentPeople]);
+  const [peopleNote, setPeopleNote] = useState<FillOutcome | undefined>();
+  const [peopleReadingId, setPeopleReadingId] = useState('');
+
   if (loading) return <p className="text-sm text-slate-500">Loading enquiry details...</p>;
 
   const steps = enquirySteps(form.enquiryType);
@@ -959,10 +1088,45 @@ export function AddEnquiryPage() {
               { field: 'countryOfIncorporation', key: 'countryOfIncorporation', label: 'Country of incorporation', options: countryOptions },
               { field: 'licenseActivities', key: 'proposedBusinessActivity', label: 'Business activity' },
               { field: 'registeredOfficeAddress', key: 'proposedRegisteredOfficeAddress', label: 'Registered office address' }
-            ] : [{ field: 'legalName', key: 'companyName', label: 'Company name' }, { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }],
+            ] : [
+              { field: 'legalName', key: 'companyName', label: 'Company name' },
+              { field: 'commercialRegistrationNo', key: 'companyCrNumber', label: 'Commercial registration no' },
+              { field: 'dateOfIncorporation', key: 'companyIncorporationDate', label: 'Date of incorporation' },
+              { field: 'crExpiryDate', key: 'companyCrExpiry', label: 'CR expiry date' },
+              { field: 'countryOfIncorporation', key: 'companyCountry', label: 'Country of incorporation', options: countryOptions },
+              { field: 'placeOfIncorporation', key: 'companyPlace', label: 'Place of incorporation' },
+              { field: 'legalForm', key: 'companyLegalForm', label: 'Legal form' },
+              { field: 'registeredOfficeAddress', key: 'companyAddress', label: 'Registered office address' },
+              { field: 'shareCapital', key: 'companyShareCapital', label: 'Share capital' },
+              { field: 'taxIdentificationNo', key: 'companyTaxNo', label: 'Tax card no' },
+              { field: 'licenseActivities', key: 'companyActivities', label: 'License activities' },
+              { field: 'countryOfIncorporation', key: 'headOfficeCountry', label: 'Head office country', options: countryOptions }
+            ],
             peopleEnabled: current.enquiryType === 'PROPOSED_COMPANY',
             targets: [...enquiryPeople.read(current).filter(person => !person.hidden).map(person => ({ value: person.slot, label: person.row.fullName || person.role, row: person.row, omitFields: person.slot === 'contact' ? ['dateOfBirth'] : [], nationalityOptions: countryOptions })), ...(current.enquiryType === 'PROPOSED_COMPANY' ? newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions })) : [])]
           });
+          // An existing company has no Ownership / Management steps: the owners and managers on its CR become people
+          // cards on the Attachments step, where their QID / passport is added and the positions are kept.
+          if (reading.kind === 'COMPANY' && current.enquiryType !== 'PROPOSED_COMPANY' && documentType !== 'CR of legal entity parties') {
+            const added = reading.data.people.filter(person => person.fullName.trim() && person.roles.some(role => CR_ROLE_POSITIONS[role]));
+            if (added.length) {
+              updateDocumentPeople(currentPeople => {
+                let next = currentPeople;
+                for (const person of added) {
+                  const number = (person.idNumber || '').replace(/\s+/g, '');
+                  const identity = number ? (/^\d{11}$/.test(number) ? { qidNumber: number } : { passportNumber: number }) : {};
+                  const positions = [...new Set(person.roles.map(role => CR_ROLE_POSITIONS[role]).filter(Boolean))];
+                  const same = next.find(item => (number && (item.row.qidNumber === number || item.row.passportNumber === number)) || (item.row.fullName || '').trim().toLowerCase() === person.fullName.trim().toLowerCase());
+                  const row = { fullName: person.fullName.trim(), ...(person.nationality ? { nationality: matchOption(person.nationality, countryOptions) || person.nationality } : {}), ...identity, ...(person.sharePercentage ? { ownershipPercentage: person.sharePercentage } : {}) };
+                  next = same
+                    ? next.map(item => item === same ? { ...item, positions: [...new Set([...(item.positions || []), ...positions])], row: { ...row, ...Object.fromEntries(Object.entries(item.row).filter(([, value]) => Boolean(value))) } } : item)
+                    : [...next, { id: crypto.randomUUID(), files: [], row, positions }];
+                }
+                return next;
+              });
+              notes.push(`${added.length} owner / manager${added.length === 1 ? '' : 's'} from the CR added under People on this step.`);
+            }
+          }
           if (outcome.application) {
             // Corporate shareholder copies must not populate the applicant company's own details.
             if (documentType === 'CR of legal entity parties' && outcome.application.kind === 'COMPANY') outcome.application.fields = [];
@@ -975,6 +1139,131 @@ export function AddEnquiryPage() {
     });
     extractionQueue.current = task.catch(() => undefined);
     try { return await task; } finally { extractionPending.current -= 1; }
+  }
+
+  // ---- People on the Attachments step: each person's QID / passport and their positions ----
+  // Writes a person's positions to the form: ownership and management rows (proposed company) and the key contact.
+  function placeDocumentPerson(person: DocumentPerson, positions: string[], before?: DocumentPerson) {
+    setForm((current) => {
+      let next = current;
+      if (current.enquiryType === 'PROPOSED_COMPANY') {
+        const placed = placePerson({ shareholders: current.preliminaryShareholders, ubos: current.preliminaryUbos, management: current.preliminaryManagement }, person, positions, placementLayout, before);
+        next = {
+          ...next,
+          preliminaryShareholders: (placed.shareholders.length ? placed.shareholders : [blankPreliminaryOwner()]).map(withDerivedIdentity) as PreliminaryOwner[],
+          preliminaryUbos: placed.ubos.map(withDerivedIdentity) as PreliminaryOwner[],
+          preliminaryManagement: (placed.management.length ? placed.management : [blankPreliminaryManagement()]).map(withDerivedIdentity) as PreliminaryManagementPerson[]
+        };
+      }
+      if (positions.includes(CONTACT_PERSON)) {
+        // The key contact is filled only when it is empty or already this person; another contact is never overwritten.
+        const name = person.row.fullName || '';
+        const sameName = (next.keyContactName || '').trim().toLowerCase() === name.trim().toLowerCase();
+        const keys = personKeys({ qidNumber: next.keyContactQidNumber, passportNumber: next.keyContactPassportNumber });
+        const sameKey = personKeys(person.row).some((key) => keys.includes(key));
+        if (!next.keyContactName.trim() || sameName || sameKey) {
+          const patch: Record<string, unknown> = {};
+          const set = (key: string, value: string | undefined, existing: string) => { if (value && !existing.trim()) patch[key] = value; };
+          set('fullName', person.row.fullName, next.keyContactName);
+          set('qidNumber', person.row.qidNumber, next.keyContactQidNumber);
+          set('qidExpiry', person.row.qidExpiry, next.keyContactQidExpiryDate);
+          set('passportNumber', person.row.passportNumber, next.keyContactPassportNumber);
+          set('passportExpiry', person.row.passportExpiry, next.keyContactPassportExpiryDate);
+          if (!next.keyContactPosition.trim() && !next.keyContactPositionOther.trim()) next = { ...next, ...contactPositionPatch(positions) };
+          if (person.row.nationality && !next.keyContactNationality.length) patch.nationality = [matchOption(person.row.nationality, countryOptions) || person.row.nationality];
+          if (Object.keys(patch).length) next = enquiryPeople.write(next, 'contact', patch);
+        }
+      }
+      return next;
+    });
+  }
+
+  function updateDocumentPeople(change: (current: DocumentPerson[]) => DocumentPerson[]) {
+    const next = change(documentPeopleRef.current);
+    documentPeopleRef.current = next;
+    setDocumentPeople(next);
+    return next;
+  }
+
+  // A new, empty person card: the name, copies and positions are filled on it.
+  function addPerson() {
+    updateDocumentPeople((current) => [...current, blankDocumentPerson()]);
+  }
+
+  // Removing a person also removes their copies and the rows written for them (rows with entered data stay).
+  function removePerson(personId: string) {
+    const person = documentPeopleRef.current.find((item) => item.id === personId);
+    if (!person) return;
+    setAttachments((current) => current.map((attachment) => {
+      if (attachment.documentType !== PEOPLE_DOCUMENT) return attachment;
+      return person.files.reduce((result, fileName) => {
+        const index = attachmentDisplayNames(result).indexOf(fileName);
+        return index >= 0 ? removeAttachmentFile(result, index) : result;
+      }, attachment);
+    }));
+    updateDocumentPeople((current) => current.filter((item) => item.id !== personId));
+    if (person.positions?.length) placeDocumentPerson(person, []);
+  }
+
+  // A copy uploaded to a person's QID or passport slot is read into that person.
+  async function addPersonFiles(personId: string, kind: 'QID' | 'PASSPORT', files: File[]) {
+    const fresh = files.filter((file) => !documentPeopleRef.current.some((person) => person.files.includes(file.name)));
+    if (!fresh.length) { setPeopleNote({ tone: 'warn', text: 'These files are already added to a person.' }); return; }
+    setAttachments((current) => setAttachmentFilesByType(current, PEOPLE_DOCUMENT, fresh));
+    setPeopleReadingId(`${personId}:${kind}`);
+    extractionPending.current += 1;
+    const task = extractionQueue.current.then(async () => {
+      const notes: string[] = [];
+      let warning = false;
+      for (const file of fresh) {
+        let reading: IntakeReading | null = null;
+        if (validateIntakeFile(file)) warning = true;
+        else {
+          try {
+            reading = documentReadings.current.get(file) || null;
+            if (!reading) { reading = await readIntakeDocument(file, kind, readEnquiryCompanyDocument, readEnquiryIdentityDocument); documentReadings.current.set(file, reading); }
+          } catch { reading = null; }
+        }
+        const identity = reading?.kind === 'IDENTITY' ? reading.data : null;
+        updateDocumentPeople((current) => {
+          const merged = identity ? mergeDocumentPersonInto(current, personId, identity, file.name) : current.map((person) => person.id === personId ? { ...person, files: [...new Set([...person.files, file.name])] } : person);
+          return merged.map((person) => person.id === personId ? { ...person, kinds: { ...(person.kinds || {}), [file.name]: kind } } : person);
+        });
+        if (!identity) warning = true;
+        notes.push(identity ? `${file.name}: details read.` : `${file.name}: added; type the name and check the details.`);
+      }
+      // A person who already has positions gets the newly read details on their rows.
+      const person = documentPeopleRef.current.find((item) => item.id === personId);
+      if (person?.positions?.length) placeDocumentPerson(person, person.positions);
+      return { tone: warning ? 'warn' : 'ok', text: notes.join(' ') } as FillOutcome;
+    });
+    extractionQueue.current = task.catch(() => undefined);
+    try { setPeopleNote(await task); } catch { setPeopleNote({ tone: 'warn', text: 'The files were added, but their details could not be read. Type the name in.' }); }
+    finally { extractionPending.current -= 1; setPeopleReadingId(''); }
+  }
+
+  function setPersonPositions(personId: string, positions: string[]) {
+    const before = documentPeopleRef.current.find((person) => person.id === personId);
+    if (!before) return;
+    const next = updateDocumentPeople((current) => current.map((person) => person.id === personId ? { ...person, positions } : person)).find((person) => person.id === personId);
+    if (next) placeDocumentPerson(next, positions, before);
+  }
+
+  function setPersonName(personId: string, fullName: string) {
+    const before = documentPeopleRef.current.find((person) => person.id === personId);
+    if (!before) return;
+    const next = updateDocumentPeople((current) => current.map((person) => person.id === personId ? { ...person, row: { ...person.row, fullName } } : person)).find((person) => person.id === personId);
+    if (next?.positions?.length) placeDocumentPerson(next, next.positions, before);
+  }
+
+  // Removing one copy keeps the person.
+  function removePersonFile(personId: string, fileName: string) {
+    setAttachments((current) => current.map((attachment) => {
+      if (attachment.documentType !== PEOPLE_DOCUMENT) return attachment;
+      const index = attachmentDisplayNames(attachment).indexOf(fileName);
+      return index >= 0 ? removeAttachmentFile(attachment, index) : attachment;
+    }));
+    updateDocumentPeople((current) => current.map((item) => item.id === personId ? { ...item, files: item.files.filter((name) => name !== fileName) } : item));
   }
 
   // The declaration is usually signed by someone already entered (director, signatory).
@@ -1109,6 +1398,40 @@ export function AddEnquiryPage() {
                 </label>
               ) : null}
 
+              {form.enquiryType === 'EXISTING_LEGAL_ENTITY' ? (
+                <section aria-labelledby="company-details" className="space-y-3 md:col-span-2">
+                  <div className="flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <h3 id="company-details" className="text-sm font-semibold text-slate-900">Company details</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Filled from the Commercial Registration on the Attachments step. Check them and complete what is missing; they carry into the KYC.</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{companyProfileFields.filter(([key]) => form[key].trim()).length} of {companyProfileFields.length} filled</span>
+                  </div>
+                  {companyProfileGroups.map(([title, keys]) => (
+                    <fieldset key={title} className="rounded-lg border border-slate-200 bg-white p-3">
+                      <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</legend>
+                      <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 lg:grid-cols-3">
+                        {companyProfileFields.filter(([key]) => keys.includes(key)).map(([key, , label, kind]) => (
+                          <label key={key} className={`block min-w-0 text-xs font-medium text-slate-600 ${kind === 'textarea' ? 'md:col-span-2 lg:col-span-3' : ''}`}>
+                            {label}
+                            {kind === 'date' ? (
+                              <TypedDateInput value={form[key]} onChange={(value) => setForm({ ...form, [key]: value })} className="mt-1 min-h-9 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-normal" />
+                            ) : kind === 'country' ? (
+                              <SearchableSelect label="" value={form[key]} options={countryOptions} onChange={(value) => setForm({ ...form, [key]: value })} />
+                            ) : kind === 'textarea' ? (
+                              <textarea rows={2} value={form[key]} onChange={(event) => setForm({ ...form, [key]: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-normal" />
+                            ) : (
+                              <input value={form[key]} list={kind === 'legalForm' ? 'company-legal-forms' : undefined} onChange={(event) => setForm({ ...form, [key]: event.target.value })} className="mt-1 min-h-9 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-normal" />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  ))}
+                  <datalist id="company-legal-forms">{companyLegalForms.map((option) => <option key={option} value={option} />)}</datalist>
+                </section>
+              ) : null}
+
               <SearchableMultiSelect
                 label="Requested services *"
                 value={form.requestedServices}
@@ -1124,7 +1447,7 @@ export function AddEnquiryPage() {
 
           {currentStep.id === 'contact' ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <SamePersonPicker people={selectablePeople} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} label="Select person" />
+              <SamePersonPicker people={contactChoices} slot="contact" onPick={(source) => peopleLink.pick('contact', source)} label="Select person" />
               <label className="text-sm font-medium text-slate-700">
                 Full name <RequiredMark />
                 <input required value={form.keyContactName} onChange={(event) => setForm({ ...form, keyContactName: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -1174,40 +1497,50 @@ export function AddEnquiryPage() {
                 placeholder="Select Passport and/or QID"
                 wide
               />
-              <div data-contact-copies className="min-w-0 rounded-md border border-slate-200 p-3 md:col-span-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="flex items-center gap-2 text-sm font-medium text-slate-800"><Paperclip aria-hidden="true" className="h-4 w-4 text-slate-500" />Passport / QID copies</p>
-                  <button type="button" onClick={() => goToStep('attachments')} className="text-xs font-semibold text-brand-700 hover:underline">Attachments</button>
-                </div>
-                {contactCopies.length ? <ul className="mt-2 divide-y divide-slate-100">{contactCopies.map(name => <li key={name} className="flex min-w-0 items-center justify-between gap-3 py-2">
-                  <span className="min-w-0 break-all text-sm text-slate-600">{name}</span>
-                  <button type="button" onClick={() => void viewContactCopy(name)} aria-label={`View ${name}`} className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50"><Eye aria-hidden="true" className="h-4 w-4" />View</button>
-                </li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No linked identity copies.</p>}
+              <div data-contact-copies className="grid gap-3 md:col-span-2 md:grid-cols-2">
+                {([
+                  ['Passport', form.keyContactIdentityTypes.includes('Passport') || !form.keyContactIdentityTypes.length, 'keyContactPassportNumber', 'keyContactPassportExpiryDate', contactCopies.passport],
+                  ['QID', form.keyContactIdentityTypes.includes('QID'), 'keyContactQidNumber', 'keyContactQidExpiryDate', contactCopies.qid]
+                ] as const).filter(([, shown]) => shown).map(([label, , numberKey, expiryKey, copies]) => (
+                  <fieldset key={label} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-slate-500"><Paperclip aria-hidden="true" className="h-3.5 w-3.5" />{label}</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 sm:grid-cols-2">
+                      <label className="block min-w-0 text-xs font-medium text-slate-600">
+                        {label} number
+                        <input value={form[numberKey]} onChange={(event) => setForm({ ...form, [numberKey]: event.target.value })} className="mt-1 min-h-9 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-normal" />
+                      </label>
+                      <label className="block min-w-0 text-xs font-medium text-slate-600">
+                        {label} expiry date
+                        <TypedDateInput value={form[expiryKey]} onChange={(value) => setForm({ ...form, [expiryKey]: value })} className="mt-1 min-h-9 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm font-normal" />
+                      </label>
+                      <div className="min-w-0 sm:col-span-2">
+                        <p className="text-xs font-medium text-slate-600">{label} copy</p>
+                        {copies.length ? (
+                          <ul className="mt-1 flex flex-wrap gap-1.5">{copies.map(name => (
+                            <li key={name} className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 py-1 pl-2 pr-1 text-xs font-medium text-emerald-800">
+                              <span className="max-w-56 truncate" title={name}>{name}</span>
+                              <button type="button" onClick={() => void viewContactCopy(name)} aria-label={`View ${name}`} className="inline-flex h-6 items-center gap-1 rounded bg-white px-1.5 text-emerald-800 hover:bg-emerald-100"><Eye aria-hidden="true" className="h-3.5 w-3.5" />View</button>
+                            </li>
+                          ))}</ul>
+                        ) : (
+                          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">No {label} copy linked. <button type="button" onClick={() => goToStep('attachments')} className="font-semibold text-brand-700 hover:underline">Add on Attachments</button></p>
+                        )}
+                      </div>
+                    </div>
+                  </fieldset>
+                ))}
+                {contactCopies.other.length ? (
+                  <div className="min-w-0 rounded-lg border border-slate-200 p-3 md:col-span-2">
+                    <p className="text-xs font-medium text-slate-600">Other identity copies</p>
+                    <ul className="mt-1 flex flex-wrap gap-1.5">{contactCopies.other.map(name => (
+                      <li key={name} className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 py-1 pl-2 pr-1 text-xs font-medium text-slate-700">
+                        <span className="max-w-56 truncate" title={name}>{name}</span>
+                        <button type="button" onClick={() => void viewContactCopy(name)} aria-label={`View ${name}`} className="inline-flex h-6 items-center gap-1 rounded bg-white px-1.5 hover:bg-slate-100"><Eye aria-hidden="true" className="h-3.5 w-3.5" />View</button>
+                      </li>
+                    ))}</ul>
+                  </div>
+                ) : null}
               </div>
-              {(form.keyContactIdentityTypes.includes('Passport') || !form.keyContactIdentityTypes.length) ? (
-                <>
-                  <label className="text-sm font-medium text-slate-700">
-                    Passport number
-                    <input value={form.keyContactPassportNumber} onChange={(event) => setForm({ ...form, keyContactPassportNumber: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Passport expiry date
-                    <TypedDateInput value={form.keyContactPassportExpiryDate} onChange={(value) => setForm({ ...form, keyContactPassportExpiryDate: value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                </>
-              ) : null}
-              {form.keyContactIdentityTypes.includes('QID') ? (
-                <>
-                  <label className="text-sm font-medium text-slate-700">
-                    QID number
-                    <input value={form.keyContactQidNumber} onChange={(event) => setForm({ ...form, keyContactQidNumber: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    QID expiry date
-                    <TypedDateInput value={form.keyContactQidExpiryDate} onChange={(value) => setForm({ ...form, keyContactQidExpiryDate: value })} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                  </label>
-                </>
-              ) : null}
             </div>
           ) : null}
 
@@ -1287,6 +1620,20 @@ export function AddEnquiryPage() {
               attachments={attachments}
               onChange={setAttachments}
               onFilesAdded={readAttachment}
+              people={form.enquiryType === 'CURRENT_CLIENT_NEW_SERVICES' ? undefined : {
+                people: attachmentPeople,
+                positionOptions: attachmentPositionOptions,
+                readingId: peopleReadingId,
+                note: peopleNote,
+                onNote: setPeopleNote,
+                onAddPerson: addPerson,
+                onRemovePerson: removePerson,
+                onAddFiles: (personId, kind, files) => void addPersonFiles(personId, kind, files),
+                onRemoveFile: removePersonFile,
+                onName: setPersonName,
+                onPositions: setPersonPositions,
+                contactNote: contactPersonNote
+              }}
             />
           ) : null}
 
@@ -1718,7 +2065,8 @@ function AttachmentRows({
   proposedLegalForm,
   attachments,
   onChange,
-  onFilesAdded
+  onFilesAdded,
+  people
 }: {
   enquiryType: EnquiryType;
   proposedLegalForm: string;
@@ -1726,6 +2074,8 @@ function AttachmentRows({
   onChange: (attachments: AttachmentDraft[]) => void;
   // Reads a file added to a type that can fill the form (company CR, key contact ID); null when it does not apply.
   onFilesAdded?: (documentType: string, files: File[]) => Promise<FillOutcome | null>;
+  // The QID / passport of each person with their positions; not shown for a current client's additional uploads.
+  people?: ComponentProps<typeof PeopleDocuments>;
 }) {
   const [readNotes, setReadNotes] = useState<Record<string, FillOutcome>>({});
   const [readingType, setReadingType] = useState('');
@@ -1771,24 +2121,6 @@ function AttachmentRows({
     onChange(attachments.map((attachment, itemIndex) => (itemIndex === index ? removeAttachmentFile(attachment, fileIndex) : attachment)));
   }
 
-  function clearFiles(index: number) {
-    onChange(
-      attachments.map((attachment, itemIndex) =>
-        itemIndex === index
-          ? {
-              ...attachment,
-              fileName: '',
-              storagePath: null,
-              mimeType: undefined,
-              size: undefined,
-              storedFiles: undefined,
-              files: undefined
-            }
-          : attachment
-      )
-    );
-  }
-
   function addAdditionalUpload() {
     const additionalCount = attachments.filter(isAdditionalAttachment).length;
     onChange([
@@ -1806,56 +2138,76 @@ function AttachmentRows({
   }
 
   const isAdditionalUploadOnly = enquiryType === 'CURRENT_CLIENT_NEW_SERVICES';
+  const entries = attachments.map((attachment, index) => ({ attachment, index }));
+  // Each person's QID / passport is uploaded in the people section below, not as one shared document.
+  const companyEntries = entries.filter(({ attachment }) => kycDocumentTypes.includes(attachment.documentType) && attachment.documentType !== PEOPLE_DOCUMENT);
+  // Files added from other steps (identity copies of the Ownership step, signatures ...) keep their own type.
+  const otherEntries = entries.filter(({ attachment }) => !isAdditionalAttachment(attachment) && !kycDocumentTypes.includes(attachment.documentType) && hasAttachmentContent(attachment));
+  const additionalEntries = entries.filter(({ attachment }) => isAdditionalAttachment(attachment));
+  const uploaded = companyEntries.filter(({ attachment }) => hasAttachmentContent(attachment)).length;
+  const percent = companyEntries.length ? Math.round((uploaded / companyEntries.length) * 100) : 0;
+
+  const renderCard = ({ attachment, index }: { attachment: AttachmentDraft; index: number }, removable: boolean) => (
+    <DocumentCard
+      key={`${attachment.documentType}-${index}`}
+      title={attachment.documentType}
+      names={attachmentDisplayNames(attachment)}
+      reading={readingType === attachment.documentType}
+      note={readNotes[attachment.documentType]}
+      onNote={(outcome) => setReadNotes((current) => ({ ...current, [attachment.documentType]: outcome }))}
+      removable={removable}
+      onSelect={(files) => setFiles(index, files)}
+      onRemoveName={(fileIndex) => removeFile(index, fileIndex)}
+      onRemove={() => removeAttachment(index)}
+    />
+  );
 
   return (
-    <div>
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-slate-950">
-            {isAdditionalUploadOnly ? 'Additional Document Upload' : 'Required Attachment Options'}
-          </h2>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-slate-950">{isAdditionalUploadOnly ? 'Additional Document Upload' : 'Required Attachments'}</h2>
           <p className="mt-1 text-sm text-slate-500">
             {isAdditionalUploadOnly
               ? 'Add one or more supporting documents for the new service request.'
               : enquiryType === 'PROPOSED_COMPANY'
                 ? 'Capture the preliminary incorporation support files required for review.'
-                : 'Capture company, ownership, and identity documents required for review.'}
+                : 'Upload the company documents, then add the QID / passport of each person with their positions.'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={addAdditionalUpload}
-          className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
+        <button type="button" onClick={addAdditionalUpload} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          <Plus aria-hidden="true" className="h-4 w-4" />
           Add Document
         </button>
       </div>
-      <div className="mt-4 divide-y divide-slate-100 rounded-md border border-slate-200">
-        {attachments.map((attachment, index) => {
-          const additional = isAdditionalAttachment(attachment);
-          return (
-          <div key={`${attachment.documentType}-${index}`} className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_minmax(360px,1.7fr)_44px] md:items-center">
-            <p className="text-sm font-medium text-slate-950">
-              {attachment.documentType}
-            </p>
-            <div className="min-w-0">
-              <MultiFileUploadControl names={attachmentDisplayNames(attachment)} onSelect={(files) => setFiles(index, files)} onRemoveName={(fileIndex) => removeFile(index, fileIndex)} />
-              {readingType === attachment.documentType ? <p className="mt-1 text-xs text-slate-500">Reading the details from the file...</p> : null}
-              {readNotes[attachment.documentType] ? <FillNote outcome={readNotes[attachment.documentType]} onChange={(outcome) => setReadNotes((current) => ({ ...current, [attachment.documentType]: outcome }))} /> : null}
+
+      {!isAdditionalUploadOnly ? (
+        <>
+          <div role="status" aria-label="Upload progress" className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-slate-800">Company documents</span>
+              <span className="text-slate-500">{uploaded} of {companyEntries.length} uploaded</span>
             </div>
-            <button
-              type="button"
-              onClick={() => (additional ? removeAttachment(index) : clearFiles(index))}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-              aria-label={`${additional ? 'Remove' : 'Clear'} ${attachment.documentType}`}
-              title={additional ? 'Remove' : 'Clear'}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${percent}%` }} /></div>
+            <p className="mt-2 text-[11px] text-slate-400">{STANDARD_DOCUMENT_HINT}</p>
           </div>
-          );
-        })}
-      </div>
+          <div className="grid gap-3 md:grid-cols-2">{companyEntries.map((entry) => renderCard(entry, false))}</div>
+          {people ? <PeopleDocuments {...people} /> : null}
+          {otherEntries.length ? (
+            <section aria-label="Other documents">
+              <h3 className="mb-2 text-sm font-semibold text-slate-900">Documents added from other steps</h3>
+              <div className="grid gap-3 md:grid-cols-2">{otherEntries.map((entry) => renderCard(entry, false))}</div>
+            </section>
+          ) : null}
+        </>
+      ) : null}
+
+      {additionalEntries.length ? (
+        <section aria-label="Additional documents">
+          {!isAdditionalUploadOnly ? <h3 className="mb-2 text-sm font-semibold text-slate-900">Additional documents</h3> : null}
+          <div className="grid gap-3 md:grid-cols-2">{additionalEntries.map((entry) => renderCard(entry, true))}</div>
+        </section>
+      ) : null}
     </div>
   );
 }

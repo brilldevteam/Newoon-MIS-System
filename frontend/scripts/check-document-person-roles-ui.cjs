@@ -95,8 +95,8 @@ async function main(){
     assert.equal(payload.details.preliminaryKyc.management[2].fullName,'Third Sample Director');
     assert.equal(payload.keyContactName,person.fullName);
     assert.equal(payload.keyContactEmail,'sample.person+contact@example.test');
-    assert.deepEqual(payload.keyContactPosition.split(', '),['Director','CEO'],'Save all selected contact positions');
-    assert.equal(payload.details.preliminaryKyc.contact.position,'Director, CEO','Preliminary document data gets both positions');
+    assert.deepEqual(payload.keyContactPosition.split(', '),['CEO'],'Switching person clears the previous positions; the one chosen afterwards is saved');
+    assert.equal(payload.details.preliminaryKyc.contact.position,'CEO','Preliminary document data gets the contact position chosen after switching person');
     const changeType=async label=>{
       await step('Type');
       await page.evaluate(()=>[...document.querySelectorAll('button')].find(button=>['Existing Legal Entity','Proposed Company - No Legal Status Yet'].includes(button.textContent.trim())).click());

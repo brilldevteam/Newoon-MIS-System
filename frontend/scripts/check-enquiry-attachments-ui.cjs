@@ -11,13 +11,13 @@ async function main() {
   const ast=ts.createSourceFile('enquiry.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const names=['enquirySteps','attachmentTemplates','mergeAttachmentTemplates','isAdditionalAttachment','hasAttachmentContent'];
   const functions=ast.statements.filter(node=>ts.isFunctionDeclaration(node)&&names.includes(node.name?.text)).map(node=>node.getText(ast)).join('\n');
-  const helpers=new Function('kycDocumentTypes',ts.transpileModule(functions,{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText+'; return {enquirySteps,mergeAttachmentTemplates};')(['Commercial Registration / CR Extract','Entity Card / Computer Card','Certificate of Incorporation','Articles of Association','QID / Passport copies','CR of legal entity parties','National address certificates','Latest Audited Financial Statements','Tax Card']);
+  const helpers=new Function('kycDocumentTypes',ts.transpileModule(functions,{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText+'; return {enquirySteps,mergeAttachmentTemplates};')(['Commercial Registration / CR Extract','Entity Card / Computer Card','Certificate of Incorporation','Articles of Association','Company Profile','QID / Passport copies','CR of legal entity parties','National address certificates','Latest Audited Financial Statements','Tax Card']);
   for(const type of ['EXISTING_LEGAL_ENTITY','PROPOSED_COMPANY','CURRENT_CLIENT_NEW_SERVICES']) {
     const steps=helpers.enquirySteps(type); assert.equal(steps[1].id,'attachments'); assert.equal(steps.filter(step=>step.id==='attachments').length,1);
   }
   const saved={documentType:'Identity Proof - Proposed Director',fileName:'legacy.pdf',storedFiles:[{fileName:'legacy.pdf',storagePath:'synthetic-only'}]};
   const merged=helpers.mergeAttachmentTemplates('PROPOSED_COMPANY','QFC LLC',[saved]);
-  assert.equal(merged.length,10); assert.equal(merged[9],saved,'Preserve uploaded legacy categories and their stored file metadata');
+  assert.equal(merged.length,11); assert.equal(merged[10],saved,'Preserve uploaded legacy categories and their stored file metadata');
   const bundle = esbuild.buildSync({ stdin: { contents: `
     import React from 'react'; import {createRoot} from 'react-dom/client';
     import {MemoryRouter} from 'react-router-dom'; import {AddEnquiryPage} from './frontend/src/pages/AddEnquiryPage';
@@ -52,18 +52,20 @@ async function main() {
       assert.equal(await page.$('[aria-label="Document inbox"]'),null);
       const steps=await page.$$eval('button',nodes=>nodes.map(node=>node.textContent.trim()).filter(text=>/^\d+/.test(text)));
       assert.match(steps[1],/^2\s*Attachments$/); assert.equal(steps.filter(text=>text.includes('Attachments')).length,1);
-      await click('Next'); await page.waitForFunction(()=>document.body.textContent.includes('Required Attachment Options'));
+      await click('Next'); await page.waitForFunction(()=>document.body.textContent.includes('Required Attachments'));
       const upload = async (index,names) => page.$$eval('input[type=file]',(inputs,{index,names})=>{
         const transfer=new DataTransfer(); for(const name of names)transfer.items.add(new File(['synthetic'],name,{type:'application/pdf'}));
         inputs[index].files=transfer.files; inputs[index].dispatchEvent(new Event('change',{bubbles:true}));
       },{index,names});
-      assert.equal(await page.$$eval('input[type=file]',nodes=>nodes.length),9,'Same nine categories as KYC');
-      const labels=await page.$$eval('input[type=file]',nodes=>nodes.map(node=>node.parentElement.parentElement.parentElement.firstElementChild.textContent.trim()));
-      assert.deepEqual(labels,['Commercial Registration / CR Extract','Entity Card / Computer Card','Certificate of Incorporation','Articles of Association','QID / Passport copies','CR of legal entity parties','National address certificates','Latest Audited Financial Statements','Tax Card']);
+      assert.equal(await page.$$eval('input[type=file]',nodes=>nodes.length),9,'Nine company documents; people get their own slots once added');
+      const labels=await page.$$eval('article h3',nodes=>nodes.map(node=>node.textContent.trim()));
+      assert.deepEqual(labels,['Commercial Registration / CR Extract','Entity Card / Computer Card','Certificate of Incorporation','Articles of Association','Company Profile','CR of legal entity parties','National address certificates','Latest Audited Financial Statements','Tax Card']);
       await upload(0,['company-one.pdf','company-two.pdf']);
       await page.waitForFunction(()=>document.body.textContent.includes('company-two.pdf:'));
       assert.equal(reads.filter(item=>item==='company').length,2,'Read every file in a batch');
-      await upload(4,['combined-identity.pdf','other-identity.pdf']);
+      await click('Add person'); await upload(9,['combined-identity.pdf']);
+      await page.waitForFunction(()=>document.body.textContent.includes('combined-identity.pdf: details read'));
+      await click('Add person'); await upload(11,['other-identity.pdf']);
       await page.waitForFunction(()=>document.body.textContent.includes('other-identity.pdf:'));
       await page.screenshot({path:path.join(output,`attachments-${width}.png`),fullPage:true});
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
@@ -112,7 +114,7 @@ async function main() {
       assert.equal(reads.length,readsBefore,'Repeated switches must not reread the same attachments');
       assert.deepEqual(errors,[]); await page.close();
     }
-    console.log('Enquiry attachment checks passed: no inbox, step 2 only, nine KYC categories, all batch files read, company autofill, combined QID/passport and desktop/mobile layout. Screenshots: '+output);
+    console.log('Enquiry attachment checks passed: no inbox, step 2 only, company documents plus people uploads, all batch files read, company autofill, combined QID/passport and desktop/mobile layout. Screenshots: '+output);
   } finally {await browser.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

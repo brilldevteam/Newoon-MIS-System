@@ -16,6 +16,7 @@ import { basename, isAbsolute, join, normalize, relative } from 'path';
 import PizZip from 'pizzip';
 import { randomUUID } from 'crypto';
 import { beneficialOwners } from '../common/ownership';
+import { documentPeopleRows } from './document-people';
 import { chainParentId, directOwnershipTotal, overOwnedCompanies } from '../common/preliminary-ownership-chain';
 import { KycPdfRenderer } from '../kyc/export/kyc-pdf-renderer';
 import { preliminaryPdfHtml } from './preliminary-pdf';
@@ -35,6 +36,7 @@ const REQUIRED_DOCUMENT_TYPES = [
   'Entity Card / Computer Card',
   'Certificate of Incorporation',
   'Articles of Association',
+  'Company Profile',
   'QID / Passport copies',
   'CR of legal entity shareholders',
   'National address certificates',
@@ -538,9 +540,12 @@ export class EnquiriesService {
       });
 
       const preliminaryKyc = this.objectValue(details.preliminaryKyc);
-      const preliminaryShareholders = this.asArray<Record<string, unknown>>(preliminaryKyc.shareholders).map<Record<string, unknown>>((row) => ({ ...row, id: row.id || randomUUID() }));
-      const preliminaryUbos = this.asArray<Record<string, unknown>>(preliminaryKyc.ubos);
-      const preliminaryManagement = this.asArray<Record<string, unknown>>(preliminaryKyc.management);
+      // People added with their positions on the Attachments step. A proposed company already has them on the Ownership and
+      // Management steps; the other enquiry types have no such steps, so their KYC rows come from here.
+      const attachmentPeople = enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? documentPeopleRows(null) : documentPeopleRows(details.documentPeople);
+      const preliminaryShareholders = [...this.asArray<Record<string, unknown>>(preliminaryKyc.shareholders), ...attachmentPeople.shareholders].map<Record<string, unknown>>((row) => ({ ...row, id: row.id || randomUUID() }));
+      const preliminaryUbos = [...this.asArray<Record<string, unknown>>(preliminaryKyc.ubos), ...attachmentPeople.ubos];
+      const preliminaryManagement = [...this.asArray<Record<string, unknown>>(preliminaryKyc.management), ...attachmentPeople.management];
       const ownershipIds = new Map(preliminaryShareholders.map((row) => [String(row.id || ''), randomUUID()]));
       const ownershipRows = preliminaryShareholders.filter((row) => this.optionalText(row.fullName)).map<Record<string, unknown> & { id: string }>((row) => ({
         ...row, id: ownershipIds.get(String(row.id || '')) || randomUUID(),
@@ -552,7 +557,7 @@ export class EnquiriesService {
         sourceShareholderId: ownershipIds.get(String(row.sourceShareholderId || row.id || '')) || '',
         residenceAddress: row.address, uboInterestPercentage: row.ownershipPercentage, shareholderType: 'Individual'
       }));
-      if (preliminaryShareholders.length) {
+      if (preliminaryShareholders.length || attachmentPeople.ubos.length) {
         await prisma.kycShareholder.createMany({
           data: ownershipRows.map((row, index) => ({
             id: row.id,
@@ -1215,17 +1220,21 @@ export class EnquiriesService {
     details: Record<string, unknown>
   ) {
     const preliminary = this.objectValue(details.preliminaryKyc);
+    // Company details of an existing legal entity (Details step), read from its CR.
+    const profile = this.objectValue(details.companyProfile);
+    const company = (key: string) => this.optionalText(profile[key]) || '';
     return {
+      ...Object.fromEntries(['commercialRegistrationNo', 'dateOfIncorporation', 'crExpiryDate', 'placeOfIncorporation', 'shareCapital', 'taxIdentificationNo', 'poBox', 'website', 'financialYearEnd', 'approvedAuditor'].map((key) => [key, company(key)]).filter(([, value]) => value)),
       legalName: this.optionalText(preliminary.companyName) || enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || '',
       // Prefer the country captured on the enquiry; older enquiries fall back to the previous behaviour.
-      countryOfIncorporation: this.optionalText(preliminary.countryOfIncorporation) || this.optionalText(details.countryOfIncorporation) || this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
-      legalForm: this.optionalText(preliminary.proposedLegalForm) || '',
-      registeredOfficeAddress: this.optionalText(preliminary.registeredOfficeAddress) || this.optionalText(details.proposedRegisteredOfficeAddress) || '',
-      telephone: enquiry.keyContactPhone || '',
-      email: enquiry.keyContactEmail || '',
-      businessNature: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || '',
-      licenseActivities: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || '',
-      relatedIndustry: this.optionalText(details.relatedIndustry) || '',
+      countryOfIncorporation: this.optionalText(preliminary.countryOfIncorporation) || company('countryOfIncorporation') || this.optionalText(details.countryOfIncorporation) || this.optionalText(preliminary.jurisdiction) || enquiry.headOfficeCountry || enquiry.branchCountry || '',
+      legalForm: this.optionalText(preliminary.proposedLegalForm) || company('legalForm'),
+      registeredOfficeAddress: this.optionalText(preliminary.registeredOfficeAddress) || this.optionalText(details.proposedRegisteredOfficeAddress) || company('registeredOfficeAddress'),
+      telephone: company('telephone') || enquiry.keyContactPhone || '',
+      email: company('email') || enquiry.keyContactEmail || '',
+      businessNature: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || company('businessNature'),
+      licenseActivities: this.optionalText(preliminary.businessActivity) || this.optionalText(details.proposedBusinessActivity) || company('licenseActivities'),
+      relatedIndustry: this.optionalText(details.relatedIndustry) || company('relatedIndustry'),
       prospectiveService: enquiry.requestedServices || [],
       formVariant: enquiry.enquiryType === EnquiryType.PROPOSED_COMPANY ? 'PRELIMINARY_PROPOSED_COMPANY' : 'STANDARD'
     };

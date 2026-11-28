@@ -8,6 +8,7 @@ import { CreateKycCasePage } from '../pages/CreateKycCasePage';
 import { CrrfListPage } from '../pages/CrrfListPage';
 import { CrrfWorkspacePage } from '../pages/CrrfWorkspacePage';
 import { AppLayout } from '../layouts/AppLayout';
+import { KycCaseWorkspace } from '../layouts/KycCaseWorkspace';
 import { AuthLayout } from '../layouts/AuthLayout';
 import { WorkspaceHomePage } from '../pages/WorkspaceHomePage';
 import { ModuleDashboardPage } from '../pages/ModuleDashboardPage';
@@ -115,8 +116,7 @@ export const router = createBrowserRouter([
           {
             element: <RequireAccess area="kyc" fallbackRoles={[...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
             children: [
-              { path: '/kyc-workflow', element: <KycWorkflowPage /> },
-              { path: '/kyc/:id', element: <KycCaseDetailsPage /> }
+              { path: '/kyc-workflow', element: <KycWorkflowPage /> }
             ]
           },
           {
@@ -127,38 +127,48 @@ export const router = createBrowserRouter([
             ]
           },
           {
-            element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.kycFormBuilder} />,
-            children: [
-              { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
-              { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
-            ]
-          },
-          {
-            element: <RequireAccess area="kyc" fallbackRoles={workflowRoles.kycFormBuilder} />,
-            children: [{ path: '/kyc/:id/revisions', element: <KycFormRevisionsPage /> }]
-          },
-          {
-            element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.documentUpload} />,
-            children: [{ path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> }]
-          },
-          {
             element: <RequireAccess area="screening" fallbackRoles={workflowRoles.screening} />,
-            children: [
-              { path: '/screening', element: <ScreeningListPage /> },
-              { path: '/kyc/:id/screening', element: <KycScreeningPage /> }
-            ]
+            children: [{ path: '/screening', element: <ScreeningListPage /> }]
           },
           {
             element: <RequireAccess area="crrf" fallbackRoles={workflowRoles.crrf} />,
-            children: [
-              { path: '/crrf', element: <CrrfListPage /> },
-              { path: '/kyc/:id/crrf', element: <CrrfWorkspacePage /> }
-            ]
+            children: [{ path: '/crrf', element: <CrrfListPage /> }]
           },
           {
-            element: <RequireAccess area="approvals" fallbackRoles={workflowRoles.reviewTasks} />,
+            // Every page of one KYC case sits under the case workspace: the case bar and its tabs stay at the top.
+            element: <KycCaseWorkspace />,
             children: [
-              { path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> }
+              {
+                element: <RequireAccess area="kyc" fallbackRoles={[...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks]} />,
+                children: [{ path: '/kyc/:id', element: <KycCaseDetailsPage /> }]
+              },
+              {
+                element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.kycFormBuilder} />,
+                children: [
+                  { path: '/kyc/:id/form', element: <KycFormEditorPage /> },
+                  { path: '/kyc/:id/submit', element: <SubmitToAmlPage /> }
+                ]
+              },
+              {
+                element: <RequireAccess area="kyc" fallbackRoles={workflowRoles.kycFormBuilder} />,
+                children: [{ path: '/kyc/:id/revisions', element: <KycFormRevisionsPage /> }]
+              },
+              {
+                element: <RequireAccess area="kyc" write fallbackRoles={workflowRoles.documentUpload} />,
+                children: [{ path: '/kyc/:id/documents', element: <UploadLegalDocumentsPage /> }]
+              },
+              {
+                element: <RequireAccess area="screening" fallbackRoles={workflowRoles.screening} />,
+                children: [{ path: '/kyc/:id/screening', element: <KycScreeningPage /> }]
+              },
+              {
+                element: <RequireAccess area="crrf" fallbackRoles={workflowRoles.crrf} />,
+                children: [{ path: '/kyc/:id/crrf', element: <CrrfWorkspacePage /> }]
+              },
+              {
+                element: <RequireAccess area="approvals" fallbackRoles={workflowRoles.reviewTasks} />,
+                children: [{ path: '/kyc/:id/internal-review', element: <InternalReviewWorkspacePage /> }]
+              }
             ]
           },
           {

@@ -1,14 +1,14 @@
-import { ArrowLeft, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Clock, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Undo2, Upload, UserRound } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { canSubmitToDmlro, KycCaseGuide } from '../components/KycCaseGuide';
-import { SearchableMultiSelect } from '../components/SearchableSelect';
 import { safeCommentHtml } from '../components/RichTextEditor';
 import { useAuth } from '../hooks/useAuth';
+import { useToast } from '../components/ToastProvider';
+import { personOfFile } from '../utils/person-copies';
 import { getApiErrorMessage } from '../services/api';
 import {
   addWorkflowComment,
-  assignService,
   completeEngagementDecision,
   completeFinalKycDecision,
   deleteLegalDocument,
@@ -19,18 +19,16 @@ import {
   getKycCase,
   getSubmissionReadiness,
   KycCase,
-  ProposalStatus,
   KycCaseStatus,
   SubmissionReadiness,
   returnKycToBusinessDevelopment,
-  updateProposalStatus,
   uploadEngagementLetter,
   uploadLegalDocumentFiles,
   viewLegalDocument
 } from '../services/kyc-workflow.service';
 import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
-import { newoonServiceOptions, serviceListText, serviceListValue } from '../utils/newoon-services';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
+import { canOpenKycFormForActiveStage as canOpenKycFormForActiveStageFor, isPreparationEditable } from '../utils/kyc-case-access';
 
 const approvedStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
 
@@ -56,12 +54,11 @@ function groupedLegalDocuments(documents: KycCase['legalDocuments']) {
 export function KycCaseDetailsPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const { showToast } = useToast();
   // Set by the KYC form after a DMLRO / MLRO decision is submitted.
   const reviewNotice = (useLocation().state as { reviewNotice?: string } | null)?.reviewNotice || '';
   const [kycCase, setKycCase] = useState<KycCase | null>(null);
   const [reviewFeedback, setReviewFeedback] = useState<NonNullable<KycCase['reviewFeedback']>>([]);
-  const [services, setServices] = useState<string[]>([]);
-  const [proposalStatus, setProposalStatus] = useState<ProposalStatus>('NOT_REQUIRED');
   const [comment, setComment] = useState('');
   const [documentError, setDocumentError] = useState('');
   const [deletingDocumentId, setDeletingDocumentId] = useState('');
@@ -77,6 +74,7 @@ export function KycCaseDetailsPage() {
   const [workflowActionMessage, setWorkflowActionMessage] = useState('');
   const [workflowActionError, setWorkflowActionError] = useState('');
   const [returnToBdReason, setReturnToBdReason] = useState('');
+  const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [readiness, setReadiness] = useState<SubmissionReadiness | null>(null);
   const [readinessError, setReadinessError] = useState('');
 
@@ -86,8 +84,6 @@ export function KycCaseDetailsPage() {
       getKycCase(id).then((item) => {
         setKycCase(item);
         setReviewFeedback(item.reviewFeedback || []);
-        setServices(serviceListValue(item.service?.name));
-        setProposalStatus(item.proposalStatus);
       });
     }
   }, [id]);
@@ -113,24 +109,12 @@ export function KycCaseDetailsPage() {
     document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-  async function saveService(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const serviceName = serviceListText(services);
-    if (!id || !serviceName) return;
-    setKycCase(await assignService(id, { serviceName }));
-  }
-
-  async function saveProposal(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!id) return;
-    setKycCase(await updateProposalStatus(id, proposalStatus));
-  }
-
   async function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!id || !comment.trim()) return;
     setKycCase(await addWorkflowComment(id, comment.trim()));
     setComment('');
+    showToast('Comment added.', 'success');
   }
 
   async function openDocument(document: KycCase['legalDocuments'][number]) {
@@ -188,6 +172,7 @@ export function KycCaseDetailsPage() {
     setDeletingDocumentId(document.id);
     try {
       setKycCase(await deleteLegalDocument(id, document.id));
+      showToast(`${document.fileName} deleted.`, 'success');
     } catch (requestError: any) {
       setDocumentError(requestError.response?.data?.message || 'Unable to delete uploaded document.');
     } finally {
@@ -218,7 +203,9 @@ export function KycCaseDetailsPage() {
     try {
       setKycCase(await returnKycToBusinessDevelopment(id, returnToBdReason.trim()));
       setReturnToBdReason('');
+      setReturnDialogOpen(false);
       setWorkflowActionMessage('KYC case returned to BD for correction.');
+      showToast('KYC case returned to BD for correction.', 'success');
     } catch (requestError: any) {
       setWorkflowActionError(getApiErrorMessage(requestError, 'Unable to return the KYC case to BD.'));
     }
@@ -230,6 +217,7 @@ export function KycCaseDetailsPage() {
     setUploadingDocumentId(document.id);
     try {
       setKycCase(await uploadLegalDocumentFiles(id, { documentType: document.documentType, files }));
+      showToast(`${files.length} file${files.length === 1 ? '' : 's'} uploaded.`, 'success');
     } catch (requestError: any) {
       setDocumentError(requestError.response?.data?.message || 'Unable to upload selected files.');
     } finally {
@@ -253,7 +241,9 @@ export function KycCaseDetailsPage() {
       }
       setKycCase(await completeEngagementDecision(id, { decision: engagementDecision, reason: engagementReason }));
       setEngagementFile(null);
-      setWorkflowActionMessage(engagementDecision === 'CONVERT_TO_CLIENT' ? 'Client converted and activated.' : engagementDecision === 'ON_HOLD' ? 'Engagement placed on hold.' : 'Engagement rejected.');
+      const engagementMessage = engagementDecision === 'CONVERT_TO_CLIENT' ? 'Client converted and activated.' : engagementDecision === 'ON_HOLD' ? 'Engagement placed on hold.' : 'Engagement rejected.';
+      setWorkflowActionMessage(engagementMessage);
+      showToast(engagementMessage, 'success');
     } catch (requestError: any) {
       setWorkflowActionError(requestError.response?.data?.message || 'Unable to complete the engagement decision.');
     }
@@ -277,6 +267,7 @@ export function KycCaseDetailsPage() {
         window.open(`/kyc/${id}/form`, '_blank', 'noopener,noreferrer');
       } else {
         setWorkflowActionMessage('The approved KYC has been marked as the final KYC.');
+        showToast('The approved KYC has been marked as the final KYC.', 'success');
       }
     } catch (requestError: any) {
       setWorkflowActionError(getApiErrorMessage(requestError, 'Unable to connect to the server to complete the final KYC decision.'));
@@ -287,9 +278,7 @@ export function KycCaseDetailsPage() {
     return <p className="text-sm text-slate-500">Loading KYC case...</p>;
   }
 
-  const preparationEditable = ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED'].includes(kycCase.status) ||
-    (kycCase.status === 'AML_REVIEW_STARTED' && kycCase.kycForm?.fullKycStarted === true && kycCase.kycForm.status === 'AMENDMENT_DRAFT' && !kycCase.kycForm.isLocked);
-  const canPrepareKyc = hasAnyRole(user, workflowRoles.kycPreparation) && preparationEditable;
+  const preparationEditable = isPreparationEditable(kycCase);
   const canUploadDocuments =
     hasAnyRole(user, workflowRoles.documentUpload) &&
     preparationEditable;
@@ -300,12 +289,7 @@ export function KycCaseDetailsPage() {
   const canOpenInternalReview = hasAnyRole(user, workflowRoles.userAdmin);
   const isApproved = approvedStatuses.includes(kycCase.status);
   const isPreliminaryProposedCompany = kycCase.sourceEnquiry?.enquiryType === 'PROPOSED_COMPANY';
-  const canOpenKycFormForActiveStage =
-    hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']) ||
-    (hasAnyRole(user, ['AML_TEAM', 'AML_SUPERVISOR']) && preparationEditable) ||
-    (hasAnyRole(user, ['DMLRO']) && ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
-    (hasAnyRole(user, ['MLRO']) && ['MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status)) ||
-    (hasAnyRole(user, ['SEF']) && ['SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS'].includes(kycCase.status));
+  const canOpenKycFormForActiveStage = canOpenKycFormForActiveStageFor(user, kycCase);
   const reviewerAction =
     canOpenKycForm && canOpenKycFormForActiveStage
       ? ['DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'].includes(kycCase.status) && hasAnyRole(user, ['DMLRO', 'COMPANY_ADMIN', 'SUPER_ADMIN'])
@@ -346,97 +330,37 @@ export function KycCaseDetailsPage() {
   const legalDocumentGroups = groupedLegalDocuments(kycCase.legalDocuments);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <Link to="/kyc-workflow" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-700 hover:text-brand-800">
-            <ArrowLeft className="h-4 w-4" />
-            Back to KYC workflow
-          </Link>
-          <h1 className="mt-3 text-2xl font-semibold text-slate-950">{kycCase.title}</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {kycCase.client.name} | {kycCase.service?.name || 'Service not selected'}
-          </p>
+    <div className="space-y-5">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="break-words text-2xl font-semibold text-slate-950">{kycCase.title}</h1>
+          <p className="mt-0.5 text-sm text-slate-500">{kycCase.client.name} | {kycCase.service?.name || 'Service not selected'}</p>
         </div>
-        <div className="flex flex-col items-start gap-1 sm:items-end">
-          <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
-            {kycStatusLabel(kycCase.status)}
-          </span>
-          {kycStatusOwner(kycCase.status) ? <span className="text-xs font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</span> : null}
-        </div>
-      </div>
+        {(reviewerAction || canReturnToBd || (isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView))) ? (
+          <nav aria-label="Case actions" className="flex flex-wrap items-center gap-2 sm:justify-end">
+            {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (
+              <Link to={`/enquiries/${kycCase.sourceEnquiry.id}`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <FileText className="h-4 w-4" />
+                Open Preliminary KYC
+              </Link>
+            ) : null}
+            {canReturnToBd ? (
+              <button type="button" onClick={() => { setWorkflowActionError(''); setReturnDialogOpen(true); }} className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100">
+                <Undo2 className="h-4 w-4" />
+                Return to BD
+              </button>
+            ) : null}
+            {reviewerAction ? (
+              <Link to={`/kyc/${kycCase.id}/form`} className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
+                <FileText className="h-4 w-4" />
+                {reviewerAction}
+              </Link>
+            ) : null}
+          </nav>
+        ) : null}
+      </header>
       {reviewNotice ? <p role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{reviewNotice}</p> : null}
       <KycCaseGuide kycCase={kycCase} user={user} readiness={readiness} readinessError={readinessError} isPreliminary={isPreliminaryProposedCompany} onJump={jumpTo} />
-      <div className="flex flex-wrap gap-2">
-        {hasAnyRole(user, workflowRoles.kycFormBuilder) ? <Link to={`/kyc/${kycCase.id}/revisions`} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700"><FileText className="h-4 w-4" />Form history &amp; compare</Link> : null}
-        {isPreliminaryProposedCompany && kycCase.sourceEnquiry && hasAnyRole(user, workflowRoles.enquiryView) ? (
-          <Link
-            to={`/enquiries/${kycCase.sourceEnquiry.id}`}
-            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <FileText className="h-4 w-4" />
-            Open Preliminary KYC
-          </Link>
-        ) : null}
-        {reviewerAction ? (
-          <Link
-            to={`/kyc/${kycCase.id}/form`}
-            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <FileText className="h-4 w-4" />
-            {reviewerAction}
-          </Link>
-        ) : null}
-        {canOpenKycForm && canOpenKycFormForActiveStage && !reviewerAction && (!isPreliminaryProposedCompany || kycCase.kycForm?.status === 'AMENDMENT_DRAFT') ? (
-          <Link
-            to={`/kyc/${kycCase.id}/form`}
-            className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <FileText className="h-4 w-4" />
-            {kycCase.kycForm?.status === 'AMENDMENT_DRAFT' ? 'Open amendment' : 'Open KYC Form'}
-          </Link>
-        ) : null}
-        {canOpenInternalReview ? (
-          <Link
-            to={`/kyc/${kycCase.id}/internal-review`}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <FileText className="h-4 w-4" />
-            Internal Review
-          </Link>
-        ) : null}
-        {canOpenScreening ? (
-          <Link
-            to={`/kyc/${kycCase.id}/screening`}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <SearchCheck className="h-4 w-4" />
-            Screening
-          </Link>
-        ) : null}
-        {canOpenCrrf ? (
-          <Link
-            to={`/kyc/${kycCase.id}/crrf`}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            CRRF
-          </Link>
-        ) : null}
-      </div>
-
-      {canReturnToBd ? (
-        <section className="flex flex-col gap-3 border-l-4 border-amber-400 bg-amber-50 p-4 sm:flex-row sm:items-end">
-          <label className="min-w-0 flex-1 text-sm font-semibold text-slate-800">
-            Return reason for BD
-            <textarea value={returnToBdReason} onChange={(event) => setReturnToBdReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-normal" placeholder="Describe the information or documents BD must correct." />
-          </label>
-          <button type="button" onClick={returnToBusinessDevelopment} disabled={!returnToBdReason.trim()} className="inline-flex shrink-0 items-center gap-2 rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
-            <Send className="h-4 w-4" />
-            Return to BD
-          </button>
-        </section>
-      ) : null}
 
       {isApproved ? (
         <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
@@ -495,10 +419,10 @@ export function KycCaseDetailsPage() {
       ) : null}
 
       {workflowActionMessage ? <p className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{workflowActionMessage}</p> : null}
-      {workflowActionError ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{workflowActionError}</p> : null}
+      {workflowActionError && !returnDialogOpen ? <p className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{workflowActionError}</p> : null}
 
       {canCompleteEngagement ? (
-        <section id="client-activation" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
+        <section id="client-activation" className="scroll-mt-36 rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Signed Engagement and Client Activation</h2>
           <p className="mt-1 text-sm text-slate-500">
             {engagementOnHold
@@ -525,7 +449,7 @@ export function KycCaseDetailsPage() {
       ) : null}
 
       {canCompleteFinalKycDecision ? (
-        <section id="final-kyc-decision" className="scroll-mt-20 rounded-lg border border-slate-200 bg-white p-5">
+        <section id="final-kyc-decision" className="scroll-mt-36 rounded-lg border border-slate-200 bg-white p-5">
           <h2 className="text-base font-semibold text-slate-950">Final KYC Decision</h2>
           <p className="mt-1 text-sm text-slate-500">{isPreliminaryProposedCompany ? 'Confirm the approved Preliminary KYC as final, or open the same populated full KYC form for completion.' : 'Confirm the approved KYC as final or reopen the same populated form as an amendment.'}</p>
           <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr_1fr_auto] lg:items-end">
@@ -548,186 +472,167 @@ export function KycCaseDetailsPage() {
         </section>
       ) : null}
 
-      <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)]">
-        <div className="space-y-6">
-          {canPrepareKyc ? (
-            <section className="rounded-lg border border-slate-200 bg-white p-5">
-              <h2 className="text-base font-semibold text-slate-950">Service & Proposal</h2>
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <form onSubmit={saveService} className="space-y-3">
-                  <SearchableMultiSelect
-                    label="Requested services"
-                    value={services}
-                    options={newoonServiceOptions}
-                    onChange={setServices}
-                    placeholder="Select requested services"
-                  />
-                  <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    Save Service
-                  </button>
-                </form>
-                <form onSubmit={saveProposal} className="space-y-3">
-                  <label className="text-sm font-medium text-slate-700">
-                    Proposal status
-                    <select
-                      value={proposalStatus}
-                      onChange={(event) => setProposalStatus(event.target.value as ProposalStatus)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="NOT_REQUIRED">Not required</option>
-                      <option value="REQUIRED">Required</option>
-                      <option value="SENT">Sent</option>
-                      <option value="ACCEPTED">Accepted</option>
-                      <option value="REJECTED">Rejected</option>
-                    </select>
-                  </label>
-                  <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    Save Proposal
-                  </button>
-                </form>
-              </div>
-            </section>
-          ) : null}
-
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start">
+        <div className="min-w-0 space-y-5">
           <section className="rounded-lg border border-slate-200 bg-white">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-              <h2 className="text-base font-semibold text-slate-950">Documents Required for KYC Preparation</h2>
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
+                Documents Required for KYC Preparation
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{kycCase.legalDocuments.length}</span>
+              </h2>
               {canUploadDocuments ? (
                 <Link
                   to={`/kyc/${kycCase.id}/documents`}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   <Upload className="h-4 w-4" />
                   Upload
                 </Link>
               ) : null}
             </div>
-            <div className="divide-y divide-slate-100">
-              {documentError ? <p className="px-5 py-3 text-sm text-red-600">{documentError}</p> : null}
-              {legalDocumentGroups.length ? (
-                legalDocumentGroups.map((group) => {
+            {documentError ? <p role="alert" className="border-b border-red-100 bg-red-50 px-5 py-3 text-sm text-red-700">{documentError}</p> : null}
+            {legalDocumentGroups.length ? (
+              <ul className="divide-y divide-slate-100">
+                {legalDocumentGroups.map((group) => {
                   const downloadableCount = group.items.filter((document) => document.storagePath).length;
                   return (
-                    <div key={group.documentType} className="px-5 py-4">
-                      <div className="rounded-lg border border-slate-200 bg-slate-50">
-                        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <p className="font-semibold text-slate-950">{group.documentType}</p>
-                            <p className="text-xs text-slate-500">{group.items.length} file{group.items.length === 1 ? '' : 's'} attached</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => saveDocumentGroup(group.documentType, group.items)}
-                            disabled={!downloadableCount}
-                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <Download className="h-4 w-4" />
-                            {downloadableCount > 1 ? 'Download ZIP' : 'Download'}
-                          </button>
-                        </div>
-                        <div className="divide-y divide-slate-200 bg-white">
-                          {group.items.map((document) => (
-                            <div key={document.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                              <div className="min-w-0">
-                                <p className="truncate font-medium text-slate-950">{document.fileName}</p>
-                                <p className="text-xs text-slate-500">{document.storagePath ? 'Uploaded file available' : 'Metadata only'}</p>
-                              </div>
-                              <div className="flex w-fit items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => openDocument(document)}
-                                  disabled={!document.storagePath}
-                                  title="View document"
-                                  aria-label={`View ${document.fileName}`}
-                                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => saveDocument(document)}
-                                  disabled={!document.storagePath}
-                                  title="Download document"
-                                  aria-label={`Download ${document.fileName}`}
-                                  className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  <Download className="h-4 w-4" />
-                                </button>
-                                {canUploadDocuments ? (
-                                  <label
-                                    title={document.storagePath ? 'Upload more files' : 'Upload missing file'}
-                                    aria-label={`Upload files for ${document.fileName}`}
-                                    className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50"
-                                  >
-                                    <Upload className={`h-4 w-4 ${uploadingDocumentId === document.id ? 'animate-pulse' : ''}`} />
-                                    <input
-                                      type="file"
-                                      multiple
-                                      className="hidden"
-                                      onChange={(event) => {
-                                        replaceDocumentFile(document, Array.from(event.target.files || []));
-                                        event.currentTarget.value = '';
-                                      }}
-                                    />
-                                  </label>
-                                ) : null}
-                                {canDeleteDocuments ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeDocument(document)}
-                                    disabled={deletingDocumentId === document.id}
-                                    title="Delete document"
-                                    aria-label={`Delete ${document.fileName}`}
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                    <li key={group.documentType} className="px-5 py-3.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-950">
+                          <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-400" />
+                          <span className="min-w-0 break-words">{group.documentType}</span>
+                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{group.items.length}</span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => saveDocumentGroup(group.documentType, group.items)}
+                          disabled={!downloadableCount}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          {downloadableCount > 1 ? 'Download ZIP' : 'Download'}
+                        </button>
                       </div>
-                    </div>
+                      <ul className="mt-2 space-y-1.5 pl-6">
+                        {group.items.map((document) => (
+                          <li key={document.id} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-1.5">
+                            <div className="min-w-0">
+                              {(() => {
+                                // QID / passport copies show whose they are (people added on the enquiry's Attachments step).
+                                const owner = personOfFile(kycCase.sourceEnquiry?.details, document.fileName);
+                                return owner ? (
+                                  <>
+                                    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-900">
+                                      <span className="inline-flex items-center gap-1.5"><UserRound aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-slate-400" />{owner.name}</span>
+                                      {owner.kind ? <span className="rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{owner.kind}</span> : null}
+                                    </p>
+                                    <p className="break-all text-xs text-slate-500">{document.fileName}</p>
+                                  </>
+                                ) : <p className="break-all text-sm text-slate-900">{document.fileName}</p>;
+                              })()}
+                              {document.storagePath ? null : <p className="text-xs text-amber-700">Metadata only</p>}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => openDocument(document)}
+                                disabled={!document.storagePath}
+                                title="View document"
+                                aria-label={`View ${document.fileName}`}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => saveDocument(document)}
+                                disabled={!document.storagePath}
+                                title="Download document"
+                                aria-label={`Download ${document.fileName}`}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Download className="h-4 w-4" />
+                              </button>
+                              {canUploadDocuments ? (
+                                <label
+                                  title={document.storagePath ? 'Upload more files' : 'Upload missing file'}
+                                  aria-label={`Upload files for ${document.fileName}`}
+                                  className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                >
+                                  <Upload className={`h-4 w-4 ${uploadingDocumentId === document.id ? 'animate-pulse' : ''}`} />
+                                  <input
+                                    type="file"
+                                    multiple
+                                    className="hidden"
+                                    onChange={(event) => {
+                                      replaceDocumentFile(document, Array.from(event.target.files || []));
+                                      event.currentTarget.value = '';
+                                    }}
+                                  />
+                                </label>
+                              ) : null}
+                              {canDeleteDocuments ? (
+                                <button
+                                  type="button"
+                                  onClick={() => removeDocument(document)}
+                                  disabled={deletingDocumentId === document.id}
+                                  title="Delete document"
+                                  aria-label={`Delete ${document.fileName}`}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:opacity-60"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </li>
                   );
-                })
-              ) : (
-                <p className="px-5 py-6 text-sm text-slate-500">No documents required for KYC preparation uploaded yet.</p>
-              )}
-            </div>
+                })}
+              </ul>
+            ) : (
+              <p className="px-5 py-6 text-sm text-slate-500">No documents required for KYC preparation uploaded yet.</p>
+            )}
           </section>
-
         </div>
 
-        <aside className="space-y-6">
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-base font-semibold text-slate-950">Timeline</h2>
-            <div className="mt-4 space-y-4">
-              {kycCase.statusHistory.map((item) => (
-                <div key={item.id} className="border-l-2 border-brand-200 pl-3">
+        <aside className="min-w-0 space-y-5 xl:sticky xl:top-20">
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-5 py-3.5">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><Clock aria-hidden="true" className="h-4 w-4 text-slate-400" />Timeline</h2>
+            </div>
+            <ol className="space-y-4 p-5">
+              {kycCase.statusHistory.map((item, index) => (
+                <li key={item.id} className="relative pl-5">
+                  <span aria-hidden="true" className={`absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ${index === 0 ? 'bg-brand-600' : 'bg-slate-300'}`} />
+                  {index < kycCase.statusHistory.length - 1 ? <span aria-hidden="true" className="absolute bottom-[-1rem] left-[4px] top-4 w-px bg-slate-200" /> : null}
                   <p className="text-sm font-medium text-slate-950">{kycStatusLabel(item.toStatus)}</p>
                   <p className="text-xs text-slate-500">{formatDate(item.createdAt)}</p>
                   {item.note ? <p className="mt-1 text-sm text-slate-600">{workflowNoteLabel(item.note)}</p> : null}
-                </div>
+                </li>
               ))}
-            </div>
+            </ol>
           </section>
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-base font-semibold text-slate-950">Comments</h2>
-            <form onSubmit={submitComment} className="mt-4 space-y-3">
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 px-5 py-3.5">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><MessageSquare aria-hidden="true" className="h-4 w-4 text-slate-400" />Comments</h2>
+            </div>
+            <form onSubmit={submitComment} className="space-y-3 border-b border-slate-200 p-5">
               <textarea
                 value={comment}
                 onChange={(event) => setComment(event.target.value)}
                 rows={3}
+                placeholder="Add a comment"
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
               />
-              <button className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              <button disabled={!comment.trim()} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
                 <MessageSquare className="h-4 w-4" />
                 Add Comment
               </button>
             </form>
-            <div className="mt-5 space-y-3">
+            <div className="space-y-3 p-5">
               {(kycCase.reviewFeedback || reviewFeedback).map((item) => (
                 <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
                   <p className="text-sm font-semibold text-slate-950">{item.stage === 'SUPERVISOR' ? 'AML Supervisor' : item.stage}{['RETURN_TO_SUPERVISOR', 'RETURN_TO_DMLRO', 'REQUEST_ADDITIONAL_INFORMATION'].includes(item.decision) ? ' - Return feedback' : ' - Review feedback'}</p>
@@ -745,10 +650,50 @@ export function KycCaseDetailsPage() {
                   </p>
                 </div>
               ))}
+              {!(kycCase.reviewFeedback || reviewFeedback).length && !kycCase.comments.length ? <p className="text-sm text-slate-500">No comments yet.</p> : null}
             </div>
           </section>
         </aside>
       </div>
+
+      {returnDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-4 sm:items-center" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReturnDialogOpen(false); }}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="return-bd-title"
+            onKeyDown={(event) => { if (event.key === 'Escape') setReturnDialogOpen(false); }}
+            className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <span aria-hidden="true" className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700"><Undo2 className="h-5 w-5" /></span>
+              <div className="min-w-0">
+                <h2 id="return-bd-title" className="text-base font-semibold text-slate-950">Return this case to BD?</h2>
+                <p className="mt-1 text-sm text-slate-600">The case goes back to Business Development to be corrected. Say what they need to fix.</p>
+              </div>
+            </div>
+            <label className="mt-4 block text-sm font-medium text-slate-800">
+              Reason for BD <span className="text-red-600">*</span>
+              <textarea
+                autoFocus
+                value={returnToBdReason}
+                onChange={(event) => setReturnToBdReason(event.target.value)}
+                rows={4}
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                placeholder="Describe the information or documents BD must correct."
+              />
+            </label>
+            {workflowActionError ? <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{workflowActionError}</p> : null}
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setReturnDialogOpen(false)} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+              <button type="button" onClick={returnToBusinessDevelopment} disabled={!returnToBdReason.trim()} className="inline-flex items-center justify-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">
+                <Send className="h-4 w-4" />
+                Return to BD
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
