@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmProvider';
 import { Building2, Link2, LoaderCircle, Plus, User, X } from 'lucide-react';
 import { FormEvent, ReactNode, useMemo, useState } from 'react';
 import { getApiErrorMessage } from '../services/api';
@@ -300,6 +301,7 @@ export function PersonCard({ person, context, highlight = [] }: { person: Client
 
 // All of the person's roles, linked: removing a role here removes it from every tab; the last role removes the person.
 function RolesEditor({ person, context, highlight }: { person: ClientPerson; context: PeopleContext; highlight: PersonRoleType[] }) {
+  const { confirm } = useConfirm();
   const { showToast } = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -317,12 +319,12 @@ function RolesEditor({ person, context, highlight }: { person: ClientPerson; con
     }
   }
 
-  function remove(role: ClientPersonRole) {
+  async function remove(role: ClientPersonRole) {
     const last = person.roles.length === 1;
     const question = last
       ? `Remove ${person.fullName} from this client? This is their only role; their details and documents are kept in the history.`
       : `Remove the ${roleLabel(role)} role from ${person.fullName}? Their other roles stay.`;
-    if (!window.confirm(question)) return;
+    if (!(await confirm({ title: last ? 'Remove this person?' : 'Remove this role?', message: question, confirmLabel: 'Remove', tone: 'danger' }))) return;
     run(role.id, () => removePersonRole(context.clientId, person.id, role.id), last ? `${person.fullName} removed.` : 'Role removed.');
   }
 

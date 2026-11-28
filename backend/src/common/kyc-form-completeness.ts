@@ -62,7 +62,7 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
   if (!managers.length) managerGaps.push('add at least one manager, director or authorized signatory');
   const managerRows: string[] = [];
   managers.forEach((row, index) => {
-    const missing = [!filled(row.fullName) && 'full name', !filled(row.position) && 'position', !filled(row.nationality) && !filled(row.nationalityAndAddress) && 'nationality', !filled(row.identityNumber) && 'QID or passport number'].filter(Boolean);
+    const missing = [!filled(row.fullName) && 'full name', !filled(row.position) && 'position', !filled(row.nationality) && !filled(row.nationalityAndAddress) && 'nationality', !filled(row.identityNumber) && 'QID or passport number', filled(row.qidNumber) && !filled(row.qidExpiry) && 'QID expiry date', filled(row.passportNumber) && !filled(row.passportExpiry) && 'passport expiry date'].filter(Boolean);
     if (missing.length) managerRows.push(`${rowLabel(row, index, 'Person')}: ${missing.join(', ')}`);
   });
   managerGaps.push(...capRows(managerRows, 'people'));
@@ -79,7 +79,9 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
       !filled(row.fullName) && 'full name',
       !filled(row.nationality) && (corporate ? 'country' : 'nationality'),
       !filled(row.identityNumber) && (corporate ? 'CR number' : 'QID or passport number'),
-      !filled(row.shareholderPercentage ?? row.ownershipPercentage) && 'shareholder %'
+      !filled(row.shareholderPercentage ?? row.ownershipPercentage) && 'shareholder %',
+      !corporate && filled(row.qidNumber) && !filled(row.qidExpiry) && 'QID expiry date',
+      !corporate && filled(row.passportNumber) && !filled(row.passportExpiry) && 'passport expiry date'
     ].filter(Boolean);
     if (missing.length) partyRows.push(`${rowLabel(row, index, 'Shareholder')}: ${missing.join(', ')}`);
   });
@@ -96,6 +98,8 @@ export function kycFormCompletenessIssues(form: { fullKycStarted?: boolean | nul
   add('sectionE', 'E. Key Communication Person', [
     !filled(e.fullName) && 'Full name',
     !choice(e, 'position') && 'Position / Job title',
+    filled(e.qidNumber) && !filled(e.qidExpiry) && 'QID expiry date',
+    filled(e.passportNumber) && !filled(e.passportExpiry) && 'Passport expiry date',
     !phone(e.mobileNumber) && 'Mobile Number',
     !email(e.email) && 'Email (a valid address)'
   ].filter(Boolean) as string[]);

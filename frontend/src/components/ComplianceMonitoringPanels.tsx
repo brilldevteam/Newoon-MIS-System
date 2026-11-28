@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmProvider';
 import { Download, FileText, Plus } from 'lucide-react';
 import { FormEvent, ReactNode, useState } from 'react';
 import { MultiFileUploadControl } from './MultiFileUploadControl';
@@ -352,6 +353,7 @@ export function ReviewsPanel({ clientId, data, canEdit, onChange, clientStatus, 
 }
 
 function OpenReview({ clientId, data, canEdit, onChange }: PanelProps) {
+  const { confirm, prompt } = useConfirm();
   const { busy, run } = useAction();
   const review = data.reviews.find((item) => item.status === 'IN_PROGRESS')!;
   const [outcome, setOutcome] = useState<ReviewOutcome>('NO_CHANGE');
@@ -377,7 +379,7 @@ function OpenReview({ clientId, data, canEdit, onChange }: PanelProps) {
   }
 
   async function cancel() {
-    const reason = window.prompt('Why is this review being cancelled?');
+    const reason = await prompt({ title: 'Cancel this review?', message: 'The review will be cancelled.', label: 'Why is this review being cancelled?', required: true, confirmLabel: 'Cancel review', cancelLabel: 'Keep review', tone: 'danger' });
     if (!reason?.trim()) return;
     const next = await run(() => cancelClientReview(clientId, review.id, reason), 'Review cancelled.', 'Unable to cancel the review.');
     if (next) onChange(next);

@@ -1,13 +1,14 @@
-import { Check, ChevronDown, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X, LoaderCircle } from 'lucide-react';
+import { useConfirm } from '../components/ConfirmProvider';
+import { Check, ChevronDown, ChevronRight, Download, Eye, FileSpreadsheet, FileText, Plus, Save, Search, SearchCheck, Send, Trash2, Upload, X, LoaderCircle } from 'lucide-react';
 import { kycDocumentTypes } from '../utils/kyc-document-types';
 import { personOfFile } from '../utils/person-copies';
+import { restoreDocumentPeople } from '../utils/document-people';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RichTextEditor, safeCommentHtml } from '../components/RichTextEditor';
 import { PreliminaryKycDocument } from '../components/PreliminaryKycDocument';
 import { OwnershipStructureDiagram } from '../components/OwnershipStructureDiagram';
 import { DocumentPreviewFrame } from '../components/DocumentPreviewFrame';
-import { DocumentIntakePanel } from '../components/DocumentIntakePanel';
 import { appendReviewedPerson, applyAutomaticIdentity, newIntakePersonTargets, readIntakeDocument, reviewedPatch, type IntakeApplication } from '../utils/document-intake';
 import { mergeBeneficialOwners } from '../utils/ownership';
 import { uboCompanyName } from '../utils/ubo-display-name';
@@ -34,15 +35,23 @@ import {
   ScreeningContext,
   submitDmlroReview,
   uploadLegalDocumentFiles,
+  type LegalDocument,
   viewCrrfDocument,
+  viewLegalDocument,
   viewMergedScreeningDocument,
   viewScreeningDocument,
   readKycCompanyDocument,
   readKycIdentityDocument
 } from '../services/kyc-workflow.service';
+import { kycSectionMissing } from '../utils/kyc-section-completeness';
+import { CrSourcePreview } from '../components/CrSourcePreview';
+import { AddExistingPerson } from '../components/AddExistingPerson';
+import { useCaseBarSlot } from '../layouts/KycCaseWorkspace';
+import { RequiredDocumentRow } from '../components/RequiredDocumentRow';
+import { InlineCopyPicker } from '../components/InlineCopyPicker';
 import { DocumentFillBar, FillNote } from '../components/DocumentFillBar';
 import { SamePersonPicker } from '../components/SamePersonPicker';
-import { PeopleAdapter, personChoices, personDetails, PersonSlot, syncLinkedPeople, toList } from '../utils/linked-people';
+import { linkedRoles, PeopleAdapter, personChoices, personDetails, PersonSlot, syncLinkedPeople, toList } from '../utils/linked-people';
 import { addPeopleFromDocument, PeopleLayout } from '../utils/people-from-document';
 import { CompanyTarget, companyFill, companyFillOutcome, FillOutcome, identityFill, IdentityType } from '../utils/document-fill';
 import { getApiErrorMessage } from '../services/api';
@@ -73,7 +82,7 @@ const IDENTITY_COPIES_DOCUMENT = 'QID / Passport copies';
 const CORPORATE_PARTY_CR_DOCUMENT = 'CR of legal entity parties';
 
 // The person rows that can be filled from a passport / QID copy (or, for a corporate shareholder, from its CR).
-type FillTarget = { list: 'shareholders' | 'ubos' | 'managers' | 'contact'; index: number; row: Row; corporate?: boolean };
+type FillTarget = { list: 'shareholders' | 'ubos' | 'managers' | 'contact'; index: number; row: Row; corporate?: boolean; field?: string };
 type FillBarRenderer = (target: FillTarget) => ReactNode;
 
 // How people read from a CR are written into Sections B (shareholders) and C (officers).
@@ -612,6 +621,15 @@ const personDeclarationFields: DynamicField[] = [
   ['pepDetails', 'PEP details']
 ];
 
+// How the fields of a person are grouped when the person is open. Fields in no group go in a last "More details" group.
+const personGroups: Array<[title: string, keys: string[]]> = [
+  ['Who they are', ['title', 'fullName', 'nationality', 'dateOfBirth']],
+  ['Identity documents', ['qidNumber', 'passportNumber', 'qidExpiry', 'passportExpiry', 'identityNumber']],
+  ['Contact', ['address', 'residenceAddress']],
+  ['Role', ['position', 'isAuthorizedSignatory', 'entityName']],
+  ['Declarations', ['dualCitizenship', 'otherNationality', 'isPep', 'pepDetails']]
+];
+
 const mlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'REJECT', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_DMLRO', 'SEND_TO_SEF'];
 const dmlroDecisionOptions = ['', 'APPROVE', 'APPROVE_WITH_CONDITIONS', 'DMLRO_FINAL_APPROVE', 'REQUEST_ADDITIONAL_INFORMATION', 'RETURN_TO_SUPERVISOR'];
 const dmlroDecisionLabels: Record<string, string> = {
@@ -664,13 +682,13 @@ const reviewDecisionOutcomes: Record<string, Record<string, string>> = {
 };
 
 // Review decisions move the file to someone else and cannot be undone from this page, so the reviewer confirms first.
-function confirmReviewDecision(stage: 'DMLRO' | 'MLRO' | 'SEF', decision: string, decisionLabel: string) {
+async function confirmReviewDecision(confirm: (options: { title: string; message?: string; confirmLabel?: string; tone?: 'danger' | 'default' }) => Promise<boolean>, stage: 'DMLRO' | 'MLRO' | 'SEF', decision: string, decisionLabel: string) {
   const outcome = reviewDecisionOutcomes[stage][decision] || '';
-  return window.confirm(`Submit the ${stage} decision "${decisionLabel}"?${outcome ? `
-
-${outcome}` : ''}
-
-This cannot be undone from this page.`);
+  return confirm({
+    title: `Submit the ${stage} decision?`,
+    message: `"${decisionLabel}"${outcome ? `\n\n${outcome}` : ''}\n\nThis cannot be undone from this page.`,
+    confirmLabel: 'Submit decision'
+  });
 }
 
 function dmlroDecisionSuccessMessage(decision: string) {
@@ -1094,6 +1112,8 @@ const CLIENT_DECLARATION_TEXT = 'By signing this document, I hereby confirm that
 const DMLRO_STAGE_STATUSES = ['SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS'];
 
 export function KycFormEditorPage() {
+  const { confirm } = useConfirm();
+  const caseBarSlot = useCaseBarSlot();
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1324,6 +1344,29 @@ export function KycFormEditorPage() {
     });
   }
 
+  // Adds a person already entered elsewhere in the form as a manager or beneficial person, with their details copied.
+  function addExistingPerson(list: 'managers' | 'ubos' | 'shareholders', sourceSlot: string | null) {
+    setForm((current) => {
+      // No source: a blank person to type in by hand.
+      const source = sourceSlot ? kycPeople.read(current).find((person) => person.slot === sourceSlot) : null;
+      if (sourceSlot && !source) return current;
+      const section = list === 'managers' ? 'sectionC' : 'sectionB';
+      const data = current[section] || {};
+      const base = list === 'shareholders' ? createOwnershipRow() : { id: crypto.randomUUID() };
+      const row = source ? withDerivedIdentity({ ...base, ...personDetails(source.row), ...(source.row.identityNumber ? { identityNumber: source.row.identityNumber } : {}) }) : base;
+      const next = { ...current, [section]: { ...data, [list]: [...(data[list] || []), row] } };
+      formRef.current = next;
+      return next;
+    });
+  }
+
+  // The "Already entered in this form?" shortcut above a people list: everyone not yet in that list.
+  function renderAddExisting(list: 'managers' | 'ubos' | 'shareholders') {
+    const people = kycPeople.read(form);
+    const choices = personChoices(people, '').filter((choice) => !choice.slots.some((slot) => slot.startsWith(`${list}:`)));
+    return <AddExistingPerson choices={choices} role={list === 'managers' ? 'manager or signatory' : list === 'shareholders' ? 'shareholder' : 'beneficial person'} note={list === 'shareholders' ? 'Their name, nationality and ID numbers are copied. Then enter their shareholding %.' : undefined} disabled={!canEditVisibleForm} onPick={(slot) => addExistingPerson(list, slot)} onAddManually={() => addExistingPerson(list, null)} />;
+  }
+
   // "Same person as ...": copies the chosen person's details onto this row (not a change to copy to other rows).
   function pickSamePerson(slot: string, sourceSlot: string) {
     setForm((current) => {
@@ -1374,21 +1417,45 @@ export function KycFormEditorPage() {
       .map((document) => ({ value: document.id, label: `${document.fileName} (${document.documentType})` }));
   }
 
+  // The CR copies received with the enquiry, shown view-only beside the company details.
+  const crSourceDocuments: LegalDocument[] = (kycCase?.legalDocuments || [])
+    .filter((document) => document.storagePath && /\.(pdf|png|jpe?g|gif|webp)$/i.test(document.fileName) && /commercial\s*registration|cr\s*extract|corporate\s*documents\s*-\s*company/i.test(document.documentType));
+
   // Expiry dates are kept with the person (and feed the client record and its reminders) but are not form fields.
   const renderFillBar: FillBarRenderer = (target) => {
+    // People are added from the box above their list, so only the key contact (one person) keeps a "Same person as" here.
+    // QID / passport copies are uploaded right under those fields; only a company's CR keeps the fill bar.
+    const hasTopAdd = target.list !== 'contact';
+    if (target.field) {
+      if (target.field !== 'qidNumber' && target.field !== 'passportNumber') return null;
+      const kind = target.field === 'passportNumber' ? 'PASSPORT' : 'QID';
+      const label = kind === 'PASSPORT' ? 'passport' : 'QID';
+      // The copies attached to this person on the enquiry's Attachments step (matched by name or ID number).
+      const row = target.row;
+      const same = (x: unknown, y: unknown) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase() && String(x || '').trim() !== '';
+      const owner = restoreDocumentPeople((kycCase?.sourceEnquiry?.details as Record<string, unknown> | null | undefined)?.documentPeople).find((person) => same(person.row.fullName, row.fullName) || same(person.row.qidNumber, row.qidNumber) || same(person.row.passportNumber, row.passportNumber));
+      const attached = (owner?.files || [])
+        .filter((fileName) => owner?.kinds?.[fileName] === kind)
+        .flatMap((fileName) => (kycCase?.legalDocuments || []).filter((document) => document.storagePath && document.fileName === fileName))
+        .map((document) => ({ value: document.id, label: document.fileName }));
+      return <InlineCopyPicker key={`copy-${target.list}-${target.index}-${kind}`} label={label} disabled={!canEditVisibleForm} onRead={(file) => readPersonCopy(target, file, kind)} attached={attached} onView={async (documentId) => { const document = (kycCase?.legalDocuments || []).find((item) => item.id === documentId); if (document && id) await viewLegalDocument(id, document); }} />;
+    }
     const expiries = target.corporate ? '' : [target.row.qidExpiry ? `QID expiry ${target.row.qidExpiry}` : '', target.row.passportExpiry ? `passport expiry ${target.row.passportExpiry}` : ''].filter(Boolean).join(' · ');
     return (
       <div key={`fill-${target.list}-${target.index}`} className="min-w-0 space-y-2 md:col-span-2" style={{ gridColumn: '1 / -1' }}>
-        {target.corporate ? null : <SamePersonPicker people={kycPeople.read(form)} slot={fillTargetSlot(target)} onPick={(source) => pickSamePerson(fillTargetSlot(target), source)} disabled={!canEditVisibleForm} />}
-        <DocumentFillBar
+        {target.corporate ? null : hasTopAdd ? (() => {
+          // Added from the box above the list, so only the links are shown here.
+          const also = linkedRoles(kycPeople.read(form), fillTargetSlot(target));
+          return also.length ? <p className="break-words text-xs leading-5 text-teal-800">Also entered in this form as: {also.join(', ')}.</p> : null;
+        })() : <SamePersonPicker people={kycPeople.read(form)} slot={fillTargetSlot(target)} onPick={(source) => pickSamePerson(fillTargetSlot(target), source)} disabled={!canEditVisibleForm} />}
+        {!target.corporate ? null : <DocumentFillBar
           label={target.corporate ? "Fill from the company's CR:" : 'Fill from a copy:'}
           options={target.corporate ? [{ value: 'COMPANY', label: 'CR' }] : [{ value: 'PASSPORT', label: 'Passport' }, { value: 'QID', label: 'QID (back side)' }]}
           onRead={(file, kind) => readPersonCopy(target, file, kind)}
           existing={uploadedFiles(target.corporate ? 'party' : 'identity')}
           onReadExisting={(documentId, kind) => readPersonCopy(target, documentId, kind)}
           disabled={!canEditVisibleForm}
-        />
-        {expiries ? <p className="mt-1 text-xs text-slate-600">On file: {expiries}</p> : null}
+        />}
       </div>
     );
   };
@@ -1535,7 +1602,7 @@ export function KycFormEditorPage() {
       setError('Add DMLRO reason, conditions, or comments before submitting this decision.');
       return;
     }
-    if (!confirmReviewDecision('DMLRO', decision, dmlroDecisionLabels[decision] || decision)) return;
+    if (!(await confirmReviewDecision(confirm, 'DMLRO', decision, dmlroDecisionLabels[decision] || decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1603,7 +1670,7 @@ export function KycFormEditorPage() {
       setError('High-risk KYC files must be sent to SEF for management decision before final approval.');
       return;
     }
-    if (!confirmReviewDecision('MLRO', decision, mlroDecisionLabels[decision] || decision)) return;
+    if (!(await confirmReviewDecision(confirm, 'MLRO', decision, mlroDecisionLabels[decision] || decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1665,7 +1732,7 @@ export function KycFormEditorPage() {
       setError('Add SEF conditions or comments before submitting this decision.');
       return;
     }
-    if (!confirmReviewDecision('SEF', decision, sefDecisionLabels[decision] || decision)) return;
+    if (!(await confirmReviewDecision(confirm, 'SEF', decision, sefDecisionLabels[decision] || decision))) return;
 
     setSaving(true);
     setMessage('');
@@ -1866,25 +1933,21 @@ export function KycFormEditorPage() {
         </section>
       ) : null}
 
-      <div hidden={activeReviewPackage !== 'kyc'}>
-        {canEditVisibleForm && (canEditAllSections || canPrepareKyc) && <DocumentIntakePanel key={id} company={form.sectionA} companyTargets={crTargets} attachmentTypes={{ COMPANY: ['Other supporting document', ...requiredDocuments.filter(type => type !== IDENTITY_COPIES_DOCUMENT)], IDENTITY: [IDENTITY_COPIES_DOCUMENT] }} targets={[...kycPeople.read(form).filter(person => !person.hidden).map(person => ({ value: person.slot, label: `${person.row.fullName || 'Unnamed person'} (${person.role})`, row: person.row, nationalityOptions: person.slot === 'contact' ? nationalityOptions : countryOptions })), ...newIntakePersonTargets.map(target => ({ ...target, nationalityOptions: countryOptions }))]} disabled={saving || Boolean(generatingType)} read={(file, kind) => {
-          if (!id) throw new Error('Save the KYC case first.');
-          return readIntakeDocument(file, kind, value => readKycCompanyDocument(id, value), (type, value) => readKycIdentityDocument(id, type, value));
-        }} apply={applyIntake} />}
-      </div>
-
       {activeReviewPackage === 'kyc' ? (
-        <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] 2xl:grid-cols-[190px_minmax(0,1fr)_minmax(0,1.05fr)]">
-          <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />
+        <div className="min-w-0 space-y-4">
+          {caseBarSlot ? createPortal(<KycFormSectionSidebar docked sections={visibleSections} active={activeSection} onChange={setActiveSection} />, caseBarSlot) : <KycFormSectionSidebar sections={visibleSections} active={activeSection} onChange={setActiveSection} />}
+        <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <section className="min-w-0 rounded-lg border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-5 py-4">
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-medium text-slate-500">{isPreliminaryProposedCompanyForm ? 'Preliminary KYC' : 'KYC form'}</p><span className="text-xs tabular-nums text-slate-400">{visibleSections.findIndex((item) => item.key === activeSection) + 1} / {visibleSections.length}</span></div>
               <h2 className="text-base font-semibold text-slate-950">{sections.find((item) => item.key === activeSection)?.label}</h2>
             </div>
             <fieldset disabled={!canEditVisibleForm} className="min-w-0 overflow-x-auto p-5 disabled:opacity-75 xl:max-h-[calc(100dvh-250px)] xl:overflow-y-auto">
-              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} onReadCr={(file) => readCompanyCr(file, true)} uploadedCrs={uploadedFiles('company')} onReadUploadedCr={(documentId) => readCompanyCr(documentId, false)} crFileNames={fileNameList((form.sectionF?.documents || []).find((row: Row) => row.documentType === CR_DOCUMENT)?.fileName)} /> : null}
+              {activeSection === 'sectionA' ? <SectionAForm data={form.sectionA} onChange={(value) => setSection('sectionA', value)} caseId={id || ''} crDocuments={crSourceDocuments} /> : null}
               {activeSection === 'sectionB' ? (
                 <SectionBForm
+                  uboTopExtra={renderAddExisting('ubos')}
+                  shareholdersTopExtra={renderAddExisting('shareholders')}
                   data={form.sectionB}
                   total={totalOwnership}
                   rootName={form.sectionA.legalName || kycCase.client.name}
@@ -1893,36 +1956,76 @@ export function KycFormEditorPage() {
                   fillBar={renderFillBar}
                 />
               ) : null}
-              {activeSection === 'sectionC' ? <SectionCForm data={form.sectionC} onChange={(value) => setSection('sectionC', value)} fillBar={renderFillBar} /> : null}
+              {activeSection === 'sectionC' ? <SectionCForm topExtra={renderAddExisting('managers')} data={form.sectionC} onChange={(value) => setSection('sectionC', value)} fillBar={renderFillBar} /> : null}
               {activeSection === 'sectionD' ? <SectionDComplianceForm data={form.sectionD} onChange={(value) => setSection('sectionD', value)} personFlags={personFlags(form)} /> : null}
               {activeSection === 'sectionE' ? <SectionEContactForm data={form.sectionE} onChange={(value) => setSection('sectionE', value)} fillBar={renderFillBar} /> : null}
               {activeSection === 'sectionF' ? <SectionFRequiredDocumentsChecklist caseId={id || ''} data={form.sectionF} onChange={(value) => setSection('sectionF', value)} onCompanyDocumentUploaded={(file) => readCompanyCr(file, false)} enquiryDetails={kycCase?.sourceEnquiry?.details} /> : null}
               {activeSection === 'sectionG' ? <SectionGDeclarationForm data={form.sectionG} onChange={(value) => setSection('sectionG', value)} people={kycPeople.read(form)} /> : null}
               {activeSection === 'sectionH' ? <SectionHInternalReviewForm mode={sectionHMode} data={form.sectionH || {}} onChange={(value) => setSection('sectionH', value)} /> : null}
             </fieldset>
+            <KycSectionFooter sections={visibleSections} active={activeSection} missing={kycSectionMissing(form, activeSection)} onGo={(key) => { setActiveSection(key); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
           </section>
           <LiveDocumentPreviewPanel form={{ ...form, sectionB: { ...form.sectionB, totalOwnershipPercentage: totalOwnership } }} />
+        </div>
         </div>
       ) : null}
     </div>
   );
 }
 
-function KycFormSectionSidebar({ sections, active, onChange }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void }) {
+function KycFormSectionSidebar({ sections, active, onChange, docked = false }: { sections: SectionDefinition[]; active: SectionKey; onChange: (key: SectionKey) => void; docked?: boolean }) {
+  const activeIndex = sections.findIndex((section) => section.key === active);
   return (
-    <aside aria-label="KYC form sections" className="min-w-0 rounded-lg border border-slate-200 bg-white p-2 xl:col-span-2 2xl:sticky 2xl:top-36 2xl:col-span-1 2xl:h-fit"><div className="flex gap-1 overflow-x-auto 2xl:flex-col">
-      {sections.map((section, index) => (
-        <button
-          key={section.key}
-          type="button"
-          onClick={() => onChange(section.key)}
-          aria-current={active === section.key ? 'step' : undefined}
-          className={`flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium 2xl:w-full ${active === section.key ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50'}`}
-        >
-          <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] ${active === section.key ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{index + 1}</span><span>{section.label.replace(/^[A-H]\.\s*/, '')}</span>
-        </button>
-      ))}
-    </div></aside>
+    <nav aria-label="KYC form sections" className={docked ? 'min-w-0 border-t border-slate-100 py-1.5' : 'min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-2'}>
+      <ol className="flex items-center gap-0.5 overflow-x-auto">
+        {sections.map((section, index) => {
+          const isActive = active === section.key;
+          const done = index < activeIndex;
+          return (
+            <li key={section.key} className="flex min-w-0 flex-1 basis-0 items-center gap-0.5" style={{ minWidth: '8.5rem' }}>
+              <button
+                type="button"
+                onClick={() => onChange(section.key)}
+                aria-current={isActive ? 'step' : undefined}
+                title={section.label}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium ${isActive ? 'bg-brand-50 text-brand-700 ring-1 ring-brand-200' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${isActive ? 'bg-brand-600 text-white' : done ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-500'}`}>{done ? '✓' : index + 1}</span>
+                <span className="min-w-0 truncate">{section.label.replace(/^[A-H]\.\s*/, '')}</span>
+              </button>
+              {index < sections.length - 1 ? <ChevronRight aria-hidden="true" className={`h-4 w-4 shrink-0 ${done ? 'text-brand-400' : 'text-slate-300'}`} /> : null}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+// Back / Next under the section. Next stays disabled until the section's required details are filled, and says what is left.
+function KycSectionFooter({ sections, active, missing, onGo }: { sections: SectionDefinition[]; active: SectionKey; missing: string[]; onGo: (key: SectionKey) => void }) {
+  const index = sections.findIndex((section) => section.key === active);
+  const previous = sections[index - 1];
+  const next = sections[index + 1];
+  const nextLabel = next ? next.label.replace(/^[A-H]\.\s*/, '') : '';
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
+      <div className="min-w-0 flex-1 text-sm">
+        {missing.length ? (
+          <p className="text-amber-800" role="status"><span className="font-semibold">{missing.length} to fill before the next step:</span> {missing.join('; ')}.</p>
+        ) : (
+          <p className="inline-flex items-center gap-1.5 font-medium text-teal-800" role="status"><Check aria-hidden="true" className="h-4 w-4" />This section is complete.</p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {previous ? <button type="button" onClick={() => onGo(previous.key)} className="inline-flex min-h-10 items-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back</button> : null}
+        {next ? (
+          <button type="button" disabled={missing.length > 0} onClick={() => onGo(next.key)} title={missing.length ? 'Fill the required details to continue' : `Go to ${nextLabel}`} className="inline-flex min-h-10 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">
+            Next: {nextLabel}
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -1939,7 +2042,7 @@ const crTargets: CompanyTarget[] = [
   { field: 'licenseActivities', key: 'licenseActivities', label: 'license activities' }
 ];
 
-function SectionAForm({ data, onChange, onReadCr, crFileNames = [], uploadedCrs = [], onReadUploadedCr }: FormProps & { onReadCr?: (file: File) => Promise<FillOutcome>; crFileNames?: string[]; uploadedCrs?: Array<{ value: string; label: string }>; onReadUploadedCr?: (documentId: string) => Promise<FillOutcome> }) {
+function SectionAForm({ data, onChange, caseId = '', crDocuments = [] }: FormProps & { caseId?: string; crDocuments?: LegalDocument[] }) {
   function setCountryOfIncorporation(country: string) {
     onChange({
       ...data,
@@ -1957,35 +2060,34 @@ function SectionAForm({ data, onChange, onReadCr, crFileNames = [], uploadedCrs 
   }
 
   return (
-    <FormGrid>
-      {onReadCr ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" style={{ gridColumn: '1 / -1' }}>
-          <p className="text-sm font-semibold text-slate-950">Commercial Registration (CR) copy</p>
-          <p className="mt-1 text-xs text-slate-500">Upload the company's CR and the company details below are filled in automatically. Anything that is not read can be typed in by hand. Fields you have already typed are not changed.</p>
-          <p className="mt-2 text-xs text-slate-700">{crFileNames.length ? `Uploaded: ${crFileNames.join(', ')}` : 'No CR uploaded yet.'}</p>
-          <div className="mt-2">
-            <DocumentFillBar label="CR (PDF or image):" buttonLabel={crFileNames.length ? 'Upload another CR' : 'Upload CR'} options={[{ value: 'COMPANY', label: 'CR' }]} onRead={(file) => onReadCr(file)} existing={uploadedCrs} onReadExisting={onReadUploadedCr ? (documentId) => onReadUploadedCr(documentId) : undefined} />
-          </div>
+    <div className="space-y-4">
+      {caseId ? <CrSourcePreview caseId={caseId} documents={crDocuments} /> : null}
+      <FormCard title="Company and registration">
+        <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
+        <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
+        <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
+        <Field label="Commercial Registration No. *" value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
+        <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
+        <Field label="Date of Incorporation *" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
+        <Field label="CR Expiry Date" type="date" value={data.crExpiryDate} onChange={(value) => update(data, onChange, 'crExpiryDate', value)} />
+        <Select label="Country of Incorporation *" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
+        <Select label="Legal Form *" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
+      </FormCard>
+      <FormCard title="Contact" columns={3}>
+        <Field label="Telephone *" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
+        <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+        <Field label="Website" value={data.website} onChange={(value) => update(data, onChange, 'website', value)} />
+        <div className="md:col-span-3">
+          <Field label="Registered Office Address *" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} textarea rows={2} />
         </div>
-      ) : null}
-      <Field label="Date" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
-      <Field label="KYC Number" value={data.reference} onChange={(value) => update(data, onChange, 'reference', value)} />
-      <Field label="Legal Name of Company *" value={data.legalName} onChange={(value) => update(data, onChange, 'legalName', value)} wide />
-      <Field label="Commercial Registration No. *" value={data.commercialRegistrationNo} onChange={(value) => update(data, onChange, 'commercialRegistrationNo', value)} />
-      <Field label="Tax Identification No." value={data.taxIdentificationNo} onChange={(value) => update(data, onChange, 'taxIdentificationNo', value)} />
-      <Field label="Date of Incorporation *" type="date" value={data.dateOfIncorporation} onChange={(value) => update(data, onChange, 'dateOfIncorporation', value)} />
-      <Field label="CR Expiry Date" type="date" value={data.crExpiryDate} onChange={(value) => update(data, onChange, 'crExpiryDate', value)} />
-      <Select label="Country of Incorporation *" value={data.countryOfIncorporation} otherValue={data.countryOfIncorporationOther} options={countryOptions} onChange={setCountryOfIncorporation} onOtherChange={(value) => update(data, onChange, 'countryOfIncorporationOther', value)} allowOther />
-      <Select label="Legal Form *" value={data.legalForm} otherValue={data.legalFormOther} options={legalFormOptions} onChange={(value) => updateSelect(data, onChange, 'legalForm', value)} onOtherChange={(value) => update(data, onChange, 'legalFormOther', value)} allowOther />
-      <Field label="Telephone *" value={applyCountryDialCode(data.telephone || '', data.countryOfIncorporation || '')} onChange={setTelephone} />
-      <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
-      <Field label="Website" value={data.website} onChange={(value) => update(data, onChange, 'website', value)} />
-      <Field label="Registered Office Address *" value={data.registeredOfficeAddress} onChange={(value) => update(data, onChange, 'registeredOfficeAddress', value)} wide textarea />
-      <Select label="Main purpose / nature of business *" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} wide allowOther />
-      <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea />
-      <Select label="Related Industry *" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} wide allowOther />
-      <MultiSelect label="Nature of prospective service from Newoon *" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
-    </FormGrid>
+      </FormCard>
+      <FormCard title="Business">
+        <Select label="Main purpose / nature of business *" value={data.businessNature} otherValue={data.businessNatureOther} options={businessNatureOptions} onChange={(value) => updateSelect(data, onChange, 'businessNature', value)} onOtherChange={(value) => update(data, onChange, 'businessNatureOther', value)} allowOther />
+        <Select label="Related Industry *" value={data.relatedIndustry} otherValue={data.relatedIndustryOther} options={industryOptions} onChange={(value) => updateSelect(data, onChange, 'relatedIndustry', value)} onOtherChange={(value) => update(data, onChange, 'relatedIndustryOther', value)} allowOther />
+        <Field label="License activities" value={data.licenseActivities} onChange={(value) => update(data, onChange, 'licenseActivities', value)} wide textarea rows={2} />
+        <MultiSelect label="Nature of prospective service from Newoon *" value={listValue(data.prospectiveService).filter((service) => service !== 'Other')} options={prospectiveServiceOptions} onChange={(value) => onChange({ ...data, prospectiveService: value, prospectiveServiceOther: '' })} wide />
+      </FormCard>
+    </div>
   );
 }
 
@@ -2019,7 +2121,7 @@ function uboInterestTotal(sectionB: Record<string, any>) {
   return effectiveUboRows(sectionB).reduce((sum: number, row: Row) => sum + Number(row.uboInterestPercentage ?? row.ownershipPercentage ?? 0), 0);
 }
 
-function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBar }: FormProps & { total: number; rootName: string; currentClientId: string; fillBar?: FillBarRenderer }) {
+function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBar, uboTopExtra, shareholdersTopExtra }: FormProps & { total: number; rootName: string; currentClientId: string; fillBar?: FillBarRenderer; uboTopExtra?: ReactNode; shareholdersTopExtra?: ReactNode }) {
   const shareholders = data.shareholders || [];
   const totals = ownershipLayerTotals(shareholders);
   const invalidLayerTotals = Array.from(totals.entries()).filter(([, layerTotal]) => layerTotal > 100);
@@ -2028,6 +2130,7 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBa
 
   return (
     <div className="space-y-5">
+      {shareholdersTopExtra}
       <OwnershipRows rootName={rootName} currentClientId={currentClientId} rows={shareholders} onChange={(rows) => onChange({ ...data, shareholders: rows })} fillBar={fillBar} />
       <div className={`rounded-md border p-3 text-sm font-semibold ${invalidLayerTotals.length ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
         Total shareholder %: {total.toFixed(2)}% | Total UBO %: {totalUboPercentage.toFixed(2)}%
@@ -2042,8 +2145,8 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBa
       {(data.ubos || []).map((ubo: Row, index: number) => <label key={ubo.id || index} className="block text-sm font-medium text-slate-700">Corporate shareholder for {ubo.fullName || `beneficial owner ${index + 1}`}<select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2" value={ubo.parentRowId || ''} onChange={(event) => onChange({ ...data, ubos: data.ubos.map((row: Row, rowIndex: number) => rowIndex === index ? { ...row, parentRowId: event.target.value } : row) })}><option value="">Direct beneficial owner</option>{shareholders.filter((party: Row) => party.shareholderType === 'Corporate Entity').map((party: Row) => <option key={party.id} value={party.id}>{party.fullName || 'Unnamed corporate shareholder'}</option>)}</select></label>)}
       <Choice label="Beneficial person different from listed parties" value={data.uboDifferentFromShareholders || 'No'} onChange={(value) => onChange({ ...data, uboDifferentFromShareholders: value })} />
       <Field label="Beneficial structure notes" value={data.uboGroupStructureNotes} onChange={(value) => update(data, onChange, 'uboGroupStructureNotes', value)} textarea wide />
-      <DynamicRows title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'ubos', index, row }) : undefined} fields={[
-        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['passportNumber', 'Passport number'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
+      <DynamicRows topExtra={uboTopExtra} title="Beneficial person rows" rows={data.ubos || []} onChange={(rows) => onChange({ ...data, ubos: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'ubos', index, row }) : undefined} fieldExtra={fillBar ? (field, row, index) => fillBar({ list: 'ubos', index, row, field }) : undefined} groups={personGroups} fields={[
+        ['fullName', 'Full name'], ['nationality', 'Nationality', 'multiselect', countryOptions], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number'], ['passportNumber', 'Passport number'], ['qidExpiry', 'QID expiry date', 'date'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['uboInterestPercentage', 'UBO Interest %', 'number'], ['residenceAddress', 'Residence address']
       ]} />
     </div>
   );
@@ -2052,6 +2155,15 @@ function SectionBForm({ data, total, rootName, currentClientId, onChange, fillBa
 function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: { rootName: string; currentClientId: string; rows: Row[]; onChange: (rows: Row[]) => void; fillBar?: FillBarRenderer }) {
   const [lookupMessages, setLookupMessages] = useState<Record<string, string>>({});
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  // A party added from the box above the list opens straight away.
+  const previousCount = useRef(rows.length);
+  useEffect(() => {
+    if (rows.length > previousCount.current) {
+      const added = rows[rows.length - 1];
+      setExpandedRows((current) => ({ ...current, [added.id || String(rows.length - 1)]: true }));
+    }
+    previousCount.current = rows.length;
+  }, [rows.length]);
   const corporateParents = rows.filter((row) => (row.shareholderType || 'Individual') === 'Corporate Entity');
   const parentLabels = new Map<string, string>(corporateParents.map((row, index) => [row.id || String(index), row.fullName || `Corporate party ${index + 1}`]));
 
@@ -2061,12 +2173,6 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
 
   function patchRow(index: number, patch: Row) {
     onChange(rows.map((row, rowIndex) => (rowIndex === index ? withDerivedIdentity({ ...row, ...patch }) : row)));
-  }
-
-  function addOwner() {
-    const owner = createOwnershipRow();
-    setExpandedRows((current) => ({ ...current, [owner.id || String(rows.length)]: true }));
-    onChange([...rows, owner]);
   }
 
   function toggleRow(rowKey: string) {
@@ -2120,10 +2226,6 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
               Expand
             </button>
           ) : null}
-          <button type="button" onClick={addOwner} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-brand-600 px-3 text-sm font-semibold text-white hover:bg-brand-700">
-            <Plus className="h-4 w-4" />
-            Party
-          </button>
         </div>
       </div>
       {rows.map((row, index) => {
@@ -2148,19 +2250,15 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
                 {row.isUbo ? <span className="rounded-full bg-cyan-50 px-2 py-1 font-semibold text-cyan-700">Beneficial</span> : null}
                 {row.linkedClientId ? <span className="rounded-full bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">Linked client</span> : null}
               </div>
-              <button
-                type="button"
-                onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-                title="Remove party"
-                aria-label={`Remove ${row.fullName || `party ${index + 1}`}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <RemoveControl name={row.fullName || `party ${index + 1}`} isBlank={Object.entries(row).every(([key, value]) => ['id', 'shareholderType', 'parentRowId', 'isUbo'].includes(key) || !String(Array.isArray(value) ? value.join('') : value ?? '').trim())} onRemove={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))} />
             </div>
             {isExpanded ? (
               <div className="p-4">
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-3">
+                  {fillBar ? fillBar({ list: 'shareholders', index, row, corporate: (row.shareholderType || 'Individual') === 'Corporate Entity' }) : null}
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Party</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
                   <Select label="Party type" value={row.shareholderType || 'Individual'} options={['Individual', 'Corporate Entity']} onChange={(value) => patchRow(index, { shareholderType: value, linkedClientId: '', linkedClientName: '' })} />
                   <label className="text-sm font-medium text-slate-700">
                     Parent / linked entity
@@ -2182,24 +2280,27 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
                         })}
                     </select>
                   </label>
-                  <Field label="Full name *" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
-                  <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
+                    </div>
+                  </fieldset>
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Who they are</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
                   {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
-                    <>
                       <label className="block text-sm font-medium text-slate-700">
                         Title
                         <select value={row.title || ''} onChange={(event) => patchRow(index, { title: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
                           {personTitleOptions.map((option) => <option key={option} value={option}>{option || 'Not selected'}</option>)}
                         </select>
                       </label>
-                      <Choice label="Dual citizenship" value={row.dualCitizenship || ''} onChange={(value) => patchRow(index, { dualCitizenship: value })} />
-                      <Field label="Other nationality (if dual citizenship)" value={row.otherNationality} onChange={(value) => patchRow(index, { otherNationality: value })} />
-                      <Choice label="PEP (politically exposed person)" value={row.isPep || ''} onChange={(value) => patchRow(index, { isPep: value })} />
-                      <Field label="PEP details" value={row.pepDetails} onChange={(value) => patchRow(index, { pepDetails: value })} />
-                    </>
                   ) : null}
-                  {fillBar ? fillBar({ list: 'shareholders', index, row, corporate: (row.shareholderType || 'Individual') === 'Corporate Entity' }) : null}
+                  <Field label="Full name *" value={row.fullName} onChange={(value) => patchRow(index, { fullName: value })} />
+                  <MultiSelect label="Nationality / country *" value={row.nationality} options={countryOptions.filter(Boolean)} onChange={(value) => patchRow(index, { nationality: value })} placeholder="Select countries" />
                   <Field label={(row.shareholderType || 'Individual') === 'Corporate Entity' ? 'Date of incorporation' : 'Date of birth'} type="date" value={row.dateOfBirth} onChange={(value) => patchRow(index, { dateOfBirth: value })} />
+                    </div>
+                  </fieldset>
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Identity documents</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
                   <div className="text-sm font-medium text-slate-700">
                     <span>{labelText((row.shareholderType || 'Individual') === 'Corporate Entity' ? 'CR number *' : 'QID number (or passport) *')}</span>
                     <div className="mt-1 flex gap-2">
@@ -2222,20 +2323,46 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
                     ) : lookupMessages[rowKey] ? (
                       <p className="mt-2 text-xs text-slate-500">{lookupMessages[rowKey]}</p>
                     ) : null}
+                    {(row.shareholderType || 'Individual') !== 'Corporate Entity' && fillBar ? <div className="mt-1.5 font-normal">{fillBar({ list: 'shareholders', index, row, field: 'qidNumber' })}</div> : null}
                   </div>
                   {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
                     <>
-                      <Field label="Passport number (or QID) *" value={row.passportNumber} onChange={(value) => patchRow(index, { passportNumber: value, linkedClientId: '', linkedClientName: '' })} />
+                      <div className="min-w-0 space-y-1.5"><Field label="Passport number (or QID) *" value={row.passportNumber} onChange={(value) => patchRow(index, { passportNumber: value, linkedClientId: '', linkedClientName: '' })} />{fillBar ? fillBar({ list: 'shareholders', index, row, field: 'passportNumber' }) : null}</div>
                       {legacyIdentity(row) ? <LegacyIdentityNote value={legacyIdentity(row)} /> : null}
+                      <Field label="QID expiry date" type="date" value={row.qidExpiry} onChange={(value) => patchRow(index, { qidExpiry: value })} />
+                      <Field label="Passport expiry date" type="date" value={row.passportExpiry} onChange={(value) => patchRow(index, { passportExpiry: value })} />
                     </>
                   ) : null}
+                    </div>
+                  </fieldset>
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ownership</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
                   <Field label="Shareholder % *" type="number" value={row.shareholderPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { shareholderPercentage: value, ownershipPercentage: value })} />
-                  <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
-                  <label className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <label className="inline-flex md:col-span-2 items-center gap-2 text-sm font-medium text-slate-700">
                     <input type="checkbox" checked={Boolean(row.isUbo)} onChange={(event) => patchRow(index, { isUbo: event.target.checked, uboInterestPercentage: event.target.checked && !row.uboInterestPercentage ? (row.shareholderPercentage ?? row.ownershipPercentage) : row.uboInterestPercentage })} />
                     Mark as beneficial person
                   </label>
                   {row.isUbo ? <Field label="UBO Interest %" type="number" value={row.uboInterestPercentage ?? row.ownershipPercentage} onChange={(value) => patchRow(index, { uboInterestPercentage: value })} /> : null}
+                    </div>
+                  </fieldset>
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Contact</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
+                  <Field label="Residence / registered address" value={row.residenceAddress} onChange={(value) => patchRow(index, { residenceAddress: value })} />
+                    </div>
+                  </fieldset>
+                  {(row.shareholderType || 'Individual') !== 'Corporate Entity' ? (
+                  <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                    <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Declarations</legend>
+                    <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2 [&>*]:min-w-0">
+                      <Choice label="Dual citizenship" value={row.dualCitizenship || ''} onChange={(value) => patchRow(index, { dualCitizenship: value })} />
+                      <Field label="Other nationality (if dual citizenship)" value={row.otherNationality} onChange={(value) => patchRow(index, { otherNationality: value })} />
+                      <Choice label="PEP (politically exposed person)" value={row.isPep || ''} onChange={(value) => patchRow(index, { isPep: value })} />
+                      <Field label="PEP details" value={row.pepDetails} onChange={(value) => patchRow(index, { pepDetails: value })} />
+                    </div>
+                  </fieldset>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -2248,9 +2375,9 @@ function OwnershipRows({ rootName, currentClientId, rows, onChange, fillBar }: {
 }
 
 
-function SectionCForm({ data, onChange, fillBar }: FormProps & { fillBar?: FillBarRenderer }) {
-  return <DynamicRows title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'managers', index, row }) : undefined} fields={[
-    ['fullName', 'Full name *'], ['entityName', 'Entity name'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['passportNumber', 'Passport number (or QID) *'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
+function SectionCForm({ data, onChange, fillBar, topExtra }: FormProps & { fillBar?: FillBarRenderer; topExtra?: ReactNode }) {
+  return <DynamicRows topExtra={topExtra} title="Managers, Directors, Secretary and Signatories" rows={data.managers || []} onChange={(rows) => onChange({ ...data, managers: rows.map(withDerivedIdentity) })} rowExtra={fillBar ? (row, index) => fillBar({ list: 'managers', index, row }) : undefined} fieldExtra={fillBar ? (field, row, index) => fillBar({ list: 'managers', index, row, field }) : undefined} groups={personGroups} fields={[
+    ['fullName', 'Full name *'], ['entityName', 'Company represented (if any)'], ['nationality', 'Nationality *', 'multiselect', countryOptions], ['address', 'Address'], ['dateOfBirth', 'Date of birth', 'date'], ['qidNumber', 'QID number (or passport) *'], ['passportNumber', 'Passport number (or QID) *'], ['qidExpiry', 'QID expiry date', 'date'], ['passportExpiry', 'Passport expiry date', 'date'], ['identityNumber', '', 'legacyIdentity'], ...personDeclarationFields, ['position', 'Position *', 'multiselect', positionOptions], ['isAuthorizedSignatory', 'Authorized signatory', 'checkbox']
   ]} />;
 }
 
@@ -2314,26 +2441,32 @@ function SectionDComplianceForm({ data, onChange, personFlags: flags }: FormProp
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      <FormCard title="PEP exposure">
       <Choice label="Any PEP exposure? *" value={data.pepQuestion || ''} onChange={setPepQuestion} />
       <PersonFlagNote names={flags?.pep || []} answer={data.pepQuestion || ''} what="as PEP" />
       <Field label="PEP details" value={data.pepDetails} onChange={(value) => update(data, onChange, 'pepDetails', value)} textarea wide />
       {hasPepExposure ? (
         <SectionDSupportingDocuments label="PEP supporting documents" data={data} fieldKey="pepDocumentFileNames" onChange={onChange} />
       ) : null}
+      </FormCard>
+      <FormCard title="Sanction exposure">
       <Choice label="Any sanction exposure? *" value={data.sanctionQuestion || ''} onChange={setSanctionQuestion} />
       <Field label="Sanction details" value={data.sanctionDetails} onChange={(value) => update(data, onChange, 'sanctionDetails', value)} textarea wide />
       {hasSanctionExposure ? (
         <SectionDSupportingDocuments label="Sanction supporting documents" data={data} fieldKey="sanctionDocumentFileNames" onChange={onChange} />
       ) : null}
+      </FormCard>
+      <FormCard title="Dual citizenship">
       <Choice label="Any dual citizenship? *" value={data.dualCitizenshipQuestion || ''} onChange={setDualCitizenshipQuestion} />
       <PersonFlagNote names={flags?.dual || []} answer={data.dualCitizenshipQuestion || ''} what="as dual citizens" />
       {hasDualCitizenship ? (
-        <FormGrid>
+        <>
           <Field label="Dual citizenship details" value={data.dualCitizenshipDetails} onChange={(value) => update(data, onChange, 'dualCitizenshipDetails', value)} textarea wide />
           <SectionDSupportingDocuments label="Passport copies" data={data} fieldKey="dualCitizenshipPassportFileNames" legacyFieldKey="dualCitizenshipPassportFileName" onChange={onChange} wide />
-        </FormGrid>
+        </>
       ) : null}
+      </FormCard>
     </div>
   );
 }
@@ -2396,27 +2529,37 @@ function SectionEContactForm({ data, onChange, fillBar }: FormProps & { fillBar?
     });
   }
 
-  return <FormGrid>
-    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
-    <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
+  return <div className="space-y-4">
     {fillBar ? fillBar({ list: 'contact', index: 0, row: data }) : null}
-    <Field label="QID number" value={data.qidNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, qidNumber: value }))} />
-    <Field label="Passport number" value={data.passportNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, passportNumber: value }))} />
+    <FormCard title="Who they are">
     <label className="block text-sm font-medium text-slate-700">
       Title
       <select value={data.title || ''} onChange={(event) => onChange({ ...data, title: event.target.value })} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900">
         {personTitleOptions.map((option) => <option key={option} value={option}>{option || 'Not selected'}</option>)}
       </select>
     </label>
+    <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
+    <MultiSelect label="Position / Job title *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
+    <MultiSelect label="Nationality" value={splitList(data.nationality)} otherValue={data.nationalityOther} options={nationalityOptions.filter(Boolean)} onChange={setNationality} onOtherChange={(value) => update(data, onChange, 'nationalityOther', value)} allowOther placeholder="Select nationalities" />
+    </FormCard>
+    <FormCard title="Identity documents">
+    <div className="min-w-0 space-y-1.5"><Field label="QID number" value={data.qidNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, qidNumber: value }))} />{fillBar ? fillBar({ list: 'contact', index: 0, row: data, field: 'qidNumber' }) : null}</div>
+    <div className="min-w-0 space-y-1.5"><Field label="Passport number" value={data.passportNumber} onChange={(value) => onChange(withDerivedIdentity({ ...data, passportNumber: value }))} />{fillBar ? fillBar({ list: 'contact', index: 0, row: data, field: 'passportNumber' }) : null}</div>
+    <Field label="QID expiry date" type="date" value={data.qidExpiry} onChange={(value) => update(data, onChange, 'qidExpiry', value)} />
+    <Field label="Passport expiry date" type="date" value={data.passportExpiry} onChange={(value) => update(data, onChange, 'passportExpiry', value)} />
+    {legacyIdentity(data) ? <LegacyIdentityNote value={legacyIdentity(data)} /> : null}
+    </FormCard>
+    <FormCard title="Contact">
+    <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
+    <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
+    </FormCard>
+    <FormCard title="Declarations">
     <Choice label="Dual citizenship" value={data.dualCitizenship || ''} onChange={(value) => onChange({ ...data, dualCitizenship: value })} />
     <Field label="Other nationality (if dual citizenship)" value={data.otherNationality} onChange={(value) => onChange({ ...data, otherNationality: value })} />
     <Choice label="PEP (politically exposed person)" value={data.isPep || ''} onChange={(value) => onChange({ ...data, isPep: value })} />
     <Field label="PEP details" value={data.pepDetails} onChange={(value) => onChange({ ...data, pepDetails: value })} />
-    {legacyIdentity(data) ? <LegacyIdentityNote value={legacyIdentity(data)} /> : null}
-    <Field label="Mobile Number *" value={applyCountryDialCode(data.mobileNumber || '', countryFromNationality(splitList(data.nationality)[0] || ''))} onChange={setMobileNumber} />
-    <Field label="Email *" type="email" value={data.email} onChange={(value) => update(data, onChange, 'email', value)} />
-  </FormGrid>;
+    </FormCard>
+  </div>;
 }
 
 function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyDocumentUploaded, enquiryDetails }: FormProps & { caseId: string; onCompanyDocumentUploaded?: (file: File) => Promise<FillOutcome>; enquiryDetails?: unknown }) {
@@ -2491,130 +2634,84 @@ function SectionFRequiredDocumentsChecklist({ caseId, data, onChange, onCompanyD
     }
   }
 
+  const providedCount = documents.filter((row: Row) => row.isProvided || fileNameList(row.fileName).length).length;
+  const setDocuments = (rows: Row[]) => onChange({ ...data, documents: rows });
+
   return (
     <div className="space-y-5">
-      {uploadError ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p> : null}
-      <div className="space-y-3">
+      <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-slate-950">{providedCount} of {documents.length} required documents received</p>
+          <p className="text-xs text-slate-500">{STANDARD_DOCUMENT_HINT} Drop files on a row or use Upload.</p>
+        </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Required documents received" aria-valuemin={0} aria-valuemax={documents.length} aria-valuenow={providedCount}>
+          <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${documents.length ? (providedCount / documents.length) * 100 : 0}%` }} />
+        </div>
+      </div>
+      {uploadError ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p> : null}
+      <ul className="space-y-2" aria-label="Required documents">
         {documents.map((document: Row, index: number) => {
           const names = fileNameList(document.fileName);
+          const isCr = document.documentType === CR_DOCUMENT && Boolean(onCompanyDocumentUploaded);
           return (
-            <div key={`${document.documentType}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="grid gap-4 lg:grid-cols-[minmax(180px,1fr)_auto_minmax(280px,1.2fr)] lg:items-center">
-                <div>
-                  <p className="text-sm font-semibold text-slate-950">{document.documentType}</p>
-                  <p className="mt-1 text-xs text-slate-500">{names.length ? `${names.length} file${names.length === 1 ? '' : 's'} uploaded` : 'No files uploaded yet'}</p>
-                </div>
-                <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
-                  <input type="checkbox" checked={Boolean(document.isProvided)} onChange={(event) => updateRow(documents, index, 'isProvided', event.target.checked, (rows) => onChange({ ...data, documents: rows }))} />
-                  Received
-                </label>
-                <MultiFileUploadControl
-                  names={names}
-                  disabled={uploadingKey === `required-${index}` || uploadingKey === `reading-${index}`}
-                  buttonLabel={uploadingKey === `required-${index}` ? 'Uploading...' : uploadingKey === `reading-${index}` ? 'Reading the CR...' : 'Upload files'}
-                  placeholder="Select one or more files"
-                  showFileList={false}
-                  onSelect={(files) => uploadDocument(index, files)}
-                  onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
-                />
-              </div>
-              <UploadedFilePills
-                names={names}
-                emptyText="Upload supporting files for this document type."
-                onRemove={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, documents: rows }))}
-              />
+            <RequiredDocumentRow
+              key={`${document.documentType}-${index}`}
+              title={document.documentType}
+              names={names}
+              received={Boolean(document.isProvided)}
+              onReceived={(value) => updateRow(documents, index, 'isProvided', value, setDocuments)}
+              busy={uploadingKey === `required-${index}` || uploadingKey === `reading-${index}`}
+              busyLabel={uploadingKey === `reading-${index}` ? 'Reading the CR...' : 'Uploading...'}
+              onUpload={(files) => uploadDocument(index, files)}
+              onRemoveName={(fileIndex) => updateRow(documents, index, 'fileName', removeFileName(document.fileName, fileIndex), setDocuments)}
+              onError={setUploadError}
+            >
               {names.some((name) => personOfFile(enquiryDetails, name)) ? (
-                <ul aria-label="Whose copies these are" className="mt-2 space-y-1 text-xs text-slate-600">
+                <ul aria-label="Whose copies these are" className="space-y-0.5 text-xs text-slate-600">
                   {names.map((name) => { const owner = personOfFile(enquiryDetails, name); return owner ? <li key={name}><span className="font-medium text-slate-800">{owner.name}</span>{owner.kind ? ` · ${owner.kind}` : ''} <span className="text-slate-400">({name})</span></li> : null; })}
                 </ul>
               ) : null}
-              {document.documentType === CR_DOCUMENT && onCompanyDocumentUploaded && crNote?.index !== index ? <p className="mt-2 text-xs text-slate-500">Uploading the CR here also fills the company details in Section A.</p> : null}
+              {isCr && crNote?.index !== index ? <p className="text-xs text-slate-500">Uploading the CR here also fills the company details in Section A.</p> : null}
               {crNote?.index === index ? <FillNote outcome={crNote.outcome} onChange={(outcome) => setCrNote({ index, outcome })} /> : null}
-            </div>
+            </RequiredDocumentRow>
           );
         })}
-      </div>
-      <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+      </ul>
+      <section className="space-y-2" aria-label="Additional documents">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-slate-950">Additional Documents</h3>
-            <p className="mt-1 text-xs text-slate-500">Upload supplementary supporting documents. ZIP and executable files are not allowed.</p>
+            <h3 className="text-sm font-semibold text-slate-950">Additional documents</h3>
+            <p className="text-xs text-slate-500">Anything else that supports the file. ZIP and executable files are not allowed.</p>
           </div>
           <button
             type="button"
             onClick={() => onChange({ ...data, additionalDocuments: [...additionalDocuments, createAdditionalDocumentRow()] })}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
             <Plus className="h-4 w-4" />
-            Add Document
+            Add document
           </button>
         </div>
         {additionalDocuments.length ? (
-          additionalDocuments.map((document: Row, index: number) => (
-            <div key={document.id || index} className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="grid items-center gap-3 md:grid-cols-[1fr_auto]">
-                <MultiFileUploadControl
-                  names={fileNameList(document.fileName)}
-                  disabled={uploadingKey === `additional-${index}`}
-                  buttonLabel={uploadingKey === `additional-${index}` ? 'Uploading...' : 'Upload files'}
-                  placeholder="Select one or more files"
-                  showFileList={false}
-                  accept={STANDARD_DOCUMENT_ACCEPT}
-                  helperText={STANDARD_DOCUMENT_HINT}
-                  onSelect={(files) => uploadAdditionalDocument(index, files)}
-                  onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
-                />
-                <button
-                  type="button"
-                  onClick={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
-                  title="Remove additional document"
-                  aria-label={`Remove additional document ${index + 1}`}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-              <UploadedFilePills
+          <ul className="space-y-2">
+            {additionalDocuments.map((document: Row, index: number) => (
+              <RequiredDocumentRow
+                key={document.id || index}
+                title={`Additional document ${index + 1}`}
                 names={fileNameList(document.fileName)}
-                emptyText="No additional files uploaded yet."
-                onRemove={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                busy={uploadingKey === `additional-${index}`}
+                onUpload={(files) => uploadAdditionalDocument(index, files)}
+                onRemoveName={(fileIndex) => updateRow(additionalDocuments, index, 'fileName', removeFileName(document.fileName, fileIndex), (rows) => onChange({ ...data, additionalDocuments: rows }))}
+                onDelete={() => onChange({ ...data, additionalDocuments: additionalDocuments.filter((_: Row, rowIndex: number) => rowIndex !== index) })}
+                onError={setUploadError}
               />
-            </div>
-          ))
+            ))}
+          </ul>
         ) : (
-          <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">No additional documents added.</p>
+          <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-500">No additional documents added.</p>
         )}
-      </div>
+      </section>
       <Field label="Additional notes for KYC preparation documents" value={data.uploadedFilesNote} onChange={(value) => update(data, onChange, 'uploadedFilesNote', value)} textarea wide />
-    </div>
-  );
-}
-
-function UploadedFilePills({ names, emptyText, onRemove }: { names: string[]; emptyText: string; onRemove: (index: number) => void }) {
-  if (!names.length) {
-    return <p className="mt-3 rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">{emptyText}</p>;
-  }
-
-  return (
-    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Uploaded files</p>
-      <div className="flex flex-wrap gap-2">
-        {names.map((name, index) => (
-          <span key={`${name}-${index}`} title={name} className="inline-flex max-w-full items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
-            <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-            <span className="max-w-64 truncate">{name}</span>
-            <button
-              type="button"
-              onClick={() => onRemove(index)}
-              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-red-50 hover:text-red-600"
-              aria-label={`Remove ${name}`}
-              title={`Remove ${name}`}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -2626,11 +2723,26 @@ function SectionGDeclarationForm({ data, onChange, people = [] }: FormProps & { 
   function pickSigner(slot: string) {
     const person = people.find((item) => item.slot === slot);
     if (!person) return;
-    const position = toList(person.row.position).find((item) => positionOptions.includes(item) && item !== 'Other') || '';
-    onChange({ ...data, fullName: person.row.fullName || data.fullName, ...(position ? { position, positionOther: '' } : {}) });
+    // The same person can be on several rows (shareholder, beneficial person, manager, key contact) and only some
+    // rows carry a position, so the positions of all their rows are considered, not just the first one's.
+    const linkedSlots = choices.find((choice) => choice.value === slot)?.slots || [slot];
+    // Some rows hold several positions in one text ("UBO, Director, Managing Director"), so each value is split up.
+    const positions = people.filter((item) => linkedSlots.includes(item.slot)).flatMap((item) => toList(item.row.position)).flatMap((value) => value.split(/\s*[,;]\s*/)).map((value) => value.trim()).filter(Boolean);
+    const known = [...new Set(positions.filter((item) => positionOptions.includes(item) && item !== 'Other'))];
+    const unknown = [...new Set(positions.filter((item) => !positionOptions.includes(item)))];
+    onChange({
+      ...data,
+      fullName: person.row.fullName || data.fullName,
+      // Every position of the person is filled, as on the other sections. A position that is not in the list is kept
+      // as "Other" with its own text, so nothing is lost.
+      ...(known.length || unknown.length ? { position: [...known, ...(unknown.length ? ['Other'] : [])], positionOther: unknown.join(', ') } : {})
+    });
   }
-  return <FormGrid>
+  return <div className="space-y-4">
+    <FormCard title="Declaration">
     <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">{CLIENT_DECLARATION_TEXT}</p>
+    </FormCard>
+    <FormCard title="Signed by">
     {choices.length ? (
       <label className="flex flex-wrap items-center gap-2 text-sm text-slate-700 md:col-span-2">
         Signed by
@@ -2642,11 +2754,14 @@ function SectionGDeclarationForm({ data, onChange, people = [] }: FormProps & { 
       </label>
     ) : null}
     <Field label="Full name *" value={data.fullName} onChange={(value) => update(data, onChange, 'fullName', value)} />
-    <Select label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions} onChange={(value) => updateSelect(data, onChange, 'position', value)} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther />
+    <MultiSelect label="Position *" value={data.position} otherValue={data.positionOther} options={positionOptions.filter(Boolean)} onChange={(value) => onChange({ ...data, position: value, ...(value.includes('Other') ? {} : { positionOther: '' }) })} onOtherChange={(value) => update(data, onChange, 'positionOther', value)} allowOther placeholder="Select positions" />
     <Field label="Date *" type="date" value={data.date} onChange={(value) => update(data, onChange, 'date', value)} />
+    </FormCard>
+    <FormCard title="Signature and stamp">
     <UploadField label="Authorized signature" fileName={data.signatureFileName} imageDataUrl={data.signatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, signatureFileName: file.name, signatureDataUrl: dataUrl })} />
     <UploadField label="Company stamp" fileName={data.stampFileName} imageDataUrl={data.stampDataUrl} onChange={(file, dataUrl) => onChange({ ...data, stampFileName: file.name, stampDataUrl: dataUrl })} />
-  </FormGrid>;
+    </FormCard>
+  </div>;
 }
 
 function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode: SectionHMode }) {
@@ -2668,17 +2783,17 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
     });
   }
 
-  return <FormGrid>
+  return <div className="space-y-4">
     {showAml ? (
-      <>
+      <FormCard title="AML Supervisor review">
         <Select label="Risk classification *" value={data.riskClassification} otherValue={data.riskClassificationOther} options={['', 'LOW', 'MEDIUM', 'HIGH']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'riskClassification', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'riskClassificationOther', value)} allowOther />
         <Select label="Due diligence type *" value={data.dueDiligenceType} otherValue={data.dueDiligenceTypeOther} options={['', 'SIMPLIFIED', 'REGULAR', 'ENHANCED']} onChange={(value) => updateSelect({ ...data, reviewPart: mode }, onChange, 'dueDiligenceType', value)} onOtherChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dueDiligenceTypeOther', value)} allowOther />
         <Field label="AML Supervisor date" type="date" value={data.amlDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlDate', value)} />
         <Field label="AML Supervisor comments" value={data.amlClarificationFindings} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'amlClarificationFindings', value)} textarea wide />
-      </>
+      </FormCard>
     ) : null}
     {showDmlro ? (
-      <>
+      <FormCard title="DMLRO review">
         <Field label="DMLRO name" value={data.dmlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroName', value)} />
         <UploadField label="DMLRO signature" fileName={data.dmlroSignatureFileName} imageDataUrl={data.dmlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, dmlroSignatureFileName: file.name, dmlroSignatureDataUrl: dataUrl })} />
         <Field label="DMLRO date" type="date" value={data.dmlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroDate', value)} />
@@ -2694,10 +2809,10 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
           <Field label="Reason for returning to AML Supervisor *" value={data.dmlroReason} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroReason', value)} textarea wide />
         ) : null}
         <Field label="DMLRO comments" value={data.dmlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'dmlroComments', value)} textarea wide />
-      </>
+      </FormCard>
     ) : null}
     {showMlro ? (
-      <>
+      <FormCard title="MLRO review">
         <Field label="MLRO name" value={data.mlroName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroName', value)} />
         <UploadField label="MLRO signature" fileName={data.mlroSignatureFileName} imageDataUrl={data.mlroSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, mlroSignatureFileName: file.name, mlroSignatureDataUrl: dataUrl })} />
         <Field label="MLRO date" type="date" value={data.mlroDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroDate', value)} />
@@ -2707,10 +2822,10 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
         <Field label="Risk explanation" value={data.mlroRiskExplanation} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroRiskExplanation', value)} textarea wide />
         <Field label="Conditions" value={data.mlroConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroConditions', value)} textarea wide />
         <Field label={data.mlroDecision === 'RETURN_TO_DMLRO' ? 'MLRO comments - reason for returning to DMLRO *' : data.mlroDecision === 'REQUEST_ADDITIONAL_INFORMATION' ? 'MLRO comments - additional information requested *' : 'MLRO comments'} value={data.mlroComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'mlroComments', value)} textarea wide />
-      </>
+      </FormCard>
     ) : null}
     {showSef ? (
-      <>
+      <FormCard title="SEF review">
         <Field label="SEF name" value={data.sefName} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefName', value)} />
         <UploadField label="SEF signature" fileName={data.sefSignatureFileName} imageDataUrl={data.sefSignatureDataUrl} onChange={(file, dataUrl) => onChange({ ...data, reviewPart: mode, sefSignatureFileName: file.name, sefSignatureDataUrl: dataUrl })} />
         <Field label="SEF date" type="date" value={data.sefDate} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefDate', value)} />
@@ -2722,9 +2837,9 @@ function SectionHInternalReviewForm({ data, onChange, mode }: FormProps & { mode
           <Field label={data.sefDecision === 'RETURN_TO_MLRO' ? 'Return reason for MLRO *' : 'SEF rejection reason'} value={data.sefConditions} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefConditions', value)} textarea wide />
         ) : null}
         <Field label="SEF comments" value={data.sefComments} onChange={(value) => update({ ...data, reviewPart: mode }, onChange, 'sefComments', value)} textarea wide />
-      </>
+      </FormCard>
     ) : null}
-  </FormGrid>;
+  </div>;
 }
 
 export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
@@ -2786,7 +2901,7 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
         </PreviewSection>
         <PreviewSection title="G. Client Declaration">
           <p className="mb-2 text-justify">{CLIENT_DECLARATION_TEXT}</p>
-          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', resolveOtherValue(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
+          <PreviewGrid rows={[['Full name', form.sectionG.fullName], ['Position', displaySelectedList(form.sectionG.position, form.sectionG.positionOther)], ['Date', form.sectionG.date], ['Authorized signature', previewImage(form.sectionG.signatureDataUrl, form.sectionG.signatureFileName)], ['Company stamp', previewImage(form.sectionG.stampDataUrl, form.sectionG.stampFileName)]]} />
         </PreviewSection>
         </> : null}
         <PreviewSection title="H. Internal Use Only">
@@ -2814,17 +2929,27 @@ export function LiveDocumentPreviewPanel({ form }: { form: KycFormData }) {
 
 type FormProps = { data: Record<string, any>; onChange: (value: Record<string, any>) => void };
 
+// A titled group of fields: two columns on wide screens (three for short fields), so a section does not run long.
+function FormCard({ title, columns = 2, children }: { title: string; columns?: 2 | 3; children: React.ReactNode }) {
+  return (
+    <fieldset className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+      <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</legend>
+      <div className={`grid gap-x-3 gap-y-2.5 ${columns === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} [&>*]:min-w-0`}>{children}</div>
+    </fieldset>
+  );
+}
+
 function FormGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid gap-4 md:grid-cols-2 [&>*]:min-w-0">{children}</div>;
 }
 
-function Field({ label, value, onChange, type = 'text', textarea = false, wide = false }: { label: string; value: any; onChange: (value: string) => void; type?: string; textarea?: boolean; wide?: boolean }) {
+function Field({ label, value, onChange, type = 'text', textarea = false, wide = false, rows = 3 }: { label: string; value: any; onChange: (value: string) => void; type?: string; textarea?: boolean; wide?: boolean; rows?: number }) {
   const className = `${wide ? 'md:col-span-2' : ''} min-w-0 text-sm font-medium text-slate-700`;
   return (
     <label className={className}>
       {labelText(label)}
       {textarea && /comment/i.test(label) ? <RichTextEditor label={label} value={value || ''} onChange={onChange} /> : textarea ? (
-        <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+        <textarea value={value || ''} onChange={(event) => onChange(event.target.value)} rows={rows} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : type === 'date' ? (
         <TypedDateInput value={value} onChange={onChange} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
       ) : (
@@ -3219,18 +3344,57 @@ function LegacyIdentityNote({ value }: { value: string }) {
   );
 }
 
-function DynamicRows({ title, rows, fields, onChange, rowExtra }: { title: string; rows: Row[]; fields: DynamicField[]; onChange: (rows: Row[]) => void; rowExtra?: (row: Row, index: number) => ReactNode }) {
+// Trash icon of a person row; asks first in the shared confirmation dialog. A person with nothing typed in yet is
+// removed at once.
+function RemoveControl({ name, isBlank, onRemove }: { name: string; isBlank: boolean; onRemove: () => void }) {
+  const { confirm } = useConfirm();
+  async function ask() {
+    if (isBlank || await confirm({ title: `Remove ${name}?`, message: 'Their details in this list will be removed. You can add them again afterwards.', confirmLabel: 'Remove', tone: 'danger' })) onRemove();
+  }
+  return <button type="button" aria-label={`Remove ${name}`} title={`Remove ${name}`} onClick={() => void ask()} className="ml-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>;
+}
+
+// Text of a stored value, whether it is a plain string or a list (multi-select).
+function rowText(value: any) {
+  return (Array.isArray(value) ? value : String(value ?? '').split(/\s*[,;]\s*/)).map((item) => String(item).trim()).filter(Boolean).join(', ');
+}
+
+// Required fields (label ends with *) of a person row that are still empty. QID and passport count as one: either is enough.
+function missingRowFields(row: Row, fields: DynamicField[]) {
+  const hasIdentity = Boolean(rowText(row.qidNumber) || rowText(row.passportNumber));
+  return fields
+    .filter(([key, label]) => /\*\s*$/.test(label || '') && !rowText(row[key]) && !((key === 'qidNumber' || key === 'passportNumber') && hasIdentity))
+    .map(([, label]) => labelText(label))
+    // An expiry date is needed for every ID number entered.
+    .concat(rowText(row.qidNumber) && !rowText(row.qidExpiry) ? ['QID expiry date'] : [], rowText(row.passportNumber) && !rowText(row.passportExpiry) ? ['Passport expiry date'] : []);
+}
+
+// One person at a time is open; the others are a one-line summary, so the section stays short however many people it has.
+function DynamicRows({ title, rows, fields, onChange, rowExtra, fieldExtra, groups, topExtra }: { title: string; rows: Row[]; fields: DynamicField[]; onChange: (rows: Row[]) => void; rowExtra?: (row: Row, index: number) => ReactNode; fieldExtra?: (key: string, row: Row, index: number) => ReactNode; groups?: Array<[title: string, keys: string[]]>; topExtra?: ReactNode }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(0);
+  // A person added from elsewhere (the shortcut above the list) opens straight away.
+  const previousCount = useRef(rows.length);
+  useEffect(() => {
+    if (rows.length > previousCount.current) setOpenIndex(rows.length - 1);
+    previousCount.current = rows.length;
+  }, [rows.length]);
+  const noun = 'person';
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-slate-950">{title}</p>
-        <button type="button" onClick={() => onChange([...rows, {}])} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add row</button>
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">{title}</p>
+          <p className="text-xs text-slate-500">{rows.length ? `${rows.length} ${rows.length === 1 ? noun : 'people'}. Open one to edit it.` : 'No one added yet.'}</p>
+        </div>
+        {topExtra ? null : <button type="button" onClick={() => { onChange([...rows, {}]); setOpenIndex(rows.length); }} className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Plus className="h-4 w-4" /> Add person</button>}
       </div>
-      {rows.map((row, index) => (
-        <div key={index} className="rounded-md border border-slate-200 p-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            {rowExtra ? rowExtra(row, index) : null}
-            {fields.map(([key, label, type, options]) => {
+      {topExtra}
+      {rows.map((row, index) => {
+        const isOpen = openIndex === index;
+        const missing = missingRowFields(row, fields);
+        const name = rowText(row.fullName) || rowText(row.entityName) || `New person ${index + 1}`;
+        const subtitle = [rowText(row.position), rowText(row.nationality)].filter(Boolean).join(' | ');
+        const renderField = ([key, label, type, options]: DynamicField) => {
               if (type === 'legacyIdentity') {
                 const legacy = legacyIdentity(row);
                 return legacy ? <LegacyIdentityNote key={key} value={legacy} /> : null;
@@ -3287,11 +3451,49 @@ function DynamicRows({ title, rows, fields, onChange, rowExtra }: { title: strin
               }
 
               return <Field key={key} label={label} type={type || 'text'} value={row[key]} onChange={(value) => updateRow(rows, index, key, value, onChange)} />;
-            })}
+        };
+        const renderWithExtra = (field: DynamicField) => {
+          const element = renderField(field);
+          const extra = element ? fieldExtra?.(field[0], row, index) : null;
+          return extra ? <div key={field[0]} className="min-w-0 space-y-1.5">{element}{extra}</div> : element;
+        };
+        const used = new Set(groups ? groups.flatMap(([, keys]) => keys) : []);
+        const sets: Array<readonly [string, DynamicField[]]> = groups ? [...groups.map(([groupTitle, keys]) => [groupTitle, keys.flatMap((key) => fields.filter((field) => field[0] === key))] as const), ['More details', fields.filter(([key]) => !used.has(key))] as const] : [];
+        return (
+        <div key={index} className={`rounded-md border ${isOpen ? 'border-brand-200 shadow-sm' : 'border-slate-200'}`}>
+          <div className="flex items-center pr-2">
+          <button type="button" aria-expanded={isOpen} onClick={() => setOpenIndex(isOpen ? null : index)} className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-3 py-2.5 text-left hover:bg-slate-50">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{index + 1}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-slate-950">{name}</span>
+              {subtitle ? <span className="block truncate text-xs text-slate-500">{subtitle}</span> : null}
+            </span>
+            {missing.length ? <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800" title={`Missing: ${missing.join(', ')}`}>{missing.length} to fill</span> : <span className="shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-800">Complete</span>}
+            {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
+          </button>
+          <RemoveControl name={name} isBlank={Object.entries(row).every(([key, value]) => key === 'id' || !rowText(value))} onRemove={() => { onChange(rows.filter((_, rowIndex) => rowIndex !== index)); setOpenIndex(null); }} />
           </div>
-          <button type="button" onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))} className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-red-600"><Trash2 className="h-4 w-4" /> Remove</button>
+          {isOpen ? (
+          <div className="border-t border-slate-100 p-3">
+          {rowExtra ? <div className="mb-3 grid gap-3">{rowExtra(row, index)}</div> : null}
+          {groups ? (
+            <div className="space-y-3">
+              {sets.filter(([, list]) => list.length).map(([groupTitle, list]) => (
+                <fieldset key={groupTitle} className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+                  <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{groupTitle}</legend>
+                  <div className="grid gap-3 md:grid-cols-2">{list.map(renderWithExtra)}</div>
+                </fieldset>
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">{fields.map(renderWithExtra)}</div>
+          )}
+          <button type="button" onClick={() => { onChange(rows.filter((_, rowIndex) => rowIndex !== index)); setOpenIndex(null); }} className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-red-600"><Trash2 className="h-4 w-4" /> Remove {name}</button>
+          </div>
+          ) : null}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -3511,6 +3713,8 @@ export function normalizeForm(form: KycFormData, kycCase?: KycCase | null): KycF
     sectionC: { ...emptyForm.sectionC, ...(form.sectionC || {}), managers: normalizeSectionCRows(form.sectionC?.managers) },
     sectionD: normalizeSectionD(form.sectionD),
     sectionE,
+    // The signer's position is a list like the other sections; older records stored one value.
+    sectionG: { ...emptyForm.sectionG, ...(form.sectionG || {}), position: listValue((form.sectionG || {}).position) },
     sectionF: {
       ...emptyForm.sectionF,
       ...(form.sectionF || {}),

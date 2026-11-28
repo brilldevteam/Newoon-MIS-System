@@ -1,8 +1,11 @@
 import { Download, Edit3, Eye, FilePlus2, FileText, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useConfirm } from '../components/ConfirmProvider';
+import { Avatar, EmptyRow, IconAction, QuickTabs, SortHeader, TableCard, TablePager, TableSkeleton, TableToolbar, tableCellClass, tableHeadClass } from '../components/table/TableParts';
+import { useServerTable } from '../components/table/useServerTable';
 import { useAuth } from '../hooks/useAuth';
-import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCase, KycCaseStatus, listKycCases } from '../services/kyc-workflow.service';
+import { deleteKycCase, downloadGeneratedKycDocument, generateKycDocument, KycCaseRow, KycCaseStatus, listKycCaseTable } from '../services/kyc-workflow.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
 
@@ -23,67 +26,79 @@ function getRequestErrorMessage(error: any, fallback: string) {
 
 const documentReadyStatuses: KycCaseStatus[] = ['MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_APPROVED', 'KYC_FINAL_APPROVED', 'CLIENT_ACTIVATION_PENDING', 'CLIENT_ACTIVE'];
 
+const tabs = [
+  { value: 'all', label: 'All cases' },
+  { value: 'pending-kyc', label: 'KYC preparation' },
+  { value: 'pending-approvals', label: 'Approvals' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'other', label: 'On hold / rejected' }
+];
+
+const sortOptions = [
+  { value: 'created', label: 'Date created' },
+  { value: 'number', label: 'KYC number' },
+  { value: 'client', label: 'Client' },
+  { value: 'status', label: 'Status' }
+];
+
+const rowLink = 'inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700';
+
 export function KycWorkflowPage() {
+  const { confirm } = useConfirm();
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
-  const [cases, setCases] = useState<KycCase[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const table = useServerTable(listKycCaseTable, { defaultSort: 'created', defaultDir: 'desc' });
   const [deletingId, setDeletingId] = useState('');
   const [generatingKey, setGeneratingKey] = useState('');
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const canCreateCases = hasAnyRole(user, workflowRoles.caseCreation);
   const canEditOrDeleteCases = hasAnyRole(user, ['SUPER_ADMIN', 'COMPANY_ADMIN']);
-  const activeFilter = searchParams.get('filter') || '';
-  const visibleCases = cases.filter((kycCase) => {
-    if (activeFilter === 'pending-kyc') return ['INQUIRY_RECEIVED', 'PROPOSAL_OPTIONAL', 'LEGAL_DOCUMENTS_PENDING', 'LEGAL_DOCUMENTS_UPLOADED', 'RETURNED_TO_BD', 'SUBMITTED_TO_AML', 'AML_REVIEW_STARTED', 'FINAL_SIGNATURES_PENDING', 'FINAL_DOCUMENTS_PENDING'].includes(kycCase.status);
-    if (activeFilter === 'pending-approvals') return ['SUPERVISOR_REVIEW_PENDING', 'SUPERVISOR_REVIEW_IN_PROGRESS', 'SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED', 'SUPERVISOR_REVIEW_COMPLETED', 'DMLRO_REVIEW_PENDING', 'DMLRO_REVIEW_IN_PROGRESS', 'DMLRO_ADDITIONAL_INFORMATION_REQUIRED', 'DMLRO_REVIEW_COMPLETED', 'MLRO_REVIEW_PENDING', 'MLRO_REVIEW_IN_PROGRESS', 'MLRO_ADDITIONAL_INFORMATION_REQUIRED', 'MLRO_APPROVED', 'MLRO_APPROVED_WITH_CONDITIONS', 'SEF_DECISION_PENDING', 'SEF_DECISION_IN_PROGRESS', 'SEF_APPROVED'].includes(kycCase.status);
-    return true;
-  });
 
+  // The dashboard links here with ?filter=pending-kyc / pending-approvals; those are now the quick tabs.
   useEffect(() => {
-    loadCases();
-  }, []);
+    const legacy = searchParams.get('filter');
+    if (!legacy) return;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete('filter');
+      if (tabs.some((tab) => tab.value === legacy)) next.set('tab', legacy);
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
 
-  function loadCases() {
-    setLoading(true);
-    setError('');
-    listKycCases()
-      .then(setCases)
-      .catch((requestError: any) => {
-        setError(getRequestErrorMessage(requestError, 'Unable to load KYC cases.'));
-      })
-      .finally(() => setLoading(false));
-  }
-
-  async function removeCase(kycCase: KycCase) {
-    const confirmed = window.confirm(`Delete ${kycCase.title}? This will permanently remove the KYC case and related workflow records.`);
+  async function removeCase(kycCase: KycCaseRow) {
+    const confirmed = await confirm({ title: 'Delete this KYC case?', message: `Delete ${kycCase.title}? This will permanently remove the KYC case and related workflow records.`, confirmLabel: 'Delete', tone: 'danger' });
     if (!confirmed) return;
 
     setDeletingId(kycCase.id);
-    setError('');
+    setActionError('');
     try {
       await deleteKycCase(kycCase.id);
-      setCases((current) => current.filter((item) => item.id !== kycCase.id));
+      table.removeRow((row) => row.id === kycCase.id);
+      table.reload();
     } catch (requestError: any) {
-      setError(getRequestErrorMessage(requestError, 'Unable to delete this KYC case.'));
+      setActionError(getRequestErrorMessage(requestError, 'Unable to delete this KYC case.'));
     } finally {
       setDeletingId('');
     }
   }
 
-  async function downloadDocument(kycCase: KycCase, type: 'docx' | 'pdf') {
+  async function downloadDocument(kycCase: KycCaseRow, type: 'docx' | 'pdf') {
     const key = `${kycCase.id}-${type}`;
     setGeneratingKey(key);
-    setError('');
+    setActionError('');
     try {
       const document = await generateKycDocument(kycCase.id, type);
       await downloadGeneratedKycDocument(kycCase.id, document.id, document.fileName);
     } catch (requestError: any) {
-      setError(getRequestErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
+      setActionError(getRequestErrorMessage(requestError, `Unable to generate ${type.toUpperCase()} document.`));
     } finally {
       setGeneratingKey('');
     }
   }
+
+  const error = actionError || table.error;
+  const columns = 6;
 
   return (
     <div className="space-y-6">
@@ -103,100 +118,66 @@ export function KycWorkflowPage() {
         ) : null}
       </div>
 
-      {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-      {activeFilter ? <p className="text-sm text-slate-600">Showing {activeFilter === 'pending-kyc' ? 'KYC preparation' : 'approval'} cases. <Link to="/kyc-workflow" className="font-semibold text-brand-700 hover:text-brand-800">Clear filter</Link></p> : null}
+      {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-      <section className="rounded-lg border border-slate-200 bg-white">
+      <TableCard>
+        <TableToolbar
+          query={table.params.q}
+          onQuery={table.setQuery}
+          placeholder="Search by KYC number, client, case or service"
+          sort={table.params.sort}
+          dir={table.params.dir}
+          sortOptions={sortOptions}
+          onSort={table.setSort}
+        />
+        <QuickTabs tabs={tabs} active={table.params.tab} counts={table.counts} onChange={table.setTab} />
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50/70">
               <tr>
-                <th className="px-4 py-3">KYC Number</th>
-                <th className="px-4 py-3">Client</th>
-                <th className="px-4 py-3">Service</th>
-                <th className="px-4 py-3">Documents</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                <SortHeader label="Client" sortKey="client" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <SortHeader label="KYC number" sortKey="number" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={tableHeadClass}>Service</th>
+                <th scope="col" className={`${tableHeadClass} text-right`}>Documents</th>
+                <SortHeader label="Status" sortKey="status" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={`${tableHeadClass} text-right`}><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>
-                    Loading KYC cases...
-                  </td>
-                </tr>
-              ) : visibleCases.length ? (
-                visibleCases.map((kycCase) => (
-                  <tr key={kycCase.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/kyc/${kycCase.id}`}>
-                        {kycCase.kycNumber || '-'}
-                      </Link>
+              {table.loading && !table.rows.length ? (
+                <TableSkeleton columns={columns} />
+              ) : table.rows.length ? (
+                table.rows.map((kycCase) => (
+                  <tr key={kycCase.id} className={`hover:bg-slate-50/70 ${table.loading ? 'opacity-60' : ''}`}>
+                    <td className={tableCellClass}>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Avatar name={kycCase.client.name} />
+                        <div className="min-w-0">
+                          <Link className="block truncate font-semibold text-slate-950 hover:text-brand-700" to={`/kyc/${kycCase.id}`}>{kycCase.client.name}</Link>
+                          <p className="max-w-[16rem] truncate text-xs text-slate-500" title={kycCase.title}>{kycCase.title}</p>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{kycCase.client.name}</td>
-                    <td className="px-4 py-3 text-slate-600">{kycCase.service?.name || 'Not selected'}</td>
-                    <td className="px-4 py-3 text-slate-600">{kycCase.legalDocuments.length}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>
-                        {kycStatusLabel(kycCase.status)}
-                      </span>
+                    <td className={`${tableCellClass} whitespace-nowrap font-medium text-slate-800`}>{kycCase.kycNumber || '-'}</td>
+                    <td className={`${tableCellClass} text-slate-600`}>{kycCase.service?.name || 'Not selected'}</td>
+                    <td className={`${tableCellClass} text-right tabular-nums text-slate-600`}>{kycCase._count.legalDocuments}</td>
+                    <td className={tableCellClass}>
+                      <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>{kycStatusLabel(kycCase.status)}</span>
                       {kycStatusOwner(kycCase.status) ? <p className="mt-1 text-[11px] font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</p> : null}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Link
-                          to={`/kyc/${kycCase.id}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
-                          aria-label={`View ${kycCase.title}`}
-                          title="View"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Link>
+                    <td className={tableCellClass}>
+                      <div className="flex justify-end gap-0.5">
+                        <Link to={`/kyc/${kycCase.id}`} className={rowLink} aria-label={`View ${kycCase.title}`} title="View"><Eye className="h-4 w-4" /></Link>
                         {documentReadyStatuses.includes(kycCase.status) ? (
                           <>
-                            <button
-                              type="button"
-                              onClick={() => downloadDocument(kycCase, 'docx')}
-                              disabled={generatingKey === `${kycCase.id}-docx`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                              aria-label={`Download DOCX for ${kycCase.title}`}
-                              title="Download DOCX"
-                            >
-                              <FileText className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => downloadDocument(kycCase, 'pdf')}
-                              disabled={generatingKey === `${kycCase.id}-pdf`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                              aria-label={`Download PDF for ${kycCase.title}`}
-                              title="Download PDF"
-                            >
-                              <Download className="h-4 w-4" />
-                            </button>
+                            <IconAction label={`Download DOCX for ${kycCase.title}`} onClick={() => downloadDocument(kycCase, 'docx')} disabled={generatingKey === `${kycCase.id}-docx`}><FileText className="h-4 w-4" /></IconAction>
+                            <IconAction label={`Download PDF for ${kycCase.title}`} onClick={() => downloadDocument(kycCase, 'pdf')} disabled={generatingKey === `${kycCase.id}-pdf`}><Download className="h-4 w-4" /></IconAction>
                           </>
                         ) : null}
                         {canEditOrDeleteCases ? (
                           <>
-                            <Link
-                              to={`/kyc/${kycCase.id}/edit`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
-                              aria-label={`Edit ${kycCase.title}`}
-                              title="Edit"
-                            >
-                              <Edit3 className="h-4 w-4" />
-                            </Link>
-                            <button
-                              type="button"
-                              onClick={() => removeCase(kycCase)}
-                              disabled={deletingId === kycCase.id}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                              aria-label={`Delete ${kycCase.title}`}
-                              title="Delete"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
+                            <Link to={`/kyc/${kycCase.id}/edit`} className={rowLink} aria-label={`Edit ${kycCase.title}`} title="Edit"><Edit3 className="h-4 w-4" /></Link>
+                            <IconAction label={`Delete ${kycCase.title}`} tone="danger" onClick={() => removeCase(kycCase)} disabled={deletingId === kycCase.id}><Trash2 className="h-4 w-4" /></IconAction>
                           </>
                         ) : null}
                       </div>
@@ -204,16 +185,13 @@ export function KycWorkflowPage() {
                   </tr>
                 ))
               ) : (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>
-                    No KYC cases have been opened yet.
-                  </td>
-                </tr>
+                <EmptyRow columns={columns} filtered={table.isFiltered} emptyText="No KYC cases have been opened yet." onReset={table.reset} />
               )}
             </tbody>
           </table>
         </div>
-      </section>
+        <TablePager page={table.params.page} pageSize={table.params.pageSize} total={table.total} onPage={table.setPage} onPageSize={table.setPageSize} loading={table.loading} />
+      </TableCard>
     </div>
   );
 }

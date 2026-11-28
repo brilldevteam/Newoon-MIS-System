@@ -39,6 +39,7 @@ import { identityReading } from '../common/identity-reading';
 import { MrzResult } from '../common/mrz';
 import { DocumentReaderService } from '../compliance-clients/document-reader.service';
 import { IdDocumentReaderService } from '../compliance-clients/id-document-reader.service';
+import { clampPage, pagingOf, searchTerm, TablePage, TableQueryDto } from '../common/table-query';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
@@ -144,6 +145,68 @@ export class KycService {
     });
 
     return Promise.all(cases.map((kycCase) => this.withKycNumber(kycCase)));
+  }
+
+  // The KYC workflow list as a table: search, sort, quick tab and paging done here, on top of the same tenant scoping
+  // as the full list. Rows are light (no documents, comments or history; only the document count).
+  async table(user: RequestUser, query: TableQueryDto): Promise<TablePage<unknown>> {
+    const q = searchTerm(query);
+    const common: Prisma.KycCaseWhereInput = {
+      AND: [
+        this.tenantWhere(user),
+        q
+          ? {
+              OR: [
+                { kycNumber: { contains: q, mode: 'insensitive' } },
+                { title: { contains: q, mode: 'insensitive' } },
+                { client: { name: { contains: q, mode: 'insensitive' } } },
+                { service: { name: { contains: q, mode: 'insensitive' } } }
+              ]
+            }
+          : {}
+      ]
+    };
+    const S = KycCaseStatus;
+    const preparation = [S.INQUIRY_RECEIVED, S.PROPOSAL_OPTIONAL, S.LEGAL_DOCUMENTS_PENDING, S.LEGAL_DOCUMENTS_UPLOADED, S.RETURNED_TO_BD, S.SUBMITTED_TO_AML, S.AML_REVIEW_STARTED, S.FINAL_SIGNATURES_PENDING, S.FINAL_DOCUMENTS_PENDING];
+    const approvals = [S.SUPERVISOR_REVIEW_PENDING, S.SUPERVISOR_REVIEW_IN_PROGRESS, S.SUPERVISOR_ADDITIONAL_INFORMATION_REQUIRED, S.SUPERVISOR_REVIEW_COMPLETED, S.DMLRO_REVIEW_PENDING, S.DMLRO_REVIEW_IN_PROGRESS, S.DMLRO_ADDITIONAL_INFORMATION_REQUIRED, S.DMLRO_REVIEW_COMPLETED, S.MLRO_REVIEW_PENDING, S.MLRO_REVIEW_IN_PROGRESS, S.MLRO_ADDITIONAL_INFORMATION_REQUIRED, S.MLRO_APPROVED, S.MLRO_APPROVED_WITH_CONDITIONS, S.SEF_DECISION_PENDING, S.SEF_DECISION_IN_PROGRESS, S.SEF_APPROVED];
+    const completed = [S.KYC_FINAL_APPROVED, S.CLIENT_ACTIVATION_PENDING, S.CLIENT_ACTIVE];
+    const tabs: Record<string, KycCaseStatus[]> = {
+      'pending-kyc': preparation,
+      'pending-approvals': approvals,
+      completed,
+      other: (Object.values(S) as KycCaseStatus[]).filter((status) => !([...preparation, ...approvals, ...completed] as KycCaseStatus[]).includes(status))
+    };
+    const tab = query.tab && tabs[query.tab] ? query.tab : 'all';
+    const where: Prisma.KycCaseWhereInput = tab === 'all' ? common : { AND: [common, { status: { in: tabs[tab] } }] };
+    const direction = query.dir === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.KycCaseOrderByWithRelationInput[] =
+      query.sort === 'number' ? [{ kycNumber: direction }]
+      : query.sort === 'client' ? [{ client: { name: direction } }]
+      : query.sort === 'status' ? [{ status: direction }, { createdAt: 'desc' }]
+      : [{ createdAt: direction }];
+    const { pageSize, requested } = pagingOf(query);
+    const [total, groups] = await Promise.all([
+      this.prisma.kycCase.count({ where }),
+      this.prisma.kycCase.groupBy({ by: ['status'], where: common, _count: { _all: true } })
+    ]);
+    const page = clampPage(requested, total, pageSize);
+    const cases = await this.prisma.kycCase.findMany({
+      where,
+      orderBy: [...orderBy, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true, tenantId: true, createdAt: true, title: true, kycNumber: true, status: true,
+        client: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } },
+        _count: { select: { legalDocuments: true } }
+      }
+    });
+    const items = await Promise.all(cases.map((kycCase) => this.withKycNumber(kycCase)));
+    const byStatus = new Map(groups.map((group) => [group.status, group._count._all]));
+    const counts: Record<string, number> = { all: groups.reduce((sum, group) => sum + group._count._all, 0) };
+    for (const [key, statuses] of Object.entries(tabs)) counts[key] = statuses.reduce((sum, status) => sum + (byStatus.get(status) || 0), 0);
+    return { items, total, page, pageSize, counts };
   }
 
   async findOne(user: RequestUser, id: string) {

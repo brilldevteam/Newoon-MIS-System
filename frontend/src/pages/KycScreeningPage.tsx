@@ -1,3 +1,4 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, FileText, Plus, Save, Trash2, Upload } from 'lucide-react';
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -150,6 +151,7 @@ function DocumentList({
 }
 
 export function KycScreeningPage() {
+  const { confirm } = useConfirm();
   const { id = '' } = useParams();
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -506,7 +508,8 @@ export function KycScreeningPage() {
   }
 
   async function removeDocument(documentId: string) {
-    if (!id || !window.confirm('Delete this screening document?')) return;
+    if (!id) return;
+    if (!(await confirm({ title: 'Delete this document?', message: 'Delete this screening document?', confirmLabel: 'Delete', tone: 'danger' }))) return;
     setError('');
     setMessage('');
     setBusyDocumentId(documentId);
@@ -521,7 +524,8 @@ export function KycScreeningPage() {
   }
 
   async function removeMergedDocument(documentId: string) {
-    if (!id || !window.confirm('Delete this merged screening PDF?')) return;
+    if (!id) return;
+    if (!(await confirm({ title: 'Delete this PDF?', message: 'Delete this merged screening PDF?', confirmLabel: 'Delete', tone: 'danger' }))) return;
     setError('');
     setMessage('');
     setBusyDocumentId(documentId);
@@ -536,7 +540,8 @@ export function KycScreeningPage() {
   }
 
   async function removeRecord(recordId: string) {
-    if (!id || !window.confirm('Delete this screening entity and its uploaded evidence?')) return;
+    if (!id) return;
+    if (!(await confirm({ title: 'Delete this screening entity?', message: 'Delete this screening entity and its uploaded evidence?', confirmLabel: 'Delete', tone: 'danger' }))) return;
     setError('');
     setMessage('');
     setBusyKey(`delete-${recordId}`);

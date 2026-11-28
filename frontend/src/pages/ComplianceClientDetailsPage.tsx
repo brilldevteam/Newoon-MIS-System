@@ -1,3 +1,4 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { ArrowLeft, Eye, FileText, Mail, MapPin, Phone, RefreshCw, ShieldCheck } from 'lucide-react';
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -94,6 +95,7 @@ function EddSection({ title, description, children }: { title: string; descripti
 // Staff allocated to the client: Accounting and HR see only their allocated clients (Company Admin, AML Supervisor,
 // DMLRO and MLRO allocate them).
 function AllocationPanel({ data, onChange }: { data: ComplianceClientDetail; onChange: (next: ComplianceClientDetail) => void }) {
+  const { confirm } = useConfirm();
   const { showToast } = useToast();
   const [candidates, setCandidates] = useState<StaffUser[] | null>(null);
   const [userId, setUserId] = useState('');
@@ -124,7 +126,7 @@ function AllocationPanel({ data, onChange }: { data: ComplianceClientDetail; onC
   }
 
   async function remove(allocationId: string, name: string) {
-    if (!window.confirm(`Remove ${name} from this client? They will no longer see it.`)) return;
+    if (!(await confirm({ title: 'Remove their access?', message: `Remove ${name} from this client? They will no longer see it.`, confirmLabel: 'Remove', tone: 'danger' }))) return;
     setBusy(true);
     try {
       onChange(await removeStaffAllocation(data.client.id, allocationId));

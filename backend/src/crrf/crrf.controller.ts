@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Res, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
@@ -7,6 +7,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { crrfDocumentKinds, safeResponseFileName, uploadInterceptorOptions } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
+import { TableQueryDto } from '../common/table-query';
 import { CrrfService } from './crrf.service';
 
 @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -86,5 +87,11 @@ export class CrrfListController {
   @Get()
   listRecords(@CurrentUser() user: RequestUser) {
     return this.crrfService.listRecords(user);
+  }
+
+  @Roles('AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get('table')
+  table(@CurrentUser() user: RequestUser, @Query() query: TableQueryDto) {
+    return this.crrfService.table(user, query);
   }
 }

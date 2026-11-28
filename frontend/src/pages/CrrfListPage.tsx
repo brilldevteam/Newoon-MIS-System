@@ -1,7 +1,8 @@
-import { AlertTriangle, CheckCircle2, Eye, FileSpreadsheet, Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Eye, FileSpreadsheet } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { CrrfListItem, CrrfRiskRating, listCrrfRecords } from '../services/kyc-workflow.service';
+import { Avatar, EmptyRow, FilterSelect, Pill, QuickTabs, SortHeader, TableCard, TablePager, TableSkeleton, TableToolbar, tableCellClass, tableHeadClass } from '../components/table/TableParts';
+import { useServerTable } from '../components/table/useServerTable';
+import { CrrfRiskRating, listCrrfTable } from '../services/kyc-workflow.service';
 import { kycStatusLabel } from '../utils/kyc-status-labels';
 
 const riskLabels: Record<CrrfRiskRating, string> = {
@@ -10,53 +11,33 @@ const riskLabels: Record<CrrfRiskRating, string> = {
   HIGH: 'High'
 };
 
-function errorMessage(error: any, fallback: string) {
-  const message = error?.response?.data?.message;
-  if (Array.isArray(message)) return message.join(' ');
-  return typeof message === 'string' ? message : fallback;
+const tabs = [
+  { value: 'all', label: 'All records' },
+  { value: 'rated', label: 'Risk rated' },
+  { value: 'pending', label: 'Not rated' },
+  { value: 'high', label: 'High risk' }
+];
+
+const sortOptions = [
+  { value: 'updated', label: 'Last updated' },
+  { value: 'client', label: 'Client' },
+  { value: 'case', label: 'KYC case' },
+  { value: 'risk', label: 'Risk rating' },
+  { value: 'documents', label: 'Documents' }
+];
+
+const filterKeys = ['risk'];
+
+function riskTone(value?: CrrfRiskRating | null) {
+  if (value === 'HIGH') return 'red' as const;
+  if (value === 'MEDIUM') return 'amber' as const;
+  if (value === 'LOW') return 'green' as const;
+  return 'slate' as const;
 }
 
 export function CrrfListPage() {
-  const [records, setRecords] = useState<CrrfListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
-
-  useEffect(() => {
-    setLoading(true);
-    listCrrfRecords()
-      .then(setRecords)
-      .catch((requestError) => setError(errorMessage(requestError, 'Unable to load CRRF records.')))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filteredRecords = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return records.filter((record) => {
-      const searchable = [
-        record.clientInfo.clientName,
-        record.clientInfo.clientCode,
-        record.clientInfo.crNumber,
-        record.clientInfo.caseTitle,
-        record.clientInfo.serviceName,
-        record.riskRating
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return !normalizedQuery || searchable.includes(normalizedQuery);
-    });
-  }, [records, query]);
-
-  const stats = useMemo(
-    () => ({
-      total: records.length,
-      completed: records.filter((record) => Boolean(record.riskRating)).length,
-      highRisk: records.filter((record) => record.riskRating === 'HIGH').length,
-      documents: records.reduce((sum, record) => sum + record.documentCount, 0)
-    }),
-    [records]
-  );
+  const table = useServerTable(listCrrfTable, { defaultSort: 'updated', defaultDir: 'desc', filterKeys });
+  const columns = 6;
 
   return (
     <div className="space-y-6">
@@ -65,69 +46,70 @@ export function CrrfListPage() {
         <p className="mt-1 text-sm text-slate-500">All client risk rating records and uploaded CRRF files.</p>
       </div>
 
-      {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {table.error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{table.error}</p> : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard icon={FileSpreadsheet} label="Total CRRF records" value={stats.total} />
-        <SummaryCard icon={CheckCircle2} label="Risk ratings saved" value={stats.completed} />
-        <SummaryCard icon={AlertTriangle} label="High risk" value={stats.highRisk} tone="warning" />
-        <SummaryCard icon={FileSpreadsheet} label="Uploaded documents" value={stats.documents} />
+        <SummaryCard icon={FileSpreadsheet} label="Total CRRF records" value={table.counts.all} />
+        <SummaryCard icon={CheckCircle2} label="Risk ratings saved" value={table.counts.rated} />
+        <SummaryCard icon={AlertTriangle} label="High risk" value={table.counts.high} tone="warning" />
+        <SummaryCard icon={FileSpreadsheet} label="Uploaded documents" value={table.counts.documents} />
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 p-4">
-          <div className="relative max-w-xl">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search client, CR number, case, service, or risk"
-              className="w-full rounded-md border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-          </div>
-        </div>
+      <TableCard>
+        <TableToolbar
+          query={table.params.q}
+          onQuery={table.setQuery}
+          placeholder="Search client, CR number, case, service, or risk"
+          sort={table.params.sort}
+          dir={table.params.dir}
+          sortOptions={sortOptions}
+          onSort={table.setSort}
+          activeFilterCount={table.activeFilterCount}
+          onClearFilters={table.clearFilters}
+          filters={<FilterSelect label="Risk rating" value={table.params.filters.risk || ''} onChange={(value) => table.setFilter('risk', value)} options={Object.entries(riskLabels).map(([value, label]) => ({ value, label }))} />}
+        />
+        <QuickTabs tabs={tabs} active={table.params.tab} counts={table.counts} onChange={table.setTab} />
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50/70">
               <tr>
-                <th className="px-4 py-3">Client</th>
-                <th className="px-4 py-3">CR number</th>
-                <th className="px-4 py-3">KYC case</th>
-                <th className="px-4 py-3">Risk rating</th>
-                <th className="px-4 py-3">Documents</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                <SortHeader label="Client" sortKey="client" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={tableHeadClass}>CR number</th>
+                <SortHeader label="KYC case" sortKey="case" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <SortHeader label="Risk rating" sortKey="risk" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <SortHeader label="Documents" sortKey="documents" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={`${tableHeadClass} text-right`}><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>
-                    Loading CRRF records...
-                  </td>
-                </tr>
-              ) : filteredRecords.length ? (
-                filteredRecords.map((record) => (
-                  <tr key={record.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <p className="font-semibold text-slate-950">{record.clientInfo.clientName}</p>
-                      <p className="text-xs text-slate-500">{record.clientInfo.clientCode || '-'}</p>
+              {table.loading && !table.rows.length ? (
+                <TableSkeleton columns={columns} />
+              ) : table.rows.length ? (
+                table.rows.map((record) => (
+                  <tr key={record.id} className={`hover:bg-slate-50/70 ${table.loading ? 'opacity-60' : ''}`}>
+                    <td className={tableCellClass}>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Avatar name={record.clientInfo.clientName} />
+                        <div className="min-w-0">
+                          <Link className="block truncate font-semibold text-slate-950 hover:text-brand-700" to={`/kyc/${record.kycCaseId}/crrf`}>{record.clientInfo.clientName}</Link>
+                          <p className="text-xs text-slate-500">{record.clientInfo.clientCode || '-'}</p>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{record.clientInfo.crNumber || '-'}</td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-slate-700">{record.clientInfo.caseTitle}</p>
+                    <td className={`${tableCellClass} text-slate-600`}>{record.clientInfo.crNumber || '-'}</td>
+                    <td className={tableCellClass}>
+                      <p className="max-w-[18rem] truncate font-medium text-slate-700">{record.clientInfo.caseTitle}</p>
                       <p className="text-xs text-slate-500">{record.clientInfo.serviceName || 'No service'} | {kycStatusLabel(record.kycCase.status)}</p>
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${riskTone(record.riskRating)}`}>
-                        {record.riskRating ? riskLabels[record.riskRating] : 'Not selected'}
-                      </span>
+                    <td className={tableCellClass}>
+                      <Pill tone={riskTone(record.riskRating)}>{record.riskRating ? riskLabels[record.riskRating] : 'Not selected'}</Pill>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{record.documentCount}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end">
+                    <td className={`${tableCellClass} text-slate-600`}>{record.documentCount}</td>
+                    <td className={tableCellClass}>
+                      <div className="flex justify-end gap-0.5">
                         <Link
                           to={`/kyc/${record.kycCaseId}/crrf`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                           aria-label={`Open CRRF for ${record.clientInfo.clientName}`}
                           title="Open CRRF"
                         >
@@ -138,25 +120,15 @@ export function CrrfListPage() {
                   </tr>
                 ))
               ) : (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>
-                    No CRRF records match this view.
-                  </td>
-                </tr>
+                <EmptyRow columns={columns} filtered={table.isFiltered} emptyText="No CRRF records have been created yet." onReset={table.reset} />
               )}
             </tbody>
           </table>
         </div>
-      </section>
+        <TablePager page={table.params.page} pageSize={table.params.pageSize} total={table.total} onPage={table.setPage} onPageSize={table.setPageSize} loading={table.loading} />
+      </TableCard>
     </div>
   );
-}
-
-function riskTone(value?: CrrfRiskRating | null) {
-  if (value === 'HIGH') return 'bg-red-50 text-red-700';
-  if (value === 'MEDIUM') return 'bg-amber-50 text-amber-700';
-  if (value === 'LOW') return 'bg-emerald-50 text-emerald-700';
-  return 'bg-slate-100 text-slate-600';
 }
 
 function SummaryCard({
@@ -167,7 +139,7 @@ function SummaryCard({
 }: {
   icon: typeof FileSpreadsheet;
   label: string;
-  value: number;
+  value?: number;
   tone?: 'default' | 'warning';
 }) {
   return (
@@ -175,7 +147,7 @@ function SummaryCard({
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-950">{value}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-950">{value ?? 0}</p>
         </div>
         <span className={`inline-flex h-10 w-10 items-center justify-center rounded-lg ${tone === 'warning' ? 'bg-amber-50 text-amber-700' : 'bg-brand-50 text-brand-700'}`}>
           <Icon className="h-5 w-5" />

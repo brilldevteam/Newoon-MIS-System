@@ -1,8 +1,11 @@
-import { Edit3, Eye, Plus, Search, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Edit3, Eye, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { deleteEnquiry, Enquiry, listEnquiries } from '../services/kyc-workflow.service';
+import { useConfirm } from '../components/ConfirmProvider';
+import { Avatar, EmptyRow, FilterSelect, IconAction, Pill, QuickTabs, SortHeader, TableCard, TableToolbar, TablePager, TableSkeleton, tableCellClass, tableHeadClass } from '../components/table/TableParts';
+import { useServerTable } from '../components/table/useServerTable';
 import { useAuth } from '../hooks/useAuth';
+import { deleteEnquiry, EnquiryRow, listEnquiryTable } from '../services/kyc-workflow.service';
 import { hasAnyRole, workflowRoles } from '../utils/access-control';
 import { canEditEnquiryRecord } from '../utils/enquiry-edit-access';
 import { kycStatusLabel, kycStatusOwner, kycStatusToneClass } from '../utils/kyc-status-labels';
@@ -22,53 +25,65 @@ const enquiryStatusLabels: Record<string, string> = {
   CLOSED: 'Closed'
 };
 
-function enquiryStatusToneClass(value: string) {
-  if (['READY_FOR_KYC', 'CONVERTED_TO_KYC'].includes(value)) return 'bg-emerald-50 text-emerald-700';
-  if (value === 'SUBMITTED_TO_AML_SUPERVISOR') return 'bg-blue-50 text-blue-700';
-  if (value === 'RETURNED_TO_BD') return 'bg-amber-50 text-amber-700';
-  return 'bg-slate-100 text-slate-700';
+const tabs = [
+  { value: 'all', label: 'All enquiries' },
+  { value: 'draft', label: 'Draft' },
+  { value: 'review', label: 'With AML Supervisor' },
+  { value: 'returned', label: 'Returned to BD' },
+  { value: 'ready', label: 'Ready for KYC' },
+  { value: 'closed', label: 'Closed' }
+];
+
+const sortOptions = [
+  { value: 'created', label: 'Date created' },
+  { value: 'code', label: 'Code' },
+  { value: 'name', label: 'Name' },
+  { value: 'status', label: 'Status' }
+];
+
+const filterKeys = ['type'];
+
+function enquiryStatusTone(value: string) {
+  if (['READY_FOR_KYC', 'CONVERTED_TO_KYC'].includes(value)) return 'green' as const;
+  if (value === 'SUBMITTED_TO_AML_SUPERVISOR') return 'blue' as const;
+  if (value === 'RETURNED_TO_BD') return 'amber' as const;
+  return 'slate' as const;
 }
 
+const formatDate = (value: string) => new Date(value).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const enquiryName = (enquiry: EnquiryRow) => enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry';
+
 export function EnquiryListPage() {
+  const { confirm } = useConfirm();
   const { user } = useAuth();
-  const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const table = useServerTable(listEnquiryTable, { defaultSort: 'created', defaultDir: 'desc', filterKeys });
   const [deletingId, setDeletingId] = useState('');
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   // Super Admin can delete any enquiry; Operations and Company Admin only drafts / returned enquiries with no KYC case.
-  const canDeleteEnquiry = (enquiry: Enquiry) =>
+  const canDeleteEnquiry = (enquiry: EnquiryRow) =>
     hasAnyRole(user, ['SUPER_ADMIN']) ||
     (hasAnyRole(user, ['OPERATING_TEAM', 'COMPANY_ADMIN']) && ['DRAFT', 'RETURNED_TO_BD'].includes(enquiry.status) && !enquiry.generatedKycCases?.length);
   const canCreateEnquiry = hasAnyRole(user, workflowRoles.clientIntake);
 
-  useEffect(() => {
-    loadEnquiries();
-  }, []);
-
-  function loadEnquiries() {
-    setLoading(true);
-    setError('');
-    listEnquiries()
-      .then(setEnquiries)
-      .catch((requestError: any) => setError(requestError.response?.data?.message || 'Unable to load enquiries.'))
-      .finally(() => setLoading(false));
-  }
-
-  async function removeEnquiry(enquiry: Enquiry) {
-    const confirmed = window.confirm(`Delete enquiry ${enquiry.enquiryCode}? This will remove the enquiry record and its draft attachments/comments.`);
+  async function removeEnquiry(enquiry: EnquiryRow) {
+    const confirmed = await confirm({ title: 'Delete this enquiry?', message: `Delete enquiry ${enquiry.enquiryCode}? This will remove the enquiry record and its draft attachments/comments.`, confirmLabel: 'Delete', tone: 'danger' });
     if (!confirmed) return;
 
     setDeletingId(enquiry.id);
-    setError('');
+    setActionError('');
     try {
       await deleteEnquiry(enquiry.id);
-      setEnquiries((current) => current.filter((item) => item.id !== enquiry.id));
+      table.removeRow((row) => row.id === enquiry.id);
+      table.reload();
     } catch (requestError: any) {
-      setError(requestError.response?.data?.message || 'Unable to delete this enquiry.');
+      setActionError(requestError.response?.data?.message || 'Unable to delete this enquiry.');
     } finally {
       setDeletingId('');
     }
   }
+
+  const error = actionError || table.error;
+  const columns = 7;
 
   return (
     <div className="space-y-6">
@@ -85,84 +100,91 @@ export function EnquiryListPage() {
         ) : null}
       </div>
 
-      {error ? <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+      {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
 
-      <div className="rounded-lg border border-slate-200 bg-white">
-        <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm text-slate-500">
-          <Search className="h-4 w-4" />
-          Enquiry register
-        </div>
+      <TableCard>
+        <TableToolbar
+          query={table.params.q}
+          onQuery={table.setQuery}
+          placeholder="Search by code, company, contact or email"
+          sort={table.params.sort}
+          dir={table.params.dir}
+          sortOptions={sortOptions}
+          onSort={table.setSort}
+          activeFilterCount={table.activeFilterCount}
+          onClearFilters={table.clearFilters}
+          filters={<FilterSelect label="Enquiry type" value={table.params.filters.type || ''} onChange={(value) => table.setFilter('type', value)} options={Object.entries(enquiryTypeLabels).map(([value, label]) => ({ value, label }))} />}
+        />
+        <QuickTabs tabs={tabs} active={table.params.tab} counts={table.counts} onChange={table.setTab} />
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50/70">
               <tr>
-                <th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Enquiry</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Requested Services</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                <SortHeader label="Enquiry" sortKey="name" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={tableHeadClass}>Primary contact</th>
+                <th scope="col" className={tableHeadClass}>Type</th>
+                <th scope="col" className={tableHeadClass}>Requested services</th>
+                <SortHeader label="Status" sortKey="status" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <SortHeader label="Created" sortKey="created" sort={table.params.sort} dir={table.params.dir} onSort={table.toggleSort} />
+                <th scope="col" className={`${tableHeadClass} text-right`}><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>Loading enquiries...</td>
-                </tr>
-              ) : enquiries.length ? (
-                enquiries.map((enquiry) => (
-                  <tr key={enquiry.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-950">{enquiry.enquiryCode}</td>
-                    <td className="px-4 py-3">
-                      <Link className="font-medium text-slate-950 hover:text-brand-700" to={`/enquiries/${enquiry.id}`}>
-                        {enquiry.companyName || enquiry.proposedCompanyName || enquiry.client?.name || 'Untitled enquiry'}
-                      </Link>
-                      <p className="text-xs text-slate-500">{enquiry.keyContactName || 'Contact not captured'}</p>
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">{enquiryTypeLabels[enquiry.enquiryType] || enquiry.enquiryType}</td>
-                    <td className="max-w-md truncate px-4 py-3 text-slate-600">{enquiry.requestedServices?.join(', ') || 'Not selected'}</td>
-                    <td className="px-4 py-3">
-                      {enquiry.generatedKycCases?.[0] ? (
-                        <>
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(enquiry.generatedKycCases[0].status)}`}>
-                            {kycStatusLabel(enquiry.generatedKycCases[0].status)}
-                          </span>
-                          {kycStatusOwner(enquiry.generatedKycCases[0].status) ? <p className="mt-1 text-[11px] font-medium text-slate-500">Now with: {kycStatusOwner(enquiry.generatedKycCases[0].status)}</p> : null}
-                        </>
-                      ) : (
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${enquiryStatusToneClass(enquiry.status)}`}>
-                          {enquiryStatusLabels[enquiry.status] || enquiry.status}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Link to={`/enquiries/${enquiry.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="View">
-                          <Eye className="h-4 w-4" />
-                        </Link>
-                        {canEditEnquiryRecord(user, enquiry) ? (
-                          <Link to={`/enquiries/${enquiry.id}/edit`} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" title="Edit">
-                            <Edit3 className="h-4 w-4" />
-                          </Link>
-                        ) : null}
-                        {canDeleteEnquiry(enquiry) ? (
-                          <button type="button" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50" title="Delete">
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+              {table.loading && !table.rows.length ? (
+                <TableSkeleton columns={columns} />
+              ) : table.rows.length ? (
+                table.rows.map((enquiry) => {
+                  const kycCase = enquiry.generatedKycCases?.[0];
+                  return (
+                    <tr key={enquiry.id} className={`hover:bg-slate-50/70 ${table.loading ? 'opacity-60' : ''}`}>
+                      <td className={tableCellClass}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <Avatar name={enquiryName(enquiry)} />
+                          <div className="min-w-0">
+                            <Link className="block truncate font-semibold text-slate-950 hover:text-brand-700" to={`/enquiries/${enquiry.id}`}>{enquiryName(enquiry)}</Link>
+                            <p className="text-xs text-slate-500">{enquiry.enquiryCode}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className={tableCellClass}>
+                        <p className="max-w-[14rem] truncate font-medium text-slate-800">{enquiry.keyContactName || 'Contact not captured'}</p>
+                        <p className="max-w-[14rem] truncate text-xs text-slate-500">{enquiry.keyContactEmail || 'No email'}</p>
+                      </td>
+                      <td className={tableCellClass}><span className="whitespace-nowrap text-slate-600">{enquiryTypeLabels[enquiry.enquiryType] || enquiry.enquiryType}</span></td>
+                      <td className={`${tableCellClass} max-w-xs`}><p className="truncate text-slate-600" title={enquiry.requestedServices?.join(', ')}>{enquiry.requestedServices?.join(', ') || 'Not selected'}</p></td>
+                      <td className={tableCellClass}>
+                        {kycCase ? (
+                          <>
+                            <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${kycStatusToneClass(kycCase.status)}`}>{kycStatusLabel(kycCase.status)}</span>
+                            {kycStatusOwner(kycCase.status) ? <p className="mt-1 text-[11px] font-medium text-slate-500">Now with: {kycStatusOwner(kycCase.status)}</p> : null}
+                          </>
+                        ) : (
+                          <Pill tone={enquiryStatusTone(enquiry.status)}>{enquiryStatusLabels[enquiry.status] || enquiry.status}</Pill>
+                        )}
+                      </td>
+                      <td className={`${tableCellClass} whitespace-nowrap text-slate-600`}>{formatDate(enquiry.createdAt)}</td>
+                      <td className={tableCellClass}>
+                        <div className="flex justify-end gap-0.5">
+                          <Link to={`/enquiries/${enquiry.id}`} aria-label={`View ${enquiry.enquiryCode}`} title="View" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Eye className="h-4 w-4" /></Link>
+                          {canEditEnquiryRecord(user, enquiry) ? (
+                            <Link to={`/enquiries/${enquiry.id}/edit`} aria-label={`Edit ${enquiry.enquiryCode}`} title="Edit" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"><Edit3 className="h-4 w-4" /></Link>
+                          ) : null}
+                          {canDeleteEnquiry(enquiry) ? (
+                            <IconAction label={`Delete ${enquiry.enquiryCode}`} tone="danger" onClick={() => removeEnquiry(enquiry)} disabled={deletingId === enquiry.id}><Trash2 className="h-4 w-4" /></IconAction>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
-                <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={6}>No enquiries have been recorded yet.</td>
-                </tr>
+                <EmptyRow columns={columns} filtered={table.isFiltered} emptyText="No enquiries have been recorded yet." onReset={table.reset} />
               )}
             </tbody>
           </table>
         </div>
-      </div>
+        <TablePager page={table.params.page} pageSize={table.params.pageSize} total={table.total} onPage={table.setPage} onPageSize={table.setPageSize} loading={table.loading} />
+      </TableCard>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmProvider';
 import { AlertTriangle, CalendarClock, CheckCircle2, Eye, FileText, IdCard, Info, Link2, LoaderCircle, Plus, RefreshCw, ScanLine, Star, Trash2, Upload, X } from 'lucide-react';
 import { FormEvent, ReactNode, useState } from 'react';
 import { getApiErrorMessage } from '../services/api';
@@ -305,6 +306,7 @@ function AddPassportForm({ person, context, onDone }: { person: ClientPerson; co
 function IdentityCard({ type, person, passport, documents, context }: {
   type: IdType; person: ClientPerson; passport: ClientPassport | null; documents: IdentityDocument[]; context: IdentityDocumentsContext;
 }) {
+  const { confirm } = useConfirm();
   const { showToast } = useToast();
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -345,7 +347,8 @@ function IdentityCard({ type, person, passport, documents, context }: {
   }
 
   async function remove() {
-    if (!passport || !window.confirm(`Remove passport ${passport.passportNumber} from ${person.fullName}? Its uploaded copies are kept in the Identity Documents folder.`)) return;
+    if (!passport) return;
+    if (!(await confirm({ title: 'Remove this passport?', message: `Remove passport ${passport.passportNumber} from ${person.fullName}? Its uploaded copies are kept in the Identity Documents folder.`, confirmLabel: 'Remove', tone: 'danger' }))) return;
     setBusy(true);
     try {
       context.onChange(await removePersonPassport(context.clientId, person.id, passport.id));

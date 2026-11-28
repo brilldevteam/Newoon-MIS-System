@@ -1,3 +1,4 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { Download, Eye, FileSpreadsheet, FileText, Save, Trash2, Upload } from 'lucide-react';
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -25,6 +26,7 @@ const riskOptions: Array<{ value: CrrfRiskRating; label: string }> = [
 ];
 
 export function CrrfWorkspacePage() {
+  const { confirm } = useConfirm();
   const { id = '' } = useParams();
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -105,7 +107,8 @@ export function CrrfWorkspacePage() {
   }
 
   async function removeDocument(documentId: string) {
-    if (!id || busyKey || !window.confirm('Delete this CRRF document?')) return;
+    if (!id || busyKey) return;
+    if (!(await confirm({ title: 'Delete this document?', message: 'Delete this CRRF document?', confirmLabel: 'Delete', tone: 'danger' }))) return;
     setError('');
     setMessage('');
     setBusyKey(`delete-${documentId}`);

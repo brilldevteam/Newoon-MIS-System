@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { basename, isAbsolute, join, normalize, relative } from 'path';
 import { isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
+import { clampPage, pagingOf, searchTerm, TablePage, TableQueryDto } from '../common/table-query';
 import { PrismaService } from '../prisma/prisma.service';
 import { identitySummary, identityTokens, sameParty } from '../common/person-identity';
 
@@ -91,6 +92,81 @@ export class ScreeningService {
       totalChecks: record.checks.filter((check) => check.isSelected).length,
       documentCount: record.documents.length + record.checks.reduce((sum, check) => sum + check.documents.length, 0)
     }));
+  }
+
+  // Server-driven list: search, quick tab, sort and paging run in the database. Tenant scoping is applied first.
+  async table(user: RequestUser, query: TableQueryDto): Promise<TablePage<unknown>> {
+    const q = searchTerm(query);
+    const common: Prisma.ScreeningRecordWhereInput = {
+      AND: [
+        this.recordTenantWhere(user),
+        q
+          ? {
+              OR: [
+                { entityName: { contains: q, mode: 'insensitive' } },
+                { identifier: { contains: q, mode: 'insensitive' } },
+                { country: { contains: q, mode: 'insensitive' } },
+                { kycCase: { title: { contains: q, mode: 'insensitive' } } },
+                { kycCase: { client: { name: { contains: q, mode: 'insensitive' } } } },
+                { kycCase: { client: { registrationNumber: { contains: q, mode: 'insensitive' } } } },
+                { kycCase: { service: { name: { contains: q, mode: 'insensitive' } } } }
+              ]
+            }
+          : {}
+      ]
+    };
+    const flaggedWhere: Prisma.ScreeningRecordWhereInput = {
+      checks: { some: { resultStatus: { in: [ScreeningResultStatus.POTENTIAL_MATCH, ScreeningResultStatus.CONFIRMED_MATCH] } } }
+    };
+    const tabWheres: Record<string, Prisma.ScreeningRecordWhereInput> = {
+      progress: { status: ScreeningRecordStatus.DRAFT },
+      completed: { status: ScreeningRecordStatus.COMPLETED },
+      flagged: flaggedWhere
+    };
+    const tab = query.tab && tabWheres[query.tab] ? query.tab : 'all';
+    const where: Prisma.ScreeningRecordWhereInput = tab === 'all' ? common : { AND: [common, tabWheres[tab]] };
+    const direction = query.dir === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.ScreeningRecordOrderByWithRelationInput[] =
+      query.sort === 'entity' ? [{ entityName: direction }]
+      : query.sort === 'client' ? [{ kycCase: { client: { name: direction } } }]
+      : query.sort === 'status' ? [{ status: direction }, { updatedAt: 'desc' }]
+      : [{ updatedAt: direction }];
+    const { pageSize, requested } = pagingOf(query);
+    const [total, allCount, progressCount, completedCount, flaggedCount] = await Promise.all([
+      this.prisma.screeningRecord.count({ where }),
+      this.prisma.screeningRecord.count({ where: common }),
+      this.prisma.screeningRecord.count({ where: { AND: [common, tabWheres.progress] } }),
+      this.prisma.screeningRecord.count({ where: { AND: [common, tabWheres.completed] } }),
+      this.prisma.screeningRecord.count({ where: { AND: [common, tabWheres.flagged] } })
+    ]);
+    const page = clampPage(requested, total, pageSize);
+    const records = await this.prisma.screeningRecord.findMany({
+      where,
+      orderBy: [...orderBy, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        kycCase: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            createdAt: true,
+            client: { select: { id: true, name: true, registrationNumber: true, country: true } },
+            service: true
+          }
+        },
+        checks: { include: { documents: { select: { id: true } } }, orderBy: { checkType: 'asc' } },
+        documents: { where: { screeningCheckId: null }, select: { id: true } }
+      }
+    });
+    const items = records.map((record) => ({
+      ...record,
+      completedChecks: record.checks.filter((check) => check.isSelected && check.resultStatus !== ScreeningResultStatus.NOT_CHECKED && check.documents.length > 0).length,
+      totalChecks: record.checks.filter((check) => check.isSelected).length,
+      documentCount: record.documents.length + record.checks.reduce((sum, check) => sum + check.documents.length, 0)
+    }));
+    return { items, total, page, pageSize, counts: { all: allCount, progress: progressCount, completed: completedCount, flagged: flaggedCount } };
   }
 
   async getContext(user: RequestUser, kycCaseId: string) {

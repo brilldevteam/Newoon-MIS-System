@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
+import { clampPage, pagingOf, searchTerm, TablePage, TableQueryDto } from '../common/table-query';
 import * as bcrypt from 'bcrypt';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -24,6 +25,67 @@ export class UsersService {
   findAll(user: RequestUser) {
     this.assertAdmin(user);
     return this.prisma.user.findMany({ where: user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: user.tenantId }, select: publicUser, orderBy: { createdAt: 'desc' } });
+  }
+
+  // Server-driven list: same tenant scoping and row shape as findAll, plus search, filters, tabs, sort and paging.
+  async table(user: RequestUser, query: TableQueryDto): Promise<TablePage<unknown>> {
+    this.assertAdmin(user);
+    const scope: Prisma.UserWhereInput = user.roles.includes('SUPER_ADMIN') ? {} : { tenantId: user.tenantId };
+    const q = searchTerm(query);
+    const role = MANAGED_ROLES.includes(query.role || '') ? query.role : undefined;
+    const status = (Object.values(UserStatus) as string[]).includes(query.status || '') ? (query.status as UserStatus) : undefined;
+    const common: Prisma.UserWhereInput = {
+      AND: [
+        scope,
+        role ? { roles: { some: { role: { name: role } } } } : {},
+        status ? { status } : {},
+        q
+          ? {
+              OR: [
+                { firstName: { contains: q, mode: 'insensitive' } },
+                { lastName: { contains: q, mode: 'insensitive' } },
+                { email: { contains: q, mode: 'insensitive' } },
+                { tenant: { name: { contains: q, mode: 'insensitive' } } },
+                ...q.split(/\s+/).length > 1 ? [{ AND: q.split(/\s+/).map((word) => ({ OR: [{ firstName: { contains: word, mode: 'insensitive' as const } }, { lastName: { contains: word, mode: 'insensitive' as const } }] })) }] : []
+              ]
+            }
+          : {}
+      ]
+    };
+    const tabs: Record<string, UserStatus> = { active: UserStatus.ACTIVE, suspended: UserStatus.SUSPENDED, invited: UserStatus.INVITED };
+    const tab = query.tab && tabs[query.tab] ? query.tab : 'all';
+    const where: Prisma.UserWhereInput = tab === 'all' ? common : { AND: [common, { status: tabs[tab] }] };
+    const direction = query.dir === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.UserOrderByWithRelationInput[] =
+      query.sort === 'name' ? [{ firstName: direction }, { lastName: direction }]
+      : query.sort === 'email' ? [{ email: direction }]
+      : query.sort === 'status' ? [{ status: direction }, { createdAt: 'desc' }]
+      : [{ createdAt: query.sort === 'created' ? direction : 'desc' }];
+    const { pageSize, requested } = pagingOf(query);
+    const [total, groups, scopeGroups, scopeAdmins] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.groupBy({ by: ['status'], where: common, _count: { _all: true } }),
+      this.prisma.user.groupBy({ by: ['status'], where: scope, _count: { _all: true } }),
+      this.prisma.user.count({ where: { AND: [scope, { roles: { some: { role: { name: { in: ['SUPER_ADMIN', 'COMPANY_ADMIN'] } } } } }] } })
+    ]);
+    const page = clampPage(requested, total, pageSize);
+    const items = await this.prisma.user.findMany({
+      where,
+      select: publicUser,
+      orderBy: [...orderBy, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize
+    });
+    const byStatus = new Map(groups.map((group) => [group.status, group._count._all]));
+    const scopeByStatus = new Map(scopeGroups.map((group) => [group.status, group._count._all]));
+    const counts: Record<string, number> = { all: groups.reduce((sum, group) => sum + group._count._all, 0) };
+    for (const [key, value] of Object.entries(tabs)) counts[key] = byStatus.get(value) || 0;
+    // Overall figures for the summary cards: the whole visible user set, whatever the search or filters.
+    counts.scopeAll = scopeGroups.reduce((sum, group) => sum + group._count._all, 0);
+    counts.scopeActive = scopeByStatus.get(UserStatus.ACTIVE) || 0;
+    counts.scopeSuspended = scopeByStatus.get(UserStatus.SUSPENDED) || 0;
+    counts.scopeAdmins = scopeAdmins;
+    return { items, total, page, pageSize, counts };
   }
 
   async options(user: RequestUser) {

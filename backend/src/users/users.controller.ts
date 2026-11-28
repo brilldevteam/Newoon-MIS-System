@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { TableQueryDto } from '../common/table-query';
 import { AuthGuard } from '@nestjs/passport';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -16,6 +17,13 @@ export class UsersController {
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.usersService.findAll(user);
+  }
+
+  // Declared before any ':id' route so "table" is not read as a user id.
+  @Roles('SUPER_ADMIN', 'COMPANY_ADMIN')
+  @Get('table')
+  table(@CurrentUser() user: RequestUser, @Query() query: TableQueryDto) {
+    return this.usersService.table(user, query);
   }
 
   @Roles('SUPER_ADMIN', 'COMPANY_ADMIN')

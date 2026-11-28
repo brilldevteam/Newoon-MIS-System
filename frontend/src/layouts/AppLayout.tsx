@@ -3,6 +3,9 @@ import {
   Bell,
   CheckCheck,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   ClipboardCheck,
   Inbox,
   LayoutDashboard,
@@ -27,6 +30,7 @@ import { ComponentType, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { AccountMenu } from '../components/AccountMenu';
+import { QuickFind } from '../components/QuickFind';
 import { DownloadToast } from '../components/DownloadToast';
 import { InstallAppButton } from '../components/InstallAppButton';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -35,36 +39,28 @@ import { hasAnyRole, roleList, workflowRoles } from '../utils/access-control';
 import { enquiryNotificationLink } from '../utils/enquiry-notification-link';
 import { navigationInWorkspace, workspaceForPath, workspaceModules } from '../utils/workspace-modules';
 
-type NavLinkItem = { to: string; label: string; icon: ComponentType<{ className?: string }>; roles: string[]; area?: string };
-type NavGroupItem = { key: string; label: string; icon: ComponentType<{ className?: string }>; pathPrefix: string; children: NavLinkItem[] };
-type NavItem = NavLinkItem | NavGroupItem;
+type NavLinkItem = { to: string; label: string; icon: ComponentType<{ className?: string }>; roles: string[]; area?: string; section: string };
 
-const isNavGroup = (item: NavItem): item is NavGroupItem => 'children' in item;
+const SECTIONS = ['Overview', 'Client onboarding', 'Compliance', 'Administration'];
 
-const navItems: NavItem[] = [
-  { to: '/workspace', label: 'All Workspaces', icon: Layers, roles: [] },
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [] },
-  { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries' },
+const navItems: NavLinkItem[] = [
+  { to: '/workspace', label: 'All Workspaces', icon: Layers, roles: [], section: 'Overview' },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: [], section: 'Overview' },
   // Ordered as a client moves through the system: enquiry -> KYC (screening, CRRF, reviews) -> compliance.
   // Onboarded clients live under Compliance -> Compliance Clients (the separate Clients menu was removed).
-  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc' },
-  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening' },
-  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf' },
-  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals' },
-  // Compliance area (legacy "Compliance Hub"); later submenu items such as Compliance Staff belong here too.
-  {
-    key: 'compliance',
-    label: 'Compliance',
-    icon: ShieldEllipsis,
-    pathPrefix: '/compliance',
-    children: [{ to: '/compliance/clients', label: 'Compliance Clients', icon: UserCheck, roles: workflowRoles.complianceView, area: 'compliance' }]
-  },
+  { to: '/enquiries', label: 'Enquiries', icon: Inbox, roles: workflowRoles.enquiries, area: 'enquiries', section: 'Client onboarding' },
+  { to: '/kyc-workflow', label: 'KYC Workflow', icon: ClipboardCheck, roles: [...workflowRoles.caseCreation, ...workflowRoles.kycPreparation, ...workflowRoles.reviewTasks], area: 'kyc', section: 'Client onboarding' },
+  { to: '/screening', label: 'Screening', icon: SearchCheck, roles: workflowRoles.screening, area: 'screening', section: 'Client onboarding' },
+  { to: '/crrf', label: 'CRRF', icon: ShieldCheck, roles: workflowRoles.crrf, area: 'crrf', section: 'Client onboarding' },
+  { to: '/review-tasks', label: 'My Review Tasks', icon: ListChecks, roles: workflowRoles.reviewTasks, area: 'approvals', section: 'Client onboarding' },
+  // Compliance area (legacy "Compliance Hub"); later pages such as Compliance Staff belong here too.
+  { to: '/compliance/clients', label: 'Compliance Clients', icon: UserCheck, roles: workflowRoles.complianceView, area: 'compliance', section: 'Compliance' },
   // Platform-wide pages: Super Admin only, not controlled by the role matrix.
-  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin },
-  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin },
-  { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin, area: 'administration' },
-  { to: '/settings/ai-document-reading', label: 'AI Document Reading', icon: Sparkles, roles: workflowRoles.userAdmin, area: 'administration' },
-  { to: '/access-control', label: 'Access Control', icon: SlidersHorizontal, roles: workflowRoles.admin }
+  { to: '/tenants', label: 'Tenants', icon: Building2, roles: workflowRoles.admin, section: 'Administration' },
+  { to: '/modules', label: 'Modules', icon: Layers, roles: workflowRoles.admin, section: 'Administration' },
+  { to: '/users', label: 'Users', icon: Users, roles: workflowRoles.userAdmin, area: 'administration', section: 'Administration' },
+  { to: '/settings/ai-document-reading', label: 'AI Document Reading', icon: Sparkles, roles: workflowRoles.userAdmin, area: 'administration', section: 'Administration' },
+  { to: '/access-control', label: 'Access Control', icon: SlidersHorizontal, roles: workflowRoles.admin, section: 'Administration' }
 ];
 
 export function AppLayout() {
@@ -72,31 +68,36 @@ export function AppLayout() {
   const location = useLocation();
   const isWorkspaceHome = location.pathname === '/workspace';
   const { user } = useAuth();
-  const isFocusedWorkspace = /^\/kyc\/[^/]+\/form$/.test(location.pathname) || /^\/enquiries\/(?:new|[^/]+\/edit)$/.test(location.pathname);
+  const isFocusedWorkspace = /^\/kyc\/[^/]+\/(?:form|screening|crrf)$/.test(location.pathname) || /^\/enquiries\/(?:new|[^/]+\/edit)$/.test(location.pathname);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(isFocusedWorkspace);
+  // Sections of the menu the user folded away (kept for next time).
+  const [closedSections, setClosedSections] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem('newoon_nav_closed') || '{}'); } catch { return {}; }
+  });
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const [notificationsError, setNotificationsError] = useState('');
-  const useCollapsedSidebar = isFocusedWorkspace && isSidebarCollapsed;
+  const useCollapsedSidebar = isSidebarCollapsed;
   const fullName = user ? `${user.firstName} ${user.lastName}`.trim() : '';
   const unreadCount = notifications.filter((notification) => !notification.isRead).length;
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const online = useOnlineStatus();
   const visibleNavItems = navItems
-    .map((item) => !isNavGroup(item) && item.to === '/dashboard'
+    .map((item) => item.to === '/dashboard'
       ? { ...item, to: workspaceModules.find((module) => module.id === workspaceForPath(location.pathname))?.to || item.to }
       : item)
-    .filter((item) => navigationInWorkspace(location.pathname, isNavGroup(item) ? item.pathPrefix : item.to))
-    .map((item) => (isNavGroup(item) ? { ...item, children: item.children.filter((child) => canAccessNavigation(user, child.roles, child.area)) } : item))
-    .filter((item) => (isNavGroup(item) ? item.children.length > 0 : canAccessNavigation(user, item.roles, item.area)));
+    .filter((item) => navigationInWorkspace(location.pathname, item.to))
+    .filter((item) => canAccessNavigation(user, item.roles, item.area));
 
-  // A group opens automatically while one of its pages is shown.
+  const activeSection = visibleNavItems.find((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`))?.section;
+  // The section of the page you are on is always open.
   useEffect(() => {
-    const active = navItems.find((item) => isNavGroup(item) && location.pathname.startsWith(`${item.pathPrefix}/`));
-    if (active && isNavGroup(active)) setOpenGroups((current) => (current[active.key] ? current : { ...current, [active.key]: true }));
-  }, [location.pathname]);
+    if (activeSection) setClosedSections((current) => (current[activeSection] ? { ...current, [activeSection]: false } : current));
+  }, [activeSection]);
+  useEffect(() => {
+    try { localStorage.setItem('newoon_nav_closed', JSON.stringify(closedSections)); } catch { /* the choice just is not remembered */ }
+  }, [closedSections]);
 
   useEffect(() => {
     setIsSidebarCollapsed(isFocusedWorkspace);
@@ -189,35 +190,33 @@ export function AppLayout() {
   return (
     <div className="min-h-screen bg-[#eef3f8]">
       {!isWorkspaceHome && <aside
-        className={`fixed inset-y-0 left-0 hidden border-r border-slate-200/80 bg-white/95 shadow-sm transition-all duration-200 lg:block ${
+        className={`fixed inset-y-0 left-0 z-20 hidden bg-white transition-[width] duration-200 lg:flex lg:flex-col ${
           useCollapsedSidebar ? 'w-20' : 'w-64'
         }`}
       >
-        <div className={`flex h-[85px] items-center border-b border-slate-200/80 ${useCollapsedSidebar ? 'flex-col justify-center gap-1 px-3' : 'justify-between gap-3 px-5'}`}>
-          <Link to="/" className={useCollapsedSidebar ? 'hidden' : 'flex min-w-0 flex-col'} aria-label="Newoon MIS home">
-            <img src="/brand/newoon-logo.png" alt="Newoon Global LTD." className="h-14 w-auto self-start" width={125} height={56} />
-            <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">MIS · KYC & Engagement</span>
-          </Link>
-          {useCollapsedSidebar && (
+        <div className={`flex h-16 shrink-0 items-center border-b border-slate-200 ${useCollapsedSidebar ? 'justify-center px-3' : 'px-5'}`}>
+          {useCollapsedSidebar ? (
             <Link to="/" aria-label="Newoon MIS home" title="Newoon MIS">
-              <img src="/brand/newoon-mark.png" alt="Newoon" className="h-7 w-7 rounded" width={28} height={28} />
+              <img src="/brand/newoon-mark.png" alt="Newoon" className="h-8 w-8 rounded" width={32} height={32} />
+            </Link>
+          ) : (
+            <Link to="/" className="flex min-w-0 items-center" aria-label="Newoon MIS home">
+              <img src="/brand/newoon-logo.png" alt="Newoon Global LTD." className="h-11 w-auto" width={98} height={44} />
             </Link>
           )}
-          {isFocusedWorkspace && (
-            <button
-              type="button"
-              onClick={() => setIsSidebarCollapsed((current) => !current)}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
-              aria-label={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-expanded={!useCollapsedSidebar}
-              title={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              {useCollapsedSidebar ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-            </button>
-          )}
         </div>
-        <nav className="space-y-1 px-3 py-4" aria-label="Main navigation">
-          <NavItems items={visibleNavItems} collapsed={useCollapsedSidebar} openGroups={openGroups} setOpenGroups={setOpenGroups} pathname={location.pathname} />
+        <button
+          type="button"
+          onClick={() => setIsSidebarCollapsed((current) => !current)}
+          className="absolute -right-3.5 top-[3.4rem] z-30 grid h-7 w-7 place-items-center rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white hover:bg-brand-700 focus:outline-none focus-visible:ring-brand-300"
+          aria-label={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!useCollapsedSidebar}
+          title={useCollapsedSidebar ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {useCollapsedSidebar ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
+        <nav className="scrollbar-thin min-h-0 flex-1 overflow-y-auto border-r-2 border-brand-600/50 px-3 py-3" aria-label="Main navigation">
+          <NavItems items={visibleNavItems} collapsed={useCollapsedSidebar} closedSections={closedSections} setClosedSections={setClosedSections} />
         </nav>
       </aside>}
 
@@ -234,7 +233,7 @@ export function AppLayout() {
               </button>
             </div>
             <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Main navigation">
-              <NavItems items={visibleNavItems} collapsed={false} openGroups={openGroups} setOpenGroups={setOpenGroups} pathname={location.pathname} />
+              <NavItems items={visibleNavItems} collapsed={false} closedSections={closedSections} setClosedSections={setClosedSections} />
             </nav>
             <div className="shrink-0 space-y-2 border-t border-slate-200 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
               {user ? (
@@ -253,28 +252,29 @@ export function AppLayout() {
         </div>
       ) : null}
 
-      <div className={isWorkspaceHome ? 'min-w-0' : useCollapsedSidebar ? 'min-w-0 lg:pl-20' : 'min-w-0 lg:pl-64'}>
-        <header className="sticky top-0 z-10 flex h-16 min-w-0 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur lg:px-8">
-          <div className="flex min-w-0 items-center gap-2">
+      <div className={`min-w-0 transition-[padding] duration-200 ${isWorkspaceHome ? '' : useCollapsedSidebar ? 'lg:pl-20' : 'lg:pl-64'}`}>
+        <header className="sticky top-0 z-10 flex h-16 min-w-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 lg:px-6">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {!isWorkspaceHome && <button
               type="button"
               onClick={() => setMobileNavOpen(true)}
               aria-label="Open menu"
               aria-expanded={mobileNavOpen}
-              className="-ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-md text-slate-700 hover:bg-slate-100 lg:hidden"
+              className="-ml-1 grid h-10 w-10 shrink-0 place-items-center rounded-lg text-slate-700 hover:bg-slate-100 lg:hidden"
             >
               <Menu className="h-5 w-5" />
             </button>}
             <Link to="/" aria-label="Newoon MIS home" className={isWorkspaceHome ? 'shrink-0' : 'shrink-0 lg:hidden'}>
               <img src="/brand/newoon-mark.png" alt="" className="h-8 w-8 rounded" width={32} height={32} />
             </Link>
-            <p className="truncate text-base font-semibold text-slate-950">
-              <span className="lg:hidden">Newoon MIS</span>
-              <span className="hidden lg:inline">{workspaceModules.find((module) => module.id === workspaceForPath(location.pathname))?.label || 'Newoon Operations'}</span>
-            </p>
+            <QuickFind items={visibleNavItems} />
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link to="/workspace" aria-label="All workspaces" title="All workspaces" aria-current={isWorkspaceHome ? 'page' : undefined} className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 md:inline-flex" title="Current workspace">
+              <Building2 aria-hidden="true" className="h-4 w-4 text-slate-500" />
+              <span className="max-w-40 truncate">{workspaceModules.find((module) => module.id === workspaceForPath(location.pathname))?.label || 'Newoon Operations'}</span>
+            </span>
+            <Link to="/workspace" aria-label="All workspaces" title="All workspaces" aria-current={isWorkspaceHome ? 'page' : undefined} className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600">
               <LayoutGrid className="h-4 w-4" />
             </Link>
             {user ? (
@@ -282,7 +282,7 @@ export function AppLayout() {
                 <button
                   type="button"
                   onClick={() => setNotificationsOpen((current) => !current)}
-                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"
+                  className="relative inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                   aria-label="Notifications"
                   title="Notifications"
                 >
@@ -362,43 +362,40 @@ export function AppLayout() {
   );
 }
 
-type GroupState = Record<string, boolean>;
+type ClosedSections = Record<string, boolean>;
 
-// Navigation shared by the desktop sidebar and the mobile drawer.
-function NavItems({ items, collapsed, openGroups, setOpenGroups, pathname }: {
-  items: NavItem[];
+// Navigation shared by the desktop sidebar and the mobile drawer: titled sections that fold open and shut.
+function NavItems({ items, collapsed, closedSections, setClosedSections }: {
+  items: NavLinkItem[];
   collapsed: boolean;
-  openGroups: GroupState;
-  setOpenGroups: (update: (current: GroupState) => GroupState) => void;
-  pathname: string;
+  closedSections: ClosedSections;
+  setClosedSections: (update: (current: ClosedSections) => ClosedSections) => void;
 }) {
+  const sections = SECTIONS.map((title) => ({ title, links: items.filter((item) => item.section === title) })).filter((section) => section.links.length);
   return (
     <>
-      {items.map((item) => {
-        if (!isNavGroup(item)) return <SidebarLink key={item.to} item={item} collapsed={collapsed} />;
-        // A collapsed sidebar has no room for a group header, so it shows the group's pages as icons.
-        if (collapsed) return item.children.map((child) => <SidebarLink key={child.to} item={child} collapsed />);
-        const open = Boolean(openGroups[item.key]);
-        const groupActive = pathname.startsWith(`${item.pathPrefix}/`);
+      {sections.map((section, index) => {
+        const closed = Boolean(closedSections[section.title]);
+        // A collapsed sidebar has no room for section titles, so sections are separated by a line.
+        if (collapsed) {
+          return (
+            <div key={section.title} className={index ? 'mt-2 border-t border-slate-100 pt-2' : ''}>
+              {section.links.map((item) => <SidebarLink key={item.to} item={item} collapsed />)}
+            </div>
+          );
+        }
         return (
-          <div key={item.key}>
+          <div key={section.title} className="mb-1">
             <button
               type="button"
-              onClick={() => setOpenGroups((current) => ({ ...current, [item.key]: !open }))}
-              aria-expanded={open}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                groupActive && !open ? 'bg-brand-50 text-brand-700' : groupActive ? 'text-brand-700 hover:bg-slate-50' : 'text-slate-600 hover:bg-slate-50'
-              }`}
+              onClick={() => setClosedSections((current) => ({ ...current, [section.title]: !closed }))}
+              aria-expanded={!closed}
+              className="flex w-full items-center justify-between rounded-md px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-800"
             >
-              <item.icon className="h-4 w-4" />
-              <span className="flex-1 text-left">{item.label}</span>
-              <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+              {section.title}
+              {closed ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronUp aria-hidden="true" className="h-4 w-4" />}
             </button>
-            {open ? (
-              <div className="ml-5 mt-1 space-y-1 border-l border-slate-200 pl-3">
-                {item.children.map((child) => <SidebarLink key={child.to} item={child} collapsed={false} />)}
-              </div>
-            ) : null}
+            {closed ? null : <div className="space-y-0.5">{section.links.map((item) => <SidebarLink key={item.to} item={item} collapsed={false} />)}</div>}
           </div>
         );
       })}
@@ -413,14 +410,15 @@ function SidebarLink({ item, collapsed }: { item: NavLinkItem; collapsed: boolea
       to={item.to}
       end={dashboardOpen}
       title={collapsed ? item.label : undefined}
+      aria-label={collapsed ? item.label : undefined}
       className={({ isActive }) =>
-        `flex items-center rounded-xl py-2.5 text-sm font-medium transition ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${
-          isActive ? 'bg-brand-50 text-brand-700 shadow-sm shadow-brand-100/50' : 'text-slate-600 hover:bg-slate-50'
+        `flex h-10 items-center rounded-lg text-sm transition-colors ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} ${
+          isActive ? 'bg-brand-50 font-semibold text-brand-700' : 'font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-950'
         }`
       }
     >
-      <item.icon className="h-4 w-4" />
-      {!collapsed && item.label}
+      <item.icon className="h-[18px] w-[18px] shrink-0" />
+      {!collapsed && <span className="min-w-0 truncate">{item.label}</span>}
     </NavLink>
   );
 }

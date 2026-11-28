@@ -1,3 +1,4 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { AlertTriangle, CheckCircle2, KeyRound, LoaderCircle, PlugZap, ShieldAlert, Sparkles, Trash2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useToast } from '../components/ToastProvider';
@@ -9,6 +10,7 @@ const inputClass = 'w-full rounded-md border border-slate-300 bg-white px-3 py-2
 // Administration > AI document reading (requirements A01-A06). The company adds its own OpenAI API key; uploaded
 // legal documents are then read by OpenAI to fill in their details. The key is never shown again after saving.
 export function AiDocumentReadingPage() {
+  const { confirm } = useConfirm();
   const { showToast } = useToast();
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [error, setError] = useState('');
@@ -62,7 +64,7 @@ export function AiDocumentReadingPage() {
   }
 
   async function remove() {
-    if (!window.confirm('Remove the stored OpenAI key? Documents will then be read on the server only.')) return;
+    if (!(await confirm({ title: 'Remove the stored key?', message: 'Remove the stored OpenAI key? Documents will then be read on the server only.', confirmLabel: 'Remove', tone: 'danger' }))) return;
     try {
       const next = await removeAiSettings();
       setSettings(next);

@@ -3,6 +3,7 @@ import { CrrfRiskRating, KycFormSectionKey, Prisma } from '@prisma/client';
 import PDFDocument from 'pdfkit';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, join, normalize, relative } from 'path';
+import { clampPage, pagingOf, searchTerm, TablePage, TableQueryDto } from '../common/table-query';
 import { crrfDocumentKinds, isPathInsideRoot, validateUploadFiles } from '../common/security/upload-security';
 import { RequestUser } from '../common/types/request-user.type';
 import { PrismaService } from '../prisma/prisma.service';
@@ -34,6 +35,84 @@ export class CrrfService {
       clientInfo: this.clientInfo(record.kycCase),
       documentCount: record.documents.length
     }));
+  }
+
+  // The CRRF register as a table: same tenant scoping as listRecords, with search, risk filter, quick tab, sort and
+  // paging done here. counts also carries `documents` (uploaded files across the matching records) for the summary cards.
+  async table(user: RequestUser, query: TableQueryDto): Promise<TablePage<unknown>> {
+    const q = searchTerm(query);
+    const risk = (Object.values(CrrfRiskRating) as string[]).includes(query.risk || '') ? { riskRating: query.risk as CrrfRiskRating } : {};
+    const common: Prisma.CrrfRecordWhereInput = {
+      AND: [
+        this.recordTenantWhere(user),
+        risk,
+        q
+          ? {
+              OR: [
+                { kycCase: { title: { contains: q, mode: 'insensitive' } } },
+                { kycCase: { kycNumber: { contains: q, mode: 'insensitive' } } },
+                { kycCase: { client: { name: { contains: q, mode: 'insensitive' } } } },
+                { kycCase: { client: { registrationNumber: { contains: q, mode: 'insensitive' } } } },
+                { kycCase: { service: { name: { contains: q, mode: 'insensitive' } } } },
+                // Names and CR numbers entered in the KYC company section (JSON, so the match is case-sensitive).
+                { kycCase: { kycSectionData: { some: { sectionKey: KycFormSectionKey.GENERAL_COMPANY, OR: [
+                  { data: { path: ['legalName'], string_contains: q } },
+                  { data: { path: ['legalNameOfCompany'], string_contains: q } },
+                  { data: { path: ['commercialRegistrationNo'], string_contains: q } },
+                  { data: { path: ['clientCode'], string_contains: q } }
+                ] } } } },
+                ...((Object.values(CrrfRiskRating) as string[]).includes(q.toUpperCase()) ? [{ riskRating: q.toUpperCase() as CrrfRiskRating }] : [])
+              ]
+            }
+          : {}
+      ]
+    };
+    const tabs: Record<string, Prisma.CrrfRecordWhereInput> = {
+      rated: { riskRating: { not: null } },
+      pending: { riskRating: null },
+      high: { riskRating: CrrfRiskRating.HIGH }
+    };
+    const tab = query.tab && tabs[query.tab] ? query.tab : 'all';
+    const where: Prisma.CrrfRecordWhereInput = tab === 'all' ? common : { AND: [common, tabs[tab]] };
+    const direction = query.dir === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.CrrfRecordOrderByWithRelationInput[] =
+      query.sort === 'client' ? [{ kycCase: { client: { name: direction } } }]
+      : query.sort === 'case' ? [{ kycCase: { title: direction } }]
+      : query.sort === 'risk' ? [{ riskRating: direction }, { updatedAt: 'desc' }]
+      : query.sort === 'documents' ? [{ documents: { _count: direction } }, { updatedAt: 'desc' }]
+      : [{ updatedAt: query.dir === 'asc' ? 'asc' : 'desc' }];
+    const { pageSize, requested } = pagingOf(query);
+    const [total, groups, documents] = await Promise.all([
+      this.prisma.crrfRecord.count({ where }),
+      this.prisma.crrfRecord.groupBy({ by: ['riskRating'], where: common, _count: { _all: true } }),
+      this.prisma.crrfDocument.count({ where: { crrfRecord: common } })
+    ]);
+    const page = clampPage(requested, total, pageSize);
+    const records = await this.prisma.crrfRecord.findMany({
+      where,
+      orderBy: [...orderBy, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: {
+        documents: { orderBy: { createdAt: 'desc' } },
+        kycCase: {
+          include: {
+            client: true,
+            service: true,
+            kycSectionData: { where: { sectionKey: KycFormSectionKey.GENERAL_COMPANY } }
+          }
+        }
+      }
+    });
+    const items = records.map((record) => ({
+      ...record,
+      clientInfo: this.clientInfo(record.kycCase),
+      documentCount: record.documents.length
+    }));
+    const all = groups.reduce((sum, group) => sum + group._count._all, 0);
+    const unrated = groups.filter((group) => group.riskRating === null).reduce((sum, group) => sum + group._count._all, 0);
+    const high = groups.filter((group) => group.riskRating === CrrfRiskRating.HIGH).reduce((sum, group) => sum + group._count._all, 0);
+    return { items, total, page, pageSize, counts: { all, rated: all - unrated, pending: unrated, high, documents } };
   }
 
   async getWorkspace(user: RequestUser, kycCaseId: string) {

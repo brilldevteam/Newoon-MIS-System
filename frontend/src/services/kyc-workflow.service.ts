@@ -1,5 +1,6 @@
 import { trackDownload } from '../utils/download-progress';
 import { api } from './api';
+import { type TableParams, type TablePage, toApiParams } from '../components/table/useServerTable';
 import type { DocumentReading } from './legal-documents.service';
 
 export type KycCaseStatus =
@@ -502,6 +503,13 @@ export function listEnquiries() {
   return api.get<Enquiry[]>('/enquiries').then((response) => response.data);
 }
 
+// A row of the enquiry table: just what the list shows (no comments, history or attachments).
+export type EnquiryRow = Pick<Enquiry, 'id' | 'enquiryCode' | 'enquiryType' | 'status' | 'companyName' | 'proposedCompanyName' | 'requestedServices' | 'keyContactName' | 'keyContactEmail' | 'generatedKycCases' | 'createdAt' | 'updatedAt'> & { client?: { id: string; name: string } | null };
+
+export function listEnquiryTable(params: TableParams) {
+  return api.get<TablePage<EnquiryRow>>('/enquiries/table', { params: toApiParams(params) }).then((response) => response.data);
+}
+
 export function createEnquiry(payload: EnquiryPayload) {
   return api.post<Enquiry>('/enquiries', payload).then((response) => response.data);
 }
@@ -620,6 +628,13 @@ export async function downloadEnquiryAttachmentGroup(enquiryId: string, document
 
 export function deleteEnquiry(id: string) {
   return api.delete<{ id: string }>(`/enquiries/${id}`).then((response) => response.data);
+}
+
+// A row of the KYC workflow table: just what the list shows (the number of documents, not the documents).
+export type KycCaseRow = { id: string; title: string; kycNumber: string; status: KycCaseStatus; createdAt: string; client: { id: string; name: string }; service?: { id: string; name: string } | null; _count: { legalDocuments: number } };
+
+export function listKycCaseTable(params: TableParams) {
+  return api.get<TablePage<KycCaseRow>>('/kyc/table', { params: toApiParams(params) }).then((response) => response.data);
 }
 
 export function listKycCases() {
@@ -753,6 +768,10 @@ export function listScreeningRecords() {
   return api.get<ScreeningListItem[]>('/screening').then((response) => response.data);
 }
 
+export function listScreeningTable(params: TableParams) {
+  return api.get<TablePage<ScreeningListItem>>('/screening/table', { params: toApiParams(params) }).then((response) => response.data);
+}
+
 export function createScreeningRecord(caseId: string, payload: Record<string, any>) {
   return api.post<ScreeningContext>(`/kyc/${caseId}/screening/records`, payload).then((response) => response.data);
 }
@@ -845,6 +864,10 @@ export function deleteMergedScreeningDocument(caseId: string, documentId: string
 
 export function listCrrfRecords() {
   return api.get<CrrfListItem[]>('/crrf').then((response) => response.data);
+}
+
+export function listCrrfTable(params: TableParams) {
+  return api.get<TablePage<CrrfListItem>>('/crrf/table', { params: toApiParams(params) }).then((response) => response.data);
 }
 
 export function getCrrfWorkspace(caseId: string) {

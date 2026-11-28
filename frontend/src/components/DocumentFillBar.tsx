@@ -12,6 +12,8 @@ type Props = {
   disabled?: boolean;
   hint?: string;
   buttonLabel?: string;
+  // False when files only come from the enquiry attachments, so no upload button is shown.
+  allowUpload?: boolean;
   // Files already uploaded elsewhere (for example on the KYC documents page) that can be read without uploading again.
   existing?: Option[];
   onReadExisting?: (id: string, kind: string) => Promise<FillOutcome>;
@@ -19,7 +21,7 @@ type Props = {
 
 // "Fill from a copy": the user picks a file, the server reads it and the form fills in what was found. The note
 // below says what was filled and what to check; nothing is saved until the form is saved.
-export function DocumentFillBar({ label, options, onRead, disabled = false, hint, buttonLabel = 'Upload and read', existing = [], onReadExisting }: Props) {
+export function DocumentFillBar({ label, options, onRead, disabled = false, hint, buttonLabel = 'Upload and read', allowUpload = true, existing = [], onReadExisting }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState(options[0]?.value || '');
   const [reading, setReading] = useState(false);
@@ -51,13 +53,13 @@ export function DocumentFillBar({ label, options, onRead, disabled = false, hint
             {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         ) : null}
-        <button type="button" disabled={reading || disabled} onClick={() => fileRef.current?.click()} className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">
+        {allowUpload ? <button type="button" disabled={reading || disabled} onClick={() => fileRef.current?.click()} className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-60">
           {reading ? <><Loader2 className="h-4 w-4 animate-spin" />Uploading and reading...</> : buttonLabel}
-        </button>
+        </button> : reading ? <span className="inline-flex items-center gap-2 text-sm text-slate-600"><Loader2 className="h-4 w-4 animate-spin" />Reading...</span> : null}
         <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void read(file); }} />
         {existing.length && onReadExisting ? (
           <span className="inline-flex flex-wrap items-center gap-2 text-sm text-slate-700">
-            or read an uploaded file:
+            {allowUpload ? 'or read an uploaded file:' : 'Read from the enquiry attachments:'}
             <select aria-label="Uploaded file to read" className="min-h-9 max-w-[16rem] rounded-md border border-slate-300 bg-white px-2 text-sm" value={existingId} onChange={(event) => setExistingId(event.target.value)} disabled={reading || disabled}>
               <option value="">Select a file</option>
               {existing.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}

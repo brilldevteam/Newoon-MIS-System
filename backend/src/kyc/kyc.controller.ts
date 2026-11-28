@@ -7,6 +7,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { safeResponseFileName, standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
+import { TableQueryDto } from '../common/table-query';
 import { RequestUser } from '../common/types/request-user.type';
 import { AddWorkflowCommentDto } from './dto/add-workflow-comment.dto';
 import { AssignServiceDto } from './dto/assign-service.dto';
@@ -24,6 +25,12 @@ export class KycController {
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.kycService.findAll(user);
+  }
+
+  // Declared before ':id' so "table" is not read as a case id.
+  @Get('table')
+  table(@CurrentUser() user: RequestUser, @Query() query: TableQueryDto) {
+    return this.kycService.table(user, query);
   }
 
   @Roles('OPERATING_TEAM', 'COMPANY_ADMIN')

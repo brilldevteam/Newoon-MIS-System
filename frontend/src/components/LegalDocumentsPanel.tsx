@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmProvider';
 import { Building2, CheckCircle2, Eye, FileText, History, Info, LoaderCircle, Pencil, Plus, RefreshCw, ScanLine, Sparkles, Trash2, User, X } from 'lucide-react';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { getApiErrorMessage } from '../services/api';
@@ -82,6 +83,7 @@ function NatureBadge({ nature }: { nature: 'COMPANY' | 'INDIVIDUAL' }) {
 }
 
 export function LegalDocumentsPanel({ context }: { context: LegalDocumentsContext }) {
+  const { confirm, prompt } = useConfirm();
   const { showToast } = useToast();
   const [filter, setFilter] = useState<'ALL' | 'COMPANY' | 'INDIVIDUAL'>('ALL');
   const [showHistory, setShowHistory] = useState(false);
@@ -104,7 +106,7 @@ export function LegalDocumentsPanel({ context }: { context: LegalDocumentsContex
   const inRegister = new Set(register?.documents.filter((document) => document.status === 'CURRENT').map((document) => document.sourceKycDocumentId).filter(Boolean));
 
   async function remove(document: LegalDocument) {
-    const reason = window.prompt(`Remove ${document.typeLabel}${document.documentNumber ? ` no. ${document.documentNumber}` : ''} from the register? Give the reason (the AML team is notified; the record is kept in the history).`);
+    const reason = await prompt({ title: 'Remove this document?', message: `Remove ${document.typeLabel}${document.documentNumber ? ` no. ${document.documentNumber}` : ''} from the register? Give the reason (the AML team is notified; the record is kept in the history).`, label: 'Reason', required: true, confirmLabel: 'Remove', tone: 'danger' });
     if (reason === null) return;
     if (!reason.trim()) {
       showToast('A reason is required to remove a document.', 'error');

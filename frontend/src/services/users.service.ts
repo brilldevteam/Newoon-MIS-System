@@ -1,4 +1,5 @@
 import { api } from './api';
+import { TablePage, TableParams, toApiParams } from '../components/table/useServerTable';
 
 export type ManagedUser = {
   id: string; tenantId: string | null; firstName: string; lastName: string; email: string;
@@ -9,6 +10,7 @@ export type ManagedUser = {
 export type UserOptions = { roles: Array<{ name: string }>; tenants: Array<{ id: string; name: string }> };
 export type UserProfile = { firstName: string; lastName: string; email: string; roles: string[] };
 export async function listUsers() { return (await api.get<ManagedUser[]>('/users')).data; }
+export function listUsersTable(params: TableParams) { return api.get<TablePage<ManagedUser>>('/users/table', { params: toApiParams(params) }).then((response) => response.data); }
 export async function getUserOptions() { return (await api.get<UserOptions>('/users/options')).data; }
 export async function createUser(data: UserProfile & { password: string; tenantId?: string }) { return (await api.post<ManagedUser>('/users', data)).data; }
 export async function updateUser(id: string, data: UserProfile & { status: 'ACTIVE' | 'SUSPENDED' }) { return (await api.patch<ManagedUser>(`/users/${id}`, data)).data; }

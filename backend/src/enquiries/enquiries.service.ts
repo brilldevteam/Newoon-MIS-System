@@ -25,6 +25,7 @@ import { MrzResult } from '../common/mrz';
 import { IdDocumentReaderService } from '../compliance-clients/id-document-reader.service';
 import { DocumentReaderService } from '../compliance-clients/document-reader.service';
 import { identityReading } from '../common/identity-reading';
+import { clampPage, pagingOf, searchTerm, TablePage, TableQueryDto } from '../common/table-query';
 import { RequestUser } from '../common/types/request-user.type';
 import { userSummarySelect } from '../common/user-summary';
 import { PrismaService } from '../prisma/prisma.service';
@@ -196,6 +197,68 @@ export class EnquiriesService {
         statusHistory: { orderBy: { createdAt: 'desc' }, include: { changedBy: { select: userSummarySelect } } }
       }
     });
+  }
+
+  // The enquiry register as a table: search, sort, quick tab, type filter and paging done here, on top of the same
+  // tenant scoping as the full list. Rows are light (no comments, history or attachments).
+  async table(user: RequestUser, query: TableQueryDto): Promise<TablePage<unknown>> {
+    const q = searchTerm(query);
+    const type = (Object.values(EnquiryType) as string[]).includes(query.type || '') ? { enquiryType: query.type as EnquiryType } : {};
+    const common: Prisma.EnquiryWhereInput = {
+      AND: [
+        this.tenantWhere(user),
+        type,
+        q
+          ? {
+              OR: [
+                { enquiryCode: { contains: q, mode: 'insensitive' } },
+                { companyName: { contains: q, mode: 'insensitive' } },
+                { proposedCompanyName: { contains: q, mode: 'insensitive' } },
+                { keyContactName: { contains: q, mode: 'insensitive' } },
+                { keyContactEmail: { contains: q, mode: 'insensitive' } },
+                { client: { name: { contains: q, mode: 'insensitive' } } }
+              ]
+            }
+          : {}
+      ]
+    };
+    const tabs: Record<string, EnquiryStatus[]> = {
+      draft: [EnquiryStatus.DRAFT],
+      review: [EnquiryStatus.SUBMITTED_TO_AML_SUPERVISOR],
+      returned: [EnquiryStatus.RETURNED_TO_BD],
+      ready: [EnquiryStatus.READY_FOR_KYC, EnquiryStatus.CONVERTED_TO_KYC],
+      closed: [EnquiryStatus.CLOSED]
+    };
+    const tab = query.tab && tabs[query.tab] ? query.tab : 'all';
+    const where: Prisma.EnquiryWhereInput = tab === 'all' ? common : { AND: [common, { status: { in: tabs[tab] } }] };
+    const direction = query.dir === 'asc' ? 'asc' : 'desc';
+    const orderBy: Prisma.EnquiryOrderByWithRelationInput[] =
+      query.sort === 'code' ? [{ enquiryCode: direction }]
+      : query.sort === 'name' ? [{ companyName: direction }, { proposedCompanyName: direction }]
+      : query.sort === 'status' ? [{ status: direction }, { createdAt: 'desc' }]
+      : [{ createdAt: query.dir === 'asc' ? 'asc' : 'desc' }];
+    const { pageSize, requested } = pagingOf(query);
+    const [total, groups] = await Promise.all([
+      this.prisma.enquiry.count({ where }),
+      this.prisma.enquiry.groupBy({ by: ['status'], where: common, _count: { _all: true } })
+    ]);
+    const page = clampPage(requested, total, pageSize);
+    const items = await this.prisma.enquiry.findMany({
+      where,
+      orderBy: [...orderBy, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true, enquiryCode: true, enquiryType: true, status: true, companyName: true, proposedCompanyName: true, requestedServices: true,
+        keyContactName: true, keyContactEmail: true, createdAt: true, updatedAt: true,
+        client: { select: { id: true, name: true } },
+        generatedKycCases: { select: { id: true, kycNumber: true, title: true, status: true }, orderBy: { createdAt: 'desc' }, take: 1 }
+      }
+    });
+    const byStatus = new Map(groups.map((group) => [group.status, group._count._all]));
+    const counts: Record<string, number> = { all: groups.reduce((sum, group) => sum + group._count._all, 0) };
+    for (const [key, statuses] of Object.entries(tabs)) counts[key] = statuses.reduce((sum, status) => sum + (byStatus.get(status) || 0), 0);
+    return { items, total, page, pageSize, counts };
   }
 
   async findOne(user: RequestUser, id: string) {

@@ -1,3 +1,4 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { ArrowLeft, ChevronDown, Clock, Download, Eye, FileSpreadsheet, FileText, MessageSquare, SearchCheck, Send, Trash2, Undo2, Upload, UserRound } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
@@ -52,6 +53,7 @@ function groupedLegalDocuments(documents: KycCase['legalDocuments']) {
 }
 
 export function KycCaseDetailsPage() {
+  const { confirm } = useConfirm();
   const { id } = useParams();
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -167,7 +169,8 @@ export function KycCaseDetailsPage() {
   }
 
   async function removeDocument(document: KycCase['legalDocuments'][number]) {
-    if (!id || !window.confirm(`Delete ${document.fileName}?`)) return;
+    if (!id) return;
+    if (!(await confirm({ title: 'Delete this document?', message: `Delete ${document.fileName}?`, confirmLabel: 'Delete', tone: 'danger' }))) return;
     setDocumentError('');
     setDeletingDocumentId(document.id);
     try {

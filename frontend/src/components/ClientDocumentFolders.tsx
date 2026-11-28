@@ -1,3 +1,4 @@
+import { useConfirm } from './ConfirmProvider';
 import { Archive, ChevronDown, FileText, FolderPlus, Trash2 } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { MultiFileUploadControl } from './MultiFileUploadControl';
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function ClientDocumentFolders({ clientId, sections, canEdit, onChange, allowCustomFolders = false, collapsible = false }: Props) {
+  const { confirm } = useConfirm();
   const { showToast } = useToast();
   const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState<ClientDocument | null>(null);
@@ -59,7 +61,7 @@ export function ClientDocumentFolders({ clientId, sections, canEdit, onChange, a
   }
 
   async function archiveFolder(section: ClientDocumentSection) {
-    if (!window.confirm(`Archive the "${section.title}" folder for all clients? Existing files stay visible; no new uploads are allowed.`)) return;
+    if (!(await confirm({ title: 'Archive this folder?', message: `Archive the "${section.title}" folder for all clients? Existing files stay visible; no new uploads are allowed.`, confirmLabel: 'Archive', tone: 'danger' }))) return;
     try {
       await updateDocumentSection(clientId, section.id, { isActive: false });
       showToast(`Folder "${section.title}" archived.`, 'success');

@@ -1,9 +1,11 @@
+import { useConfirm } from '../components/ConfirmProvider';
 import { Edit3, Eye, Plus, Search, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Client, deleteClient, listClients } from '../services/kyc-workflow.service';
 
 export function ClientListPage() {
+  const { confirm } = useConfirm();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState('');
@@ -26,9 +28,7 @@ export function ClientListPage() {
   }
 
   async function removeClient(client: Client) {
-    const confirmed = window.confirm(
-      `Delete ${client.name}? This will permanently remove the client and related KYC case records.`
-    );
+    const confirmed = await confirm({ title: 'Delete this client?', message: `Delete ${client.name}? This will permanently remove the client and related KYC case records.`, confirmLabel: 'Delete', tone: 'danger' });
     if (!confirmed) return;
 
     setDeletingId(client.id);

@@ -22,12 +22,12 @@ export function AccountMenu({ name, role, logout }: { name: string; role: string
   }, [open]);
   const displayName = profile ? `${profile.firstName} ${profile.lastName}` : name;
   return <div ref={root} className="relative min-w-0">
-    <button ref={trigger} type="button" aria-label="Account options" aria-expanded={open} aria-controls="account-options" onClick={() => setOpen(!open)} className="flex max-w-[240px] items-center gap-2 rounded-md p-1.5 text-left hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-brand-600">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-50 text-brand-700">{profile?.profile?.avatarDataUrl ? <img src={profile.profile.avatarDataUrl} alt="" className="h-full w-full object-cover" /> : <UserCircle className="h-5 w-5" />}</span>
-      <span className="hidden min-w-0 sm:block"><span className="block truncate text-sm font-semibold">{displayName}</span><span className="block truncate text-xs text-slate-500">{role}</span></span><ChevronDown className="h-4 w-4 shrink-0" />
+    <button ref={trigger} type="button" aria-label="Account options" aria-expanded={open} aria-controls="account-options" onClick={() => setOpen(!open)} title={displayName} className="flex items-center rounded-lg text-left focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand-600 text-sm font-semibold text-white">{profile?.profile?.avatarDataUrl ? <img src={profile.profile.avatarDataUrl} alt="" className="h-full w-full object-cover" /> : (displayName.trim()[0] || '?').toUpperCase()}</span>
+      
     </button>
     {open && <div id="account-options" className="absolute right-0 z-50 mt-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
-      <div className="border-b border-slate-100 px-4 py-3"><p className="break-words text-sm font-semibold">{displayName}</p><p className="break-words text-xs text-slate-500">{profile?.email}</p>{profile?.profile?.bio && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-slate-600">{profile.profile.bio}</p>}</div>
+      <div className="border-b border-slate-100 px-4 py-3"><p className="break-words text-sm font-semibold">{displayName}</p><p className="break-words text-xs text-slate-500">{profile?.email}</p><p className="mt-1 break-words text-xs font-medium text-brand-700">{role}</p>{profile?.profile?.bio && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-slate-600">{profile.profile.bio}</p>}</div>
       <Link to="/account/profile" className="flex items-center gap-2 px-4 py-3 text-sm hover:bg-slate-50"><UserCircle className="h-4 w-4" />My Profile</Link>
       <Link to="/account/password" className="flex items-center gap-2 px-4 py-3 text-sm hover:bg-slate-50"><KeyRound className="h-4 w-4" />Change Password</Link>
       <button onClick={logout} type="button" className="flex w-full items-center gap-2 border-t border-slate-100 px-4 py-3 text-sm text-brand-700 hover:bg-slate-50"><LogOut className="h-4 w-4" />Log Out</button>

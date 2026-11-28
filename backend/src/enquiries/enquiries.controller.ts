@@ -6,6 +6,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { safeResponseFileName, standardDocumentKinds, uploadInterceptorOptions } from '../common/security/upload-security';
+import { TableQueryDto } from '../common/table-query';
 import { RequestUser } from '../common/types/request-user.type';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { AddEnquiryCommentDto, UpdateEnquiryDto, UpdateEnquiryStatusDto } from './dto/update-enquiry.dto';
@@ -26,6 +27,13 @@ export class EnquiriesController {
   @Get()
   findAll(@CurrentUser() user: RequestUser) {
     return this.enquiriesService.findAll(user);
+  }
+
+  // Declared before ':id' so "table" is not read as an enquiry id.
+  @Roles('OPERATING_TEAM', 'AML_TEAM', 'AML_SUPERVISOR', 'DMLRO', 'MLRO', 'SEF', 'CEO', 'ACCOUNTING_TEAM', 'HR_TEAM', 'COMPANY_ADMIN', 'SUPER_ADMIN')
+  @Get('table')
+  table(@CurrentUser() user: RequestUser, @Query() query: TableQueryDto) {
+    return this.enquiriesService.table(user, query);
   }
 
   // Declared before ':id' so "duplicate-check" is not read as an enquiry id.
